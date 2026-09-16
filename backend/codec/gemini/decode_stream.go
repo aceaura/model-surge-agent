@@ -1,0 +1,323 @@
+package gemini
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/aceaura/model-surge-agent/backend/codec"
+	"github.com/aceaura/model-surge-agent/backend/ir"
+)
+
+// streamDecoder 把 alt=sse 的帧序列解成 IR 事件。
+//
+// 本协议的流式模型是「每帧一个完整响应对象」，帧内的 parts 是隐式续写，
+// 既没有块生命周期也没有终止标记。所以这里要做三件事：
+// 按 part 种类变化切出块边界、为函数调用合成调用 id、在流结束时补终止事件。
+type streamDecoder struct {
+	started bool
+	done    bool
+
+	// current 是当前开着的块。本协议的 parts 没有索引，
+	// 只能靠「种类是否变化」判断该续写还是该另起一块。
+	current     *openBlock
+	nextIndex   int
+	messageID   string
+	callCounter int
+	// sawCall 记录本次响应有没有函数调用。本协议即使以工具调用收尾
+	// 也报 STOP，不单独记就会把 tool_use 降级成 end_turn，
+	// 客户端会以为回合结束而不去执行工具。
+	sawCall bool
+
+	stopReason ir.StopReason
+	usage      *ir.Usage
+}
+
+type openBlock struct {
+	index int
+	kind  ir.BlockType
+}
+
+func newStreamDecoder() *streamDecoder { return &streamDecoder{} }
+
+func (d *streamDecoder) Feed(_, data string) ([]ir.Event, error) {
+	data = strings.TrimSpace(data)
+	if data == "" {
+		return nil, nil
+	}
+	var frame wireResponse
+	if err := json.Unmarshal([]byte(data), &frame); err != nil {
+		return nil, ir.NewError(ir.ErrUpstream, 0, "",
+			fmt.Sprintf("undecodable stream frame: %v", err))
+	}
+	// 错误可能以流内帧的形式出现，而非 HTTP 状态码。
+	if frame.Error != nil {
+		return []ir.Event{{Type: ir.EvError, Err: convertError(frame.Error.Code, frame.Error)}}, nil
+	}
+
+	var out []ir.Event
+	if frame.ResponseID != "" {
+		d.messageID = frame.ResponseID
+	}
+	out = append(out, d.start(frame)...)
+
+	if frame.UsageMetadata != nil {
+		u := convertUsage(*frame.UsageMetadata)
+		if d.usage == nil {
+			d.usage = &u
+		} else {
+			ir.MergeUsage(d.usage, u)
+		}
+	}
+	// 整个请求被安全策略拒了：candidates 为空，只能从 promptFeedback 读出原因。
+	if frame.PromptFeedback != nil && frame.PromptFeedback.BlockReason != "" {
+		d.stopReason = ir.StopContentFilter
+	}
+
+	for _, cand := range frame.Candidates {
+		// 只处理第一路：IR 是单条响应，其余候选无处安放。
+		if cand.Index != 0 {
+			continue
+		}
+		if cand.Content != nil {
+			events, err := d.decodeParts(cand.Content.Parts)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, events...)
+		}
+		if cand.FinishReason != "" {
+			d.stopReason = convertFinishReason(cand.FinishReason)
+		}
+	}
+	return out, nil
+}
+
+func (d *streamDecoder) start(frame wireResponse) []ir.Event {
+	if d.started {
+		return nil
+	}
+	d.started = true
+	return []ir.Event{{
+		Type:      ir.EvMessageStart,
+		MessageID: d.messageID,
+		Model:     frame.ModelVersion,
+	}}
+}
+
+func (d *streamDecoder) decodeParts(parts []wirePart) ([]ir.Event, error) {
+	var out []ir.Event
+	for _, p := range parts {
+		switch {
+		case p.FunctionCall != nil:
+			// 函数调用不分片：整个 args 在一个 part 里到齐，
+			// 所以开块、发入参、闭块可以一次做完。
+			events, err := d.emitCall(p.FunctionCall)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, events...)
+
+		case p.Thought:
+			out = append(out, d.switchTo(ir.BlockThinking)...)
+			if p.Text != "" {
+				out = append(out, ir.Event{Type: ir.EvThinkingDelta, Index: d.current.index, Text: p.Text})
+			}
+			if p.ThoughtSignature != "" {
+				out = append(out, ir.Event{Type: ir.EvSigDelta, Index: d.current.index, Text: p.ThoughtSignature})
+			}
+
+		case p.Text != "":
+			out = append(out, d.switchTo(ir.BlockText)...)
+			out = append(out, ir.Event{Type: ir.EvTextDelta, Index: d.current.index, Text: p.Text})
+
+		case p.InlineData != nil || p.FileData != nil:
+			// 模型返回的图片本服务不往下游转：IR 的图片块只用于请求方向，
+			// 三个下游协议对响应内图片的表达各不相同且都不通用。
+			continue
+		}
+	}
+	return out, nil
+}
+
+// switchTo 保证当前开着的块是指定种类：种类变了就先闭合旧块再开新块。
+// 本协议的 parts 没有索引，块边界只能这样推出来。
+func (d *streamDecoder) switchTo(kind ir.BlockType) []ir.Event {
+	if d.current != nil && d.current.kind == kind {
+		return nil
+	}
+	var out []ir.Event
+	out = append(out, d.closeCurrent()...)
+
+	index := d.nextIndex
+	d.nextIndex++
+	d.current = &openBlock{index: index, kind: kind}
+
+	block := ir.Block{Type: kind}
+	if kind == ir.BlockThinking {
+		block.Thinking = &ir.Thinking{SignatureFrom: Name}
+	}
+	return append(out, ir.Event{Type: ir.EvBlockStart, Index: index, Block: &block})
+}
+
+func (d *streamDecoder) closeCurrent() []ir.Event {
+	if d.current == nil {
+		return nil
+	}
+	index := d.current.index
+	d.current = nil
+	return []ir.Event{{Type: ir.EvBlockStop, Index: index}}
+}
+
+// emitCall 把一个完整的函数调用发成开块、入参、闭块三个事件。
+func (d *streamDecoder) emitCall(call *wireFunctionCall) ([]ir.Event, error) {
+	out := d.closeCurrent()
+	d.sawCall = true
+
+	index := d.nextIndex
+	d.nextIndex++
+	args := string(call.Args)
+	if !json.Valid([]byte(args)) {
+		args = "{}"
+	}
+	out = append(out,
+		ir.Event{Type: ir.EvBlockStart, Index: index, Block: &ir.Block{
+			Type:    ir.BlockToolUse,
+			ToolUse: &ir.ToolUse{ID: d.callID(call), Name: call.Name},
+		}},
+		ir.Event{Type: ir.EvToolInput, Index: index, Text: args},
+		ir.Event{Type: ir.EvBlockStop, Index: index},
+	)
+	return out, nil
+}
+
+// callID 取上游给的 id，没有就合成一个。
+//
+// 本协议的 functionCall 通常只有 name，而另外三个协议都要求调用 id
+// 才能把结果回指到调用。合成的 id 会随响应发给客户端，客户端下一轮带回来，
+// 编码请求时再由 id→name 表翻回名字。
+func (d *streamDecoder) callID(call *wireFunctionCall) string {
+	if call.ID != "" {
+		return call.ID
+	}
+	d.callCounter++
+	return fmt.Sprintf("call_%s_%d", call.Name, d.callCounter)
+}
+
+// Finish 补终止事件。本协议的流没有终止标记，读完即结束，
+// 所以这些事件必然由这里产出，而不是像别的协议那样可能已在流内出现。
+func (d *streamDecoder) Finish() []ir.Event {
+	if d.done {
+		return nil
+	}
+	d.done = true
+	out := d.closeCurrent()
+	delta := ir.Event{Type: ir.EvMessageDelta, StopReason: d.stopReason, Usage: d.usage}
+	if delta.StopReason == "" {
+		delta.StopReason = ir.StopEndTurn
+	}
+	if d.sawCall && delta.StopReason == ir.StopEndTurn {
+		delta.StopReason = ir.StopToolUse
+	}
+	return append(out, delta, ir.Event{Type: ir.EvMessageStop})
+}
+
+// DecodeResponse 解非流式响应。数据面对上游一律流式，
+// 这条路径只在 count_tokens 之类的接口用到。
+func DecodeResponse(body []byte) (*ir.Response, error) {
+	var w wireResponse
+	if err := json.Unmarshal(body, &w); err != nil {
+		return nil, ir.NewError(ir.ErrUpstream, 0, "",
+			fmt.Sprintf("undecodable response: %v", err))
+	}
+	out := &ir.Response{ID: w.ResponseID, Model: w.ModelVersion, Content: []ir.Block{}}
+	if w.UsageMetadata != nil {
+		out.Usage = convertUsage(*w.UsageMetadata)
+	}
+	if w.PromptFeedback != nil && w.PromptFeedback.BlockReason != "" {
+		out.StopReason = ir.StopContentFilter
+	}
+
+	var calls int
+	for _, cand := range w.Candidates {
+		if cand.Index != 0 {
+			continue
+		}
+		if cand.FinishReason != "" {
+			out.StopReason = convertFinishReason(cand.FinishReason)
+		}
+		if cand.Content == nil {
+			continue
+		}
+		for _, p := range cand.Content.Parts {
+			switch {
+			case p.FunctionCall != nil:
+				calls++
+				id := p.FunctionCall.ID
+				if id == "" {
+					id = fmt.Sprintf("call_%s_%d", p.FunctionCall.Name, calls)
+				}
+				out.Content = append(out.Content, ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
+					ID: id, Name: p.FunctionCall.Name, Input: string(p.FunctionCall.Args),
+				}})
+			case p.Thought:
+				out.Content = append(out.Content, ir.Block{Type: ir.BlockThinking, Thinking: &ir.Thinking{
+					Text: p.Text, Signature: p.ThoughtSignature, SignatureFrom: Name,
+				}})
+			case p.Text != "":
+				out.Content = append(out.Content, ir.Block{Type: ir.BlockText, Text: p.Text})
+			}
+		}
+	}
+	if calls > 0 && (out.StopReason == "" || out.StopReason == ir.StopEndTurn) {
+		out.StopReason = ir.StopToolUse
+	}
+	return out, nil
+}
+
+func DecodeError(status int, body []byte) *ir.Error {
+	var env wireErrorEnvelope
+	if err := json.Unmarshal(body, &env); err == nil && env.Error.Message != "" {
+		return convertError(status, &env.Error)
+	}
+	return ir.NewError(codec.KindForStatus(status, ""), status, "", codec.StatusMessage(status, body))
+}
+
+func convertError(status int, e *wireError) *ir.Error {
+	if e == nil {
+		return ir.NewError(codec.KindForStatus(status, ""), status, "", "upstream error without detail")
+	}
+	// 本协议的错误体自带 code，流内错误帧没有 HTTP 状态码可用，
+	// 此时以体内的 code 为准。
+	if status == 0 {
+		status = e.Code
+	}
+	// RESOURCE_EXHAUSTED 是本协议的限流状态名。它在 HTTP 层是 429，
+	// 但流内错误帧没有状态码，只能靠这个字符串识别。
+	if e.Status == "RESOURCE_EXHAUSTED" {
+		return ir.NewError(ir.ErrRateLimit, status, e.Status, e.Message)
+	}
+	return ir.NewError(codec.KindForStatus(status, e.Message), status, e.Status, e.Message)
+}
+
+func convertUsage(u wireUsage) ir.Usage {
+	return ir.Usage{
+		InputTokens: u.PromptTokenCount,
+		// 推理消耗不含在 candidatesTokenCount 里，但计费上属于输出。
+		OutputTokens:    u.CandidatesTokenCount + u.ThoughtsTokenCount,
+		CacheReadTokens: u.CachedContentTokens,
+	}
+}
+
+func convertFinishReason(s string) ir.StopReason {
+	switch s {
+	case "STOP":
+		return ir.StopEndTurn
+	case "MAX_TOKENS":
+		return ir.StopMaxTokens
+	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII":
+		return ir.StopContentFilter
+	default:
+		return ""
+	}
+}

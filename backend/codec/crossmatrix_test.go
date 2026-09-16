@@ -8,16 +8,18 @@ import (
 	"github.com/aceaura/model-surge-agent/backend/codec"
 	_ "github.com/aceaura/model-surge-agent/backend/codec/anthropic"
 	_ "github.com/aceaura/model-surge-agent/backend/codec/chatcompletions"
+	_ "github.com/aceaura/model-surge-agent/backend/codec/gemini"
 	_ "github.com/aceaura/model-surge-agent/backend/codec/responses"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
-// 这个文件是三入站 × 三出站的交叉矩阵。测的不是「编码结果长什么样」——
+// 这个文件是三入站 × 四出站的交叉矩阵。测的不是「编码结果长什么样」——
 // 那属于各协议自己的测试——而是四类语义能否穿过 IR 抵达对面：
 // 工具调用、推理、用量、终止原因。矩阵覆盖是必要的：同协议往返能过
 // 不代表跨协议能过，反之亦然。
 //
-// gemini 出站在阶段七加入，届时矩阵变成三 × 四。
+// gemini 只出现在出站一侧：本服务不对客户端暴露它的接口。所以请求侧的
+// 入站 fixture 只有三份，而出站格数是四。
 
 // inboundNames 与 outboundNames 从注册表取，而非写死列表：
 // 新增协议忘了加进矩阵时，这里会自动带上。
@@ -177,7 +179,7 @@ func TestRequestMatrixPreservesToolAndThinking(t *testing.T) {
 					t.Errorf("thinking request did not survive: %s", text)
 				}
 				// 上游一律流式，否则数据面的单一解码路径不成立。
-				if !isStreaming(t, body) {
+				if !requestsStreaming(t, out, body) {
 					t.Errorf("outbound body must request streaming: %s", text)
 				}
 			})
@@ -310,6 +312,21 @@ var streamFixture = map[string]string{
 		``,
 		`event: response.completed`,
 		`data: {"type":"response.completed","response":{"id":"msg_1","model":"native","status":"completed","output":[{"type":"function_call","call_id":"call_9","name":"grep"}],"usage":{"input_tokens":120,"output_tokens":45,"input_tokens_details":{"cached_tokens":30}}}}`,
+		``,
+	}, "\n"),
+
+	// gemini 这份与另外三份的形态差别最大：帧无 event 名，每帧都是一个完整
+	// 响应对象，函数调用的 args 一次到齐不分片，输出用量拆成
+	// candidatesTokenCount + thoughtsTokenCount，末尾报 STOP 而非工具调用，
+	// 且没有终止帧——终止事件由解码器的 Finish 补出。
+	codec.ProtocolGemini: strings.Join([]string{
+		`data: {"responseId":"msg_1","modelVersion":"native","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"pondering","thought":true}]}}],"usageMetadata":{"promptTokenCount":120,"cachedContentTokenCount":30}}`,
+		``,
+		`data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"search"},{"text":"ing"}]}}]}`,
+		``,
+		`data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"id":"call_9","name":"grep","args":{"pattern":"TODO"}}}]}}],"usageMetadata":{"promptTokenCount":120,"candidatesTokenCount":40,"thoughtsTokenCount":5,"cachedContentTokenCount":30}}`,
+		``,
+		`data: {"candidates":[{"index":0,"finishReason":"STOP"}]}`,
 		``,
 	}, "\n"),
 }
@@ -471,6 +488,7 @@ func TestErrorMatrixKeepsContextExceededOutOfRetries(t *testing.T) {
 		codec.ProtocolAnthropic:       `{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 250000 tokens > 200000"}}`,
 		codec.ProtocolChatCompletions: `{"error":{"message":"This model's maximum context length is 128000 tokens","type":"invalid_request_error","code":"context_length_exceeded"}}`,
 		codec.ProtocolResponses:       `{"error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"Input length exceeds the maximum context window"}}`,
+		codec.ProtocolGemini:          `{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"The input token count exceeds the maximum context window of 1048576"}}`,
 	}
 	for _, name := range outboundNames() {
 		body, ok := bodies[name]
@@ -649,13 +667,30 @@ func hasThinkingRequest(t *testing.T, protocol string, body []byte) bool {
 		return len(m["reasoning_effort"]) > 0
 	case codec.ProtocolResponses:
 		return len(m["reasoning"]) > 0
+	case codec.ProtocolGemini:
+		var cfg struct {
+			ThinkingConfig json.RawMessage `json:"thinkingConfig"`
+		}
+		if err := json.Unmarshal(m["generationConfig"], &cfg); err != nil {
+			return false
+		}
+		return len(cfg.ThinkingConfig) > 0
 	default:
 		return false
 	}
 }
 
-func isStreaming(t *testing.T, body []byte) bool {
+// requestsStreaming 检查该格确实向上游要了流式。
+//
+// 三个协议靠请求体的 stream 字段表达，gemini 没有这个字段——它靠
+// Endpoint 的方法名与 alt=sse，所以这一格只能验端点。
+func requestsStreaming(t *testing.T, protocol string, body []byte) bool {
 	t.Helper()
+	if protocol == codec.ProtocolGemini {
+		c, _ := codec.Outbound(protocol)
+		url, _ := c.Endpoint("https://host/v1beta", "native", true)
+		return strings.Contains(url, ":streamGenerateContent") && strings.Contains(url, "alt=sse")
+	}
 	var m struct {
 		Stream bool `json:"stream"`
 	}
