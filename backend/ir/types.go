@@ -124,8 +124,8 @@ type Request struct {
 	StopSequences []string `json:"stop_sequences,omitempty"`
 	Stream        bool     `json:"stream,omitempty"`
 
-	Thinking *ThinkingConfig    `json:"thinking,omitempty"`
-	Metadata map[string]string  `json:"metadata,omitempty"`
+	Thinking *ThinkingConfig   `json:"thinking,omitempty"`
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // Clone 深拷贝，供换目标重试时复用同一份原始请求。

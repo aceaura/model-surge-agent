@@ -126,13 +126,13 @@ const (
 // streamEvent 是所有流帧的联合体。Anthropic 每种帧字段不同，
 // 但字段名不冲突，用一个结构体解全部帧比每帧一个类型更短。
 type streamEvent struct {
-	Type    string      `json:"type"`
-	Index   int         `json:"index,omitempty"`
-	Message *streamMsg  `json:"message,omitempty"`
-	Block   *wireBlock  `json:"content_block,omitempty"`
+	Type    string       `json:"type"`
+	Index   int          `json:"index,omitempty"`
+	Message *streamMsg   `json:"message,omitempty"`
+	Block   *wireBlock   `json:"content_block,omitempty"`
 	Delta   *streamDelta `json:"delta,omitempty"`
-	Usage   *wireUsage  `json:"usage,omitempty"`
-	Error   *wireError  `json:"error,omitempty"`
+	Usage   *wireUsage   `json:"usage,omitempty"`
+	Error   *wireError   `json:"error,omitempty"`
 }
 
 type streamMsg struct {
@@ -154,10 +154,10 @@ type streamDelta struct {
 
 // delta 类型名。
 const (
-	deltaText       = "text_delta"
-	deltaInputJSON  = "input_json_delta"
-	deltaThinking   = "thinking_delta"
-	deltaSignature  = "signature_delta"
+	deltaText      = "text_delta"
+	deltaInputJSON = "input_json_delta"
+	deltaThinking  = "thinking_delta"
+	deltaSignature = "signature_delta"
 )
 
 type wireError struct {
