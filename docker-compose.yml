@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: msa
+      POSTGRES_PASSWORD: ${MSA_PG_PASSWORD:-msa}
+      POSTGRES_DB: msa
+    ports:
+      # 宿主端口错开同族两仓（upstream 5432 / relay 5433），三套可并存。
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U msa -d msa"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    environment:
+      MSA_PG_DSN: postgres://msa:${MSA_PG_PASSWORD:-msa}@postgres:5432/msa?sslmode=disable
+      MSA_REDIS_ADDR: redis:6379
+      # 密钥必须从环境传入，无默认值：缺失时服务启动即失败。
+      # 两把密钥职责不同（一把对调度层出示、一把守管理面），相同同样拒绝启动。
+      MSA_RELAY_BASE_URL: ${MSA_RELAY_BASE_URL:?MSA_RELAY_BASE_URL is required}
+      MSA_RELAY_DISPATCH_KEY: ${MSA_RELAY_DISPATCH_KEY:?MSA_RELAY_DISPATCH_KEY is required}
+      MSA_ADMIN_KEY: ${MSA_ADMIN_KEY:?MSA_ADMIN_KEY is required}
+      MSA_LISTEN: ":8080"
+    ports:
+      # 只绑 127.0.0.1：公共数据面无自身鉴权（客户端鉴权由调度层比对
+      # client_key 完成），裸暴露到公网等于把上游配额敞开给所有人。
+      - "127.0.0.1:8082:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
