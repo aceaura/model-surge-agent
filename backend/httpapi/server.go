@@ -28,7 +28,9 @@ type Server struct {
 	Pipeline *pipeline.Pipeline
 	Models   ModelLister
 	Health   HealthChecker
-	Log      *slog.Logger
+	// Admin 为 nil 时不暴露管理面。
+	Admin *Admin
+	Log   *slog.Logger
 	// AccessLog 关掉后仍会记 request_log，只是不打访问日志行。
 	AccessLog bool
 	// MaxBodyBytes 限制请求体大小，0 表示用默认值。
@@ -71,6 +73,12 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc(http.MethodGet+" "+path, s.listModels(protocol))
 	}
 	mux.HandleFunc(http.MethodGet+" /health", s.health)
+
+	// 管理面挂在同一个监听上，但鉴权完全独立：数据面转发客户端凭据给调度层，
+	// 管理面用本服务自己的密钥。未配置 Admin 时 /admin/* 就是 404。
+	if s.Admin != nil {
+		mux.Handle("/admin/", s.Admin.Handler())
+	}
 
 	return s.withAccessLog(mux)
 }
