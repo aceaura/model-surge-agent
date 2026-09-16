@@ -314,28 +314,11 @@ func errorEnvelope(err *ir.Error) (int, wireErrorEnvelope) {
 	}
 	status := err.StatusCode
 	if status < 400 {
-		status = statusForKind(err.Kind)
+		status = codec.StatusForKind(err.Kind)
 	}
 	return status, wireErrorEnvelope{
 		Type:  "error",
 		Error: wireError{Type: errorTypeForKind(err.Kind), Message: err.Message},
-	}
-}
-
-func statusForKind(kind ir.ErrorKind) int {
-	switch kind {
-	case ir.ErrInvalidRequest, ir.ErrContextExceeded:
-		return 400
-	case ir.ErrAuth:
-		return 401
-	case ir.ErrNotFound:
-		return 404
-	case ir.ErrRateLimit:
-		return 429
-	case ir.ErrTimeout:
-		return 504
-	default:
-		return 500
 	}
 }
 

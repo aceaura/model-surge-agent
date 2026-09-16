@@ -79,22 +79,7 @@ func (a *Aggregator) block(index int, kind BlockType) *Block {
 	return b
 }
 
-// mergeUsage 逐字段取较大值：usage 可能分散在 message_start 与 message_delta
-// 两帧（前者给 input、后者给 output），且部分上游会重复发送累计值。
-func (a *Aggregator) mergeUsage(u Usage) {
-	if u.InputTokens > a.resp.Usage.InputTokens {
-		a.resp.Usage.InputTokens = u.InputTokens
-	}
-	if u.OutputTokens > a.resp.Usage.OutputTokens {
-		a.resp.Usage.OutputTokens = u.OutputTokens
-	}
-	if u.CacheReadTokens > a.resp.Usage.CacheReadTokens {
-		a.resp.Usage.CacheReadTokens = u.CacheReadTokens
-	}
-	if u.CacheWriteTokens > a.resp.Usage.CacheWriteTokens {
-		a.resp.Usage.CacheWriteTokens = u.CacheWriteTokens
-	}
-}
+func (a *Aggregator) mergeUsage(u Usage) { MergeUsage(&a.resp.Usage, u) }
 
 func (a *Aggregator) Response() *Response {
 	out := a.resp

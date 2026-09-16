@@ -3,9 +3,9 @@ package anthropic
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 
+	"github.com/aceaura/model-surge-agent/backend/codec"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
@@ -156,78 +156,16 @@ func DecodeError(status int, body []byte) *ir.Error {
 	var env wireErrorEnvelope
 	if err := json.Unmarshal(body, &env); err != nil || env.Error.Message == "" {
 		// 上游返回了非预期格式（网关 HTML 页面之类），按状态码归类。
-		return ir.NewError(kindForStatus(status, ""), status, "", statusMessage(status, body))
+		return ir.NewError(codec.KindForStatus(status, ""), status, "", codec.StatusMessage(status, body))
 	}
 	return convertError(status, &env.Error)
 }
 
 func convertError(status int, e *wireError) *ir.Error {
 	if e == nil {
-		return ir.NewError(kindForStatus(status, ""), status, "", "upstream error without detail")
+		return ir.NewError(codec.KindForStatus(status, ""), status, "", "upstream error without detail")
 	}
-	return ir.NewError(kindForStatus(status, e.Message), status, e.Type, e.Message)
-}
-
-// kindForStatus 按状态码归类，并对 400 额外看消息内容：
-// 上下文超限与普通参数错误都是 400，但前者不该记作目标失败。
-func kindForStatus(status int, message string) ir.ErrorKind {
-	switch {
-	case status == http.StatusTooManyRequests:
-		return ir.ErrRateLimit
-	case status == http.StatusUnauthorized, status == http.StatusForbidden:
-		return ir.ErrAuth
-	case status == http.StatusNotFound:
-		return ir.ErrNotFound
-	case status == http.StatusRequestEntityTooLarge:
-		return ir.ErrContextExceeded
-	case status == http.StatusBadRequest:
-		if isContextOverflow(message) {
-			return ir.ErrContextExceeded
-		}
-		return ir.ErrInvalidRequest
-	case status >= 500:
-		return ir.ErrUpstream
-	case status == 0:
-		return ir.ErrUpstream
-	default:
-		return ir.ErrInvalidRequest
-	}
-}
-
-// contextOverflowMarkers 是各家表达「输入太长」的说法。
-// 没有统一错误码，只能匹配消息文本。
-var contextOverflowMarkers = []string{
-	"context length",
-	"context_length",
-	"context window",
-	"maximum context",
-	"too many tokens",
-	"prompt is too long",
-	"input length",
-	"reduce the length",
-	"exceeds the maximum",
-}
-
-func isContextOverflow(message string) bool {
-	m := strings.ToLower(message)
-	for _, marker := range contextOverflowMarkers {
-		if strings.Contains(m, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func statusMessage(status int, body []byte) string {
-	const maxLen = 512
-	text := strings.TrimSpace(string(body))
-	if text == "" {
-		return fmt.Sprintf("upstream returned %d", status)
-	}
-	if len(text) > maxLen {
-		text = text[:maxLen]
-	}
-	return fmt.Sprintf("upstream returned %d: %s", status, text)
+	return ir.NewError(codec.KindForStatus(status, e.Message), status, e.Type, e.Message)
 }
 
 func convertUsage(u wireUsage) ir.Usage {

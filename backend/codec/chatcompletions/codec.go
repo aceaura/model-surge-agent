@@ -1,0 +1,70 @@
+// Package chatcompletions 实现 OpenAI Chat Completions 协议的入站与出站编解码。
+//
+// 与 IR 的主要落差是流式模型：本协议没有块生命周期，正文、推理与工具入参
+// 都以 choices[].delta 的隐式续写形式出现。入站方向靠槽位分配补出块边界，
+// 出站方向把块索引压掉，只保留工具调用的序号——那是客户端拼回分片的唯一依据。
+package chatcompletions
+
+import (
+	"strings"
+
+	"github.com/aceaura/model-surge-agent/backend/codec"
+	"github.com/aceaura/model-surge-agent/backend/ir"
+)
+
+// Name 也用作 Thinking.SignatureFrom 的取值：签名只在同族协议间透传。
+const Name = codec.ProtocolChatCompletions
+
+type inboundCodec struct{}
+
+func (inboundCodec) Name() string { return Name }
+
+func (inboundCodec) DecodeRequest(body []byte) (*ir.Request, error) {
+	return DecodeRequest(body)
+}
+
+func (inboundCodec) NewStreamEncoder() codec.StreamEncoder { return newStreamEncoder() }
+
+func (inboundCodec) EncodeResponse(resp *ir.Response) ([]byte, error) {
+	return EncodeResponse(resp)
+}
+
+func (inboundCodec) RenderError(err *ir.Error) (int, []byte) { return RenderError(err) }
+
+func (inboundCodec) RenderStreamError(err *ir.Error) [][]byte { return RenderStreamError(err) }
+
+type outboundCodec struct{}
+
+func (outboundCodec) Name() string { return Name }
+
+// Caps 关掉 ThinkingSig 与 CacheControl：本协议没有承载它们的字段。
+// TopK 同样没有——各家的兼容实现虽偶有支持，但不是协议的一部分，
+// 需要时应通过上游模型配置的 overrides 显式加上。
+func (outboundCodec) Caps() codec.Capabilities {
+	return codec.Capabilities{
+		Thinking:      true,
+		Tools:         true,
+		Images:        true,
+		StopSequences: true,
+	}
+}
+
+func (outboundCodec) EncodeRequest(req *ir.Request) ([]byte, error) { return EncodeRequest(req) }
+
+// Endpoint 的 stream 参数不影响路径：流式由请求体的 stream 字段决定。
+func (outboundCodec) Endpoint(baseURL, _ string, _ bool) (string, map[string]string) {
+	return strings.TrimRight(baseURL, "/") + "/chat/completions", nil
+}
+
+func (outboundCodec) NewStreamDecoder() codec.StreamDecoder { return newStreamDecoder() }
+
+func (outboundCodec) DecodeResponse(body []byte) (*ir.Response, error) { return DecodeResponse(body) }
+
+func (outboundCodec) DecodeError(status int, body []byte) *ir.Error {
+	return DecodeError(status, body)
+}
+
+func init() {
+	codec.RegisterInbound(inboundCodec{})
+	codec.RegisterOutbound(outboundCodec{})
+}

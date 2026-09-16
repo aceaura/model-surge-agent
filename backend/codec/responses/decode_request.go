@@ -1,0 +1,280 @@
+package responses
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/aceaura/model-surge-agent/backend/ir"
+)
+
+// DecodeRequest 把 /responses 请求体解成 IR。
+func DecodeRequest(body []byte) (*ir.Request, error) {
+	var w wireRequest
+	if err := json.Unmarshal(body, &w); err != nil {
+		return nil, badRequest(fmt.Sprintf("malformed request body: %v", err))
+	}
+	if w.Model == "" {
+		return nil, badRequest("model is required")
+	}
+
+	out := &ir.Request{
+		Model:       w.Model,
+		Temperature: w.Temperature,
+		TopP:        w.TopP,
+		Stream:      w.Stream,
+	}
+	if w.MaxOutputTokens != nil {
+		out.MaxTokens = *w.MaxOutputTokens
+	}
+	if w.Instructions != "" {
+		out.System = []ir.Block{{Type: ir.BlockText, Text: w.Instructions}}
+	}
+
+	items, err := decodeInput(w.Input)
+	if err != nil {
+		return nil, badRequest(fmt.Sprintf("input: %v", err))
+	}
+	for i, item := range items {
+		if err := appendItem(out, item); err != nil {
+			return nil, badRequest(fmt.Sprintf("input[%d]: %v", i, err))
+		}
+	}
+
+	for _, t := range w.Tools {
+		// 只认函数工具：web_search 之类的内建工具在上游侧执行，
+		// 本服务无法把它们表达成 IR 的工具定义。
+		if t.Type != "function" {
+			continue
+		}
+		out.Tools = append(out.Tools, ir.Tool{
+			Name:        t.Name,
+			Description: t.Description,
+			Schema:      string(t.Parameters),
+		})
+	}
+	choice, err := decodeToolChoice(w.ToolChoice)
+	if err != nil {
+		return nil, badRequest(fmt.Sprintf("tool_choice: %v", err))
+	}
+	out.ToolChoice = choice
+
+	if w.Reasoning != nil && w.Reasoning.Effort != "" {
+		out.Thinking = &ir.ThinkingConfig{Enabled: true, Effort: w.Reasoning.Effort}
+	}
+	if w.User != "" {
+		out.Metadata = map[string]string{"user_id": w.User}
+	}
+	return out, nil
+}
+
+// decodeInput 认字符串与条目数组两种形态。
+func decodeInput(raw json.RawMessage) ([]wireItem, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		if text == "" {
+			return nil, nil
+		}
+		content, _ := json.Marshal(text)
+		return []wireItem{{Type: itemMessage, Role: roleUser, Content: content}}, nil
+	}
+	var items []wireItem
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, fmt.Errorf("must be a string or an item array: %w", err)
+	}
+	return items, nil
+}
+
+// appendItem 把一个条目并入 IR。
+//
+// 条目类型比消息角色更细：function_call 与 function_call_output 是独立条目，
+// 而 IR 把它们当成消息里的块，所以这里要合并进相邻的消息而非各自成条。
+func appendItem(out *ir.Request, item wireItem) error {
+	// 缺 type 时按 role 推断：本协议允许省略 type 写成裸消息。
+	kind := item.Type
+	if kind == "" && item.Role != "" {
+		kind = itemMessage
+	}
+
+	switch kind {
+	case itemMessage:
+		blocks, err := decodeContent(item.Content)
+		if err != nil {
+			return err
+		}
+		switch item.Role {
+		case roleSystem, roleDeveloper:
+			out.System = append(out.System, blocks...)
+		case roleAssistant:
+			appendBlocks(out, ir.RoleAssistant, blocks)
+		default:
+			appendBlocks(out, ir.RoleUser, blocks)
+		}
+		return nil
+
+	case itemFunctionCall:
+		appendBlocks(out, ir.RoleAssistant, []ir.Block{{
+			Type: ir.BlockToolUse,
+			ToolUse: &ir.ToolUse{
+				ID:    item.CallID,
+				Name:  item.Name,
+				Input: item.Arguments,
+			},
+		}})
+		return nil
+
+	case itemFunctionCallOutput:
+		// output 是纯字符串，无结构。
+		var content []ir.Block
+		if item.Output != "" {
+			content = []ir.Block{{Type: ir.BlockText, Text: item.Output}}
+		}
+		appendBlocks(out, ir.RoleUser, []ir.Block{{
+			Type: ir.BlockToolResult,
+			ToolResult: &ir.ToolResult{
+				ToolUseID: item.CallID,
+				Content:   content,
+			},
+		}})
+		return nil
+
+	case itemReasoning:
+		text := joinSummary(item.Summary)
+		if text == "" && item.EncryptedContent == "" {
+			return nil
+		}
+		appendBlocks(out, ir.RoleAssistant, []ir.Block{{
+			Type: ir.BlockThinking,
+			Thinking: &ir.Thinking{
+				Text: text,
+				// 加密的推理内容当作签名透传：语义相同（只对同族协议有效，
+				// 别家无法解读），复用 SignatureFrom 就不必给 IR 加字段。
+				Signature:     item.EncryptedContent,
+				SignatureFrom: Name,
+			},
+		}})
+		return nil
+
+	default:
+		return fmt.Errorf("unknown item type %q", item.Type)
+	}
+}
+
+// appendBlocks 把块并进末尾消息，角色不同才新开一条。
+// 本协议一个逻辑回合会拆成多个条目，逐条建消息会产出大量单块消息，
+// 转成 Anthropic 时因为角色必须交替而被拒。
+func appendBlocks(out *ir.Request, role ir.Role, blocks []ir.Block) {
+	if len(blocks) == 0 {
+		return
+	}
+	if n := len(out.Messages); n > 0 && out.Messages[n-1].Role == role {
+		out.Messages[n-1].Content = append(out.Messages[n-1].Content, blocks...)
+		return
+	}
+	out.Messages = append(out.Messages, ir.Message{Role: role, Content: blocks})
+}
+
+func joinSummary(items []wireSummary) string {
+	var b strings.Builder
+	for _, s := range items {
+		b.WriteString(s.Text)
+	}
+	return b.String()
+}
+
+// decodeContent 认字符串与 part 数组两种形态。
+func decodeContent(raw json.RawMessage) ([]ir.Block, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		if text == "" {
+			return nil, nil
+		}
+		return []ir.Block{{Type: ir.BlockText, Text: text}}, nil
+	}
+
+	var parts []wirePart
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return nil, fmt.Errorf("content must be a string or a part array: %w", err)
+	}
+	out := make([]ir.Block, 0, len(parts))
+	for _, p := range parts {
+		switch p.Type {
+		case partInputText, partOutputText, "":
+			out = append(out, ir.Block{Type: ir.BlockText, Text: p.Text})
+		case partRefusal:
+			// 拒答文本当普通文本：客户端要看到内容，且它不是错误。
+			out = append(out, ir.Block{Type: ir.BlockText, Text: p.Refusal})
+		case partInputImage:
+			if p.ImageURL == "" {
+				return nil, fmt.Errorf("input_image part needs an image_url")
+			}
+			out = append(out, ir.Block{Type: ir.BlockImage, Image: decodeImageURL(p.ImageURL)})
+		case partSummaryText:
+			out = append(out, ir.Block{
+				Type:     ir.BlockThinking,
+				Thinking: &ir.Thinking{Text: p.Text, SignatureFrom: Name},
+			})
+		default:
+			return nil, fmt.Errorf("unknown content part type %q", p.Type)
+		}
+	}
+	return out, nil
+}
+
+// decodeImageURL 拆 data URI。本协议用单个字符串同时表达内联 base64
+// 与远程链接，IR 分开存，因为 Anthropic 与 Gemini 都要求分开给出。
+func decodeImageURL(url string) *ir.Image {
+	rest, found := strings.CutPrefix(url, "data:")
+	if !found {
+		return &ir.Image{URL: url}
+	}
+	head, payload, found := strings.Cut(rest, ",")
+	if !found {
+		return &ir.Image{URL: url}
+	}
+	media, encoding, found := strings.Cut(head, ";")
+	if !found || encoding != "base64" {
+		return &ir.Image{URL: url}
+	}
+	return &ir.Image{MediaType: media, Data: payload}
+}
+
+func decodeToolChoice(raw json.RawMessage) (*ir.ToolChoice, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var mode string
+	if err := json.Unmarshal(raw, &mode); err == nil {
+		switch mode {
+		case "auto":
+			return &ir.ToolChoice{Mode: ir.ToolChoiceAuto}, nil
+		case "required":
+			return &ir.ToolChoice{Mode: ir.ToolChoiceAny}, nil
+		case "none":
+			return &ir.ToolChoice{Mode: ir.ToolChoiceNone}, nil
+		default:
+			return nil, fmt.Errorf("unknown mode %q", mode)
+		}
+	}
+	var obj struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, fmt.Errorf("must be a string or a function object: %w", err)
+	}
+	if obj.Name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	return &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: obj.Name}, nil
+}
+
+func badRequest(msg string) error {
+	return ir.NewError(ir.ErrInvalidRequest, 400, "invalid_request_error", msg)
+}
