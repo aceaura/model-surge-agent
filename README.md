@@ -106,6 +106,8 @@ docker compose up -d --build
 
 密钥：`Authorization: Bearer $MSA_ADMIN_KEY`。全部只读，除 outbox 重试。
 
+> 完整的接口规范（含公共数据面三协议的请求/响应字段表、错误码、流式行为）见 [docs/api.md](docs/api.md)。下表是速查。
+
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/admin/health` | 永远 200：它是拿来看状态的，把降级表达成 HTTP 错误会让前端分不清「服务降级」与「管理面自己不通」 |

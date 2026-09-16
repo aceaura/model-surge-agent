@@ -130,7 +130,7 @@ class _LiveFeedPageState extends State<LiveFeedPage> {
                             DataCell(OutcomeChip(outcome: e.outcome)),
                             DataCell(Text('${e.statusCode}')),
                             DataCell(Text('${e.attempts}')),
-                            // 非流式请求没有首字概念，显示 - 比显示 0 诚实。
+                            // 0 表示没等到任何帧就结束了（早夭失败），显示 - 与真实的 0ms 区分。
                             DataCell(Text(e.firstTokenMs == 0
                                 ? '-'
                                 : '${e.firstTokenMs}')),
