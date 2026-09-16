@@ -1,0 +1,376 @@
+package anthropic
+
+import (
+	"encoding/json"
+
+	"github.com/aceaura/model-surge-agent/backend/codec"
+	"github.com/aceaura/model-surge-agent/backend/ir"
+)
+
+// streamEncoder 把 IR 事件编成 Anthropic SSE 帧。
+//
+// 它跟踪已开启的块与是否已发过 message_start，因为客户端 SDK 对帧序有要求：
+// message_start 必须先到，块必须成对开闭，末尾必须有 message_stop。
+// 上游流被中途掐断时，Finish 要把这些缺口补齐。
+type streamEncoder struct {
+	started    bool
+	stopped    bool
+	openBlocks map[int]bool
+	// blockOrder 让 Finish 按开启顺序闭合，避免 map 遍历顺序不定
+	// 导致同样的输入产出不同的帧序。
+	blockOrder []int
+	sentDelta  bool
+}
+
+func newStreamEncoder() *streamEncoder {
+	return &streamEncoder{openBlocks: map[int]bool{}}
+}
+
+func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
+	switch ev.Type {
+	case ir.EvMessageStart:
+		return e.encodeStart(ev)
+
+	case ir.EvBlockStart:
+		// 上游可能不发 message_start（或本服务先收到块），
+		// 补一个，否则客户端 SDK 会因缺少消息头而报错。
+		out := e.ensureStarted(ev)
+		block := wireBlock{Type: blockText}
+		if ev.Block != nil {
+			wb, ok, err := encodeBlock(*ev.Block)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				return out, nil
+			}
+			block = wb
+			// 块开启时入参尚未到齐，Anthropic 要求这里是空对象，
+			// 内容由后续 input_json_delta 累积。
+			if block.Type == blockToolUse {
+				block.Input = json.RawMessage(`{}`)
+			}
+		}
+		e.open(ev.Index)
+		frame, err := marshalFrame(evContentBlockStart, streamEvent{
+			Type: evContentBlockStart, Index: ev.Index, Block: &block,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return append(out, frame), nil
+
+	case ir.EvTextDelta:
+		return e.encodeDelta(ev, &streamDelta{Type: deltaText, Text: ev.Text})
+	case ir.EvThinkingDelta:
+		return e.encodeDelta(ev, &streamDelta{Type: deltaThinking, Thinking: ev.Text})
+	case ir.EvSigDelta:
+		return e.encodeDelta(ev, &streamDelta{Type: deltaSignature, Signature: ev.Text})
+	case ir.EvToolInput:
+		return e.encodeDelta(ev, &streamDelta{Type: deltaInputJSON, PartialJSON: ev.Text})
+
+	case ir.EvBlockStop:
+		if !e.openBlocks[ev.Index] {
+			return nil, nil
+		}
+		e.close(ev.Index)
+		frame, err := marshalFrame(evContentBlockStop, streamEvent{
+			Type: evContentBlockStop, Index: ev.Index,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return [][]byte{frame}, nil
+
+	case ir.EvMessageDelta:
+		out := e.ensureStarted(ev)
+		// stop_reason 要在所有块闭合之后才发。
+		out = append(out, e.closeAll()...)
+		frame, err := e.messageDelta(ev)
+		if err != nil {
+			return nil, err
+		}
+		e.sentDelta = true
+		return append(out, frame), nil
+
+	case ir.EvMessageStop:
+		if e.stopped {
+			return nil, nil
+		}
+		out := e.ensureStarted(ev)
+		out = append(out, e.closeAll()...)
+		if !e.sentDelta {
+			// 客户端要从 message_delta 拿 stop_reason 与 usage；
+			// 上游没发就补一个空的，否则 SDK 拿不到终止原因。
+			frame, err := e.messageDelta(ir.Event{StopReason: ir.StopEndTurn})
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, frame)
+			e.sentDelta = true
+		}
+		e.stopped = true
+		frame, err := marshalFrame(evMessageStop, streamEvent{Type: evMessageStop})
+		if err != nil {
+			return nil, err
+		}
+		return append(out, frame), nil
+
+	case ir.EvPing:
+		frame, err := marshalFrame(evPing, streamEvent{Type: evPing})
+		if err != nil {
+			return nil, err
+		}
+		return [][]byte{frame}, nil
+
+	case ir.EvError:
+		return RenderStreamError(ev.Err), nil
+
+	default:
+		return nil, nil
+	}
+}
+
+func (e *streamEncoder) encodeStart(ev ir.Event) ([][]byte, error) {
+	if e.started {
+		return nil, nil
+	}
+	e.started = true
+	msg := &streamMsg{ID: ev.MessageID, Model: ev.Model, Role: string(ir.RoleAssistant)}
+	if msg.ID == "" {
+		msg.ID = "msg_unknown"
+	}
+	if ev.Usage != nil {
+		msg.Usage = renderUsage(*ev.Usage)
+	}
+	frame, err := marshalFrame(evMessageStart, streamEvent{Type: evMessageStart, Message: msg})
+	if err != nil {
+		return nil, err
+	}
+	return [][]byte{frame}, nil
+}
+
+// ensureStarted 在 message_start 缺失时补发一帧。
+func (e *streamEncoder) ensureStarted(ev ir.Event) [][]byte {
+	if e.started {
+		return nil
+	}
+	out, err := e.encodeStart(ir.Event{Type: ir.EvMessageStart, MessageID: ev.MessageID, Model: ev.Model})
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+// encodeDelta 发一个块内增量；块未开启时先补 content_block_start，
+// 否则客户端会收到指向不存在块的 delta。
+func (e *streamEncoder) encodeDelta(ev ir.Event, delta *streamDelta) ([][]byte, error) {
+	var out [][]byte
+	if !e.openBlocks[ev.Index] {
+		opened, err := e.Encode(ir.Event{
+			Type:  ir.EvBlockStart,
+			Index: ev.Index,
+			Block: &ir.Block{Type: blockTypeForDelta(ev.Type)},
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, opened...)
+	}
+	frame, err := marshalFrame(evContentBlockDelta, streamEvent{
+		Type: evContentBlockDelta, Index: ev.Index, Delta: delta,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append(out, frame), nil
+}
+
+func blockTypeForDelta(t ir.EventType) ir.BlockType {
+	switch t {
+	case ir.EvThinkingDelta, ir.EvSigDelta:
+		return ir.BlockThinking
+	case ir.EvToolInput:
+		return ir.BlockToolUse
+	default:
+		return ir.BlockText
+	}
+}
+
+func (e *streamEncoder) messageDelta(ev ir.Event) ([]byte, error) {
+	out := streamEvent{
+		Type:  evMessageDelta,
+		Delta: &streamDelta{StopReason: renderStopReason(ev.StopReason)},
+	}
+	if out.Delta.StopReason == "" {
+		out.Delta.StopReason = "end_turn"
+	}
+	if ev.Usage != nil {
+		u := renderUsage(*ev.Usage)
+		out.Usage = &u
+	}
+	return marshalFrame(evMessageDelta, out)
+}
+
+func (e *streamEncoder) open(index int) {
+	if !e.openBlocks[index] {
+		e.blockOrder = append(e.blockOrder, index)
+	}
+	e.openBlocks[index] = true
+}
+
+func (e *streamEncoder) close(index int) {
+	delete(e.openBlocks, index)
+}
+
+// closeAll 按开启顺序闭合仍开着的块。
+func (e *streamEncoder) closeAll() [][]byte {
+	var out [][]byte
+	for _, idx := range e.blockOrder {
+		if !e.openBlocks[idx] {
+			continue
+		}
+		e.close(idx)
+		frame, err := marshalFrame(evContentBlockStop, streamEvent{
+			Type: evContentBlockStop, Index: idx,
+		})
+		if err != nil {
+			continue
+		}
+		out = append(out, frame)
+	}
+	return out
+}
+
+// Finish 补齐流：闭合未关的块，补 message_delta 与 message_stop。
+// 上游中途断流后必须调用，否则客户端会一直等一个不会来的结束帧。
+func (e *streamEncoder) Finish() [][]byte {
+	if e.stopped {
+		return nil
+	}
+	out, err := e.Encode(ir.Event{Type: ir.EvMessageStop})
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+// EncodeResponse 编非流式响应体。
+func EncodeResponse(resp *ir.Response) ([]byte, error) {
+	if resp == nil {
+		return nil, nil
+	}
+	w := wireResponse{
+		ID:         resp.ID,
+		Type:       "message",
+		Role:       string(ir.RoleAssistant),
+		Model:      resp.Model,
+		StopReason: renderStopReason(resp.StopReason),
+		Usage:      renderUsage(resp.Usage),
+	}
+	if w.ID == "" {
+		w.ID = "msg_unknown"
+	}
+	if w.StopReason == "" {
+		w.StopReason = "end_turn"
+	}
+	w.Content = make([]wireBlock, 0, len(resp.Content))
+	for _, b := range resp.Content {
+		wb, ok, err := encodeBlock(b)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			w.Content = append(w.Content, wb)
+		}
+	}
+	return json.Marshal(w)
+}
+
+// RenderError 编非流式错误响应。
+func RenderError(err *ir.Error) (int, []byte) {
+	status, env := errorEnvelope(err)
+	body, marshalErr := json.Marshal(env)
+	if marshalErr != nil {
+		return status, []byte(`{"type":"error","error":{"type":"api_error","message":"internal error"}}`)
+	}
+	return status, body
+}
+
+// RenderStreamError 编流内错误帧。此时 HTTP 200 已写出，状态码不可再改，
+// 错误只能作为流内的 error 事件表达。
+func RenderStreamError(err *ir.Error) [][]byte {
+	_, env := errorEnvelope(err)
+	frame, marshalErr := marshalFrame(evError, streamEvent{Type: evError, Error: &env.Error})
+	if marshalErr != nil {
+		return nil
+	}
+	return [][]byte{frame}
+}
+
+func errorEnvelope(err *ir.Error) (int, wireErrorEnvelope) {
+	if err == nil {
+		err = ir.NewError(ir.ErrInternal, 500, "", "unknown error")
+	}
+	status := err.StatusCode
+	if status < 400 {
+		status = statusForKind(err.Kind)
+	}
+	return status, wireErrorEnvelope{
+		Type:  "error",
+		Error: wireError{Type: errorTypeForKind(err.Kind), Message: err.Message},
+	}
+}
+
+func statusForKind(kind ir.ErrorKind) int {
+	switch kind {
+	case ir.ErrInvalidRequest, ir.ErrContextExceeded:
+		return 400
+	case ir.ErrAuth:
+		return 401
+	case ir.ErrNotFound:
+		return 404
+	case ir.ErrRateLimit:
+		return 429
+	case ir.ErrTimeout:
+		return 504
+	default:
+		return 500
+	}
+}
+
+// errorTypeForKind 用 Anthropic 的错误类型名，让客户端 SDK 能按自己的
+// 分类处理，而不是看到一个陌生字符串。
+func errorTypeForKind(kind ir.ErrorKind) string {
+	switch kind {
+	case ir.ErrInvalidRequest, ir.ErrContextExceeded:
+		return "invalid_request_error"
+	case ir.ErrAuth:
+		return "authentication_error"
+	case ir.ErrNotFound:
+		return "not_found_error"
+	case ir.ErrRateLimit:
+		return "rate_limit_error"
+	case ir.ErrUpstream, ir.ErrTimeout:
+		return "api_error"
+	default:
+		return "api_error"
+	}
+}
+
+func renderUsage(u ir.Usage) wireUsage {
+	return wireUsage{
+		InputTokens:              u.InputTokens,
+		OutputTokens:             u.OutputTokens,
+		CacheReadInputTokens:     u.CacheReadTokens,
+		CacheCreationInputTokens: u.CacheWriteTokens,
+	}
+}
+
+func marshalFrame(event string, payload streamEvent) ([]byte, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return codec.EncodeFrame(event, data), nil
+}

@@ -12,11 +12,10 @@ type Aggregator struct {
 	order []int
 }
 
-func NewAggregator() *Aggregator {
-	return &Aggregator{blocks: map[int]*Block{}}
-}
-
 func (a *Aggregator) Add(ev Event) {
+	if a.blocks == nil {
+		a.blocks = map[int]*Block{}
+	}
 	switch ev.Type {
 	case EvMessageStart:
 		a.resp.ID = ev.MessageID

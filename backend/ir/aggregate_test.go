@@ -3,7 +3,7 @@ package ir
 import "testing"
 
 func TestAggregateTextAndToolBlocks(t *testing.T) {
-	a := NewAggregator()
+	a := &Aggregator{}
 	a.Add(Event{Type: EvMessageStart, MessageID: "msg_1", Model: "k3"})
 	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{Type: BlockText}})
 	a.Add(Event{Type: EvTextDelta, Index: 0, Text: "he"})
@@ -42,7 +42,7 @@ func TestAggregateTextAndToolBlocks(t *testing.T) {
 }
 
 func TestAggregateThinkingWithSignature(t *testing.T) {
-	a := NewAggregator()
+	a := &Aggregator{}
 	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{Type: BlockThinking}})
 	a.Add(Event{Type: EvThinkingDelta, Index: 0, Text: "step 1"})
 	a.Add(Event{Type: EvSigDelta, Index: 0, Text: "sig"})
@@ -62,7 +62,7 @@ func TestAggregateThinkingWithSignature(t *testing.T) {
 // 上游的块索引不保证连续（responses 的 output_index 会跳号），
 // 输出顺序必须按首次出现顺序而非索引大小。
 func TestBlockOrderFollowsFirstAppearance(t *testing.T) {
-	a := NewAggregator()
+	a := &Aggregator{}
 	a.Add(Event{Type: EvBlockStart, Index: 7, Block: &Block{Type: BlockText}})
 	a.Add(Event{Type: EvTextDelta, Index: 7, Text: "first"})
 	a.Add(Event{Type: EvBlockStart, Index: 2, Block: &Block{Type: BlockText}})
@@ -79,7 +79,7 @@ func TestBlockOrderFollowsFirstAppearance(t *testing.T) {
 
 // 上游漏发 block_start 时不能静默丢内容，按 delta 类型补开块。
 func TestDeltaWithoutBlockStartOpensBlock(t *testing.T) {
-	a := NewAggregator()
+	a := &Aggregator{}
 	a.Add(Event{Type: EvTextDelta, Index: 0, Text: "orphan"})
 
 	got := a.Response()
@@ -91,7 +91,7 @@ func TestDeltaWithoutBlockStartOpensBlock(t *testing.T) {
 // usage 可能分散在 message_start（input）与 message_delta（output）两帧，
 // 也可能被重复发送累计值，逐字段取大值两种情况都对。
 func TestUsageMergesAcrossFrames(t *testing.T) {
-	a := NewAggregator()
+	a := &Aggregator{}
 	a.Add(Event{Type: EvMessageStart, Usage: &Usage{InputTokens: 100}})
 	a.Add(Event{Type: EvMessageDelta, Usage: &Usage{OutputTokens: 20}})
 	a.Add(Event{Type: EvMessageDelta, Usage: &Usage{OutputTokens: 35, CacheReadTokens: 8}})
@@ -106,7 +106,8 @@ func TestUsageMergesAcrossFrames(t *testing.T) {
 }
 
 func TestEmptyStreamYieldsEmptyContent(t *testing.T) {
-	got := NewAggregator().Response()
+	var a Aggregator
+	got := a.Response()
 	if got.Content == nil || len(got.Content) != 0 {
 		t.Errorf("content = %#v, want empty non-nil slice", got.Content)
 	}

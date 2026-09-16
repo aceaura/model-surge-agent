@@ -1,0 +1,190 @@
+package anthropic
+
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/aceaura/model-surge-agent/backend/ir"
+)
+
+// defaultMaxTokens 是 max_tokens 的兜底值。Anthropic 要求该字段必填，
+// 而 Chat Completions 与 Gemini 都允许省略，跨协议转换时必须补一个。
+const defaultMaxTokens = 4096
+
+// EncodeRequest 把 IR 编码成 /v1/messages 请求体。
+//
+// 始终写 stream:true —— 对上游一律流式请求，客户端要非流式时由数据面
+// 聚合事件。这样上游只有一条解码路径。
+func EncodeRequest(req *ir.Request) ([]byte, error) {
+	if req == nil {
+		return nil, fmt.Errorf("anthropic: nil request")
+	}
+	w := wireRequest{
+		Model:         req.Model,
+		MaxTokens:     req.MaxTokens,
+		Temperature:   req.Temperature,
+		TopP:          req.TopP,
+		TopK:          req.TopK,
+		StopSequences: req.StopSequences,
+		Stream:        true,
+	}
+	if w.MaxTokens <= 0 {
+		w.MaxTokens = defaultMaxTokens
+	}
+
+	if len(req.System) > 0 {
+		raw, err := encodeBlocks(req.System)
+		if err != nil {
+			return nil, fmt.Errorf("anthropic: system: %w", err)
+		}
+		w.System = raw
+	}
+
+	for i, m := range req.Messages {
+		raw, err := encodeBlocks(m.Content)
+		if err != nil {
+			return nil, fmt.Errorf("anthropic: messages[%d]: %w", i, err)
+		}
+		w.Messages = append(w.Messages, wireMessage{Role: string(m.Role), Content: raw})
+	}
+
+	for _, t := range req.Tools {
+		tool := wireTool{Name: t.Name, Description: t.Description}
+		if t.Schema != "" {
+			tool.InputSchema = json.RawMessage(t.Schema)
+		}
+		w.Tools = append(w.Tools, tool)
+	}
+	w.ToolChoice = encodeToolChoice(req.ToolChoice)
+
+	if req.Thinking != nil && req.Thinking.Enabled {
+		th := &wireThinking{Type: "enabled", BudgetTokens: req.Thinking.BudgetTokens}
+		// 只有 effort 没有预算时（来自 responses/gemini 客户端）也必须给出预算：
+		// Anthropic 的 thinking 无 effort 概念，缺 budget_tokens 会被拒。
+		if th.BudgetTokens <= 0 {
+			th.BudgetTokens = budgetForEffort(req.Thinking.Effort, w.MaxTokens)
+		}
+		w.Thinking = th
+	}
+	if id := req.Metadata["user_id"]; id != "" {
+		w.Metadata = &wireMetadata{UserID: id}
+	}
+	return json.Marshal(w)
+}
+
+// budgetForEffort 把 effort 档位折成 token 预算。
+// 预算必须小于 max_tokens，否则 Anthropic 会拒绝请求。
+func budgetForEffort(effort string, maxTokens int) int {
+	ratio := 0.5
+	switch effort {
+	case "low", "minimal":
+		ratio = 0.2
+	case "high", "max":
+		ratio = 0.8
+	}
+	budget := int(float64(maxTokens) * ratio)
+	// 低于 1024 会被 API 拒绝。
+	if budget < 1024 {
+		budget = 1024
+	}
+	if budget >= maxTokens {
+		budget = maxTokens - 1
+	}
+	return budget
+}
+
+func encodeBlocks(blocks []ir.Block) (json.RawMessage, error) {
+	out := make([]wireBlock, 0, len(blocks))
+	for _, b := range blocks {
+		wb, ok, err := encodeBlock(b)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			out = append(out, wb)
+		}
+	}
+	return json.Marshal(out)
+}
+
+func encodeBlock(b ir.Block) (wireBlock, bool, error) {
+	out := wireBlock{}
+	if b.CacheCtl != "" {
+		out.CacheControl = &wireCacheControl{Type: b.CacheCtl}
+	}
+
+	switch b.Type {
+	case ir.BlockText:
+		out.Type = blockText
+		out.Text = b.Text
+	case ir.BlockImage:
+		if b.Image == nil {
+			return out, false, fmt.Errorf("image block without payload")
+		}
+		out.Type = blockImage
+		out.Source = &wireSource{MediaType: b.Image.MediaType, Data: b.Image.Data, URL: b.Image.URL}
+		if b.Image.URL != "" {
+			out.Source.Type = "url"
+		} else {
+			out.Source.Type = "base64"
+		}
+	case ir.BlockToolUse:
+		if b.ToolUse == nil {
+			return out, false, fmt.Errorf("tool_use block without payload")
+		}
+		out.Type = blockToolUse
+		out.ID = b.ToolUse.ID
+		out.Name = b.ToolUse.Name
+		// 入参必须是合法 JSON 对象；流被中断时可能残缺，补成空对象
+		// 比发一个语法错误的请求体更好。
+		if json.Valid([]byte(b.ToolUse.Input)) {
+			out.Input = json.RawMessage(b.ToolUse.Input)
+		} else {
+			out.Input = json.RawMessage(`{}`)
+		}
+	case ir.BlockToolResult:
+		if b.ToolResult == nil {
+			return out, false, fmt.Errorf("tool_result block without payload")
+		}
+		content, err := encodeBlocks(b.ToolResult.Content)
+		if err != nil {
+			return out, false, fmt.Errorf("tool_result content: %w", err)
+		}
+		out.Type = blockToolResult
+		out.ToolUseID = b.ToolResult.ToolUseID
+		out.Content = content
+		out.IsError = b.ToolResult.IsError
+	case ir.BlockThinking:
+		if b.Thinking == nil {
+			return out, false, nil
+		}
+		out.Type = blockThinking
+		out.Thinking = b.Thinking.Text
+		// 签名只在同族协议间有效：别家协议的签名发给 Anthropic 会被拒，
+		// 丢掉签名后该块作为纯文本推理仍可被接受。
+		if b.Thinking.SignatureFrom == Name {
+			out.Signature = b.Thinking.Signature
+		}
+	default:
+		return out, false, fmt.Errorf("cannot encode block type %q", b.Type)
+	}
+	return out, true, nil
+}
+
+func encodeToolChoice(tc *ir.ToolChoice) *wireToolChoice {
+	if tc == nil {
+		return nil
+	}
+	switch tc.Mode {
+	case ir.ToolChoiceAuto:
+		return &wireToolChoice{Type: "auto"}
+	case ir.ToolChoiceAny:
+		return &wireToolChoice{Type: "any"}
+	case ir.ToolChoiceNone:
+		return &wireToolChoice{Type: "none"}
+	case ir.ToolChoiceTool:
+		return &wireToolChoice{Type: "tool", Name: tc.Name}
+	default:
+		return nil
+	}
+}
