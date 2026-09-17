@@ -23,7 +23,7 @@ type Step struct {
 type Mock struct {
 	// DispatchKey 非空时校验 Authorization。
 	DispatchKey string
-	// Models 是 /internal/v1/models 的答案。
+	// Models 是 /v1/models 的答案。
 	Models []relayclient.UserModelSummary
 
 	mu        sync.Mutex

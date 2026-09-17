@@ -5,9 +5,9 @@
 ## 三向对接关系
 
 ```
-客户端 ──anthropic / chat_completions / responses──▶ model-surge-agent ──POST /internal/v1/dispatch──▶ model-surge-relay
+客户端 ──anthropic / chat_completions / responses──▶ model-surge-agent ──POST /v1/dispatch──▶ model-surge-relay
                                                         (本服务)         ◀──── target + decision ─────    (调度层)
-                                                            │            ──POST /internal/v1/results─▶
+                                                            │            ──POST /v1/results─▶
                                                             ▼
                                               上游（四出站协议，含 gemini）
 ```

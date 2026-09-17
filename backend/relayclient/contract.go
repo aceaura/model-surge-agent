@@ -10,10 +10,12 @@ import (
 // 不直接 import 那个包：两个服务独立发版，跨仓 import 会把调度层的
 // 内部依赖（apperr、upstreamclient）拖进数据面。
 
+// 调度面路径，前缀与本服务对客户端暴露的 /v1 同名但无关：
+// 这几条是**出站**打到 relay 的地址，不是本服务的入站路由。
 const (
-	PathDispatch = "/internal/v1/dispatch"
-	PathResults  = "/internal/v1/results"
-	PathModels   = "/internal/v1/models"
+	PathDispatch = "/v1/dispatch"
+	PathResults  = "/v1/results"
+	PathModels   = "/v1/models"
 )
 
 type DispatchRequest struct {

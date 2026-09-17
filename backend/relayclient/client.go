@@ -1,4 +1,4 @@
-// Package relayclient 消费 model-surge-relay 的 /internal/v1 面。
+// Package relayclient 消费 model-surge-relay 的调度面（/v1/*，Bearer 调度密钥）。
 //
 // 调度层负责选目标与记运行态，本服务只问「这次发给谁」并回报结果。
 // 客户端鉴权也在调度层：client_key 原样转发过去比对，本服务不判断。
