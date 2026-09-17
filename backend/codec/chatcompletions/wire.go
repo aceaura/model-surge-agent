@@ -110,6 +110,11 @@ type wireUsage struct {
 	PromptTokensDetails *wirePromptDetails `json:"prompt_tokens_details,omitempty"`
 	// PromptCacheHitTokens 是 DeepSeek 的写法，与上面同义，取其一即可。
 	PromptCacheHitTokens int64 `json:"prompt_cache_hit_tokens,omitempty"`
+	// CacheReadInputTokens 是照搬 Anthropic 命名的兼容层写法，同为缓存读取量。
+	CacheReadInputTokens int64 `json:"cache_read_input_tokens,omitempty"`
+	// 缓存写入量在本协议里没有官方字段，两个别名都是兼容层自造的。
+	CacheWriteTokens    int64 `json:"cache_write_tokens,omitempty"`
+	CacheCreationTokens int64 `json:"cache_creation_tokens,omitempty"`
 }
 
 type wirePromptDetails struct {

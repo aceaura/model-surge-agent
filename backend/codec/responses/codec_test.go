@@ -370,6 +370,22 @@ func TestCapsDeclareNoStopSequences(t *testing.T) {
 	}
 }
 
+func TestUsageCacheSemanticsRoundTrip(t *testing.T) {
+	// IR 的 InputTokens 不含缓存命中，本协议的 input_tokens 含，
+	// 所以编码要加回、解码要减去，往返必须回到原值。
+	want := ir.Usage{InputTokens: 90, OutputTokens: 45, CacheReadTokens: 30}
+	wire := renderUsage(want)
+	if wire.InputTokens != 120 {
+		t.Errorf("input_tokens = %d, want the cached tokens added back", wire.InputTokens)
+	}
+	if wire.TotalTokens != 165 {
+		t.Errorf("total_tokens = %d, want 165", wire.TotalTokens)
+	}
+	if got := convertUsage(wire); got != want {
+		t.Errorf("round trip = %+v, want %+v", got, want)
+	}
+}
+
 func TestRegisteredUnderTheProtocolName(t *testing.T) {
 	if _, ok := codec.Inbound(codec.ProtocolResponses); !ok {
 		t.Error("inbound codec not registered")

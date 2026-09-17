@@ -25,6 +25,8 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 		w.SystemInstruction = &wireContent{Parts: []wirePart{{Text: joinText(req.System)}}}
 	}
 
+	// 本协议不要求 contents 首条是 user：model 起头的会话上游照收，
+	// 故不像 anthropic 出站那样补占位首条消息。
 	for i, m := range req.Messages {
 		contents, err := encodeMessage(m, names)
 		if err != nil {

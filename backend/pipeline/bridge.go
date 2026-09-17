@@ -3,12 +3,16 @@ package pipeline
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/aceaura/model-surge-agent/backend/codec"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 	"github.com/aceaura/model-surge-agent/backend/relayclient"
 )
+
+// truncatedToolInput 是工具入参被截断时记入流水的错误码。
+const truncatedToolInput = "truncated_tool_input"
 
 // bridge 把上游流转成客户端响应。
 //
@@ -111,6 +115,23 @@ func (p *Pipeline) finish(w http.ResponseWriter, call Call, encoder codec.Stream
 				err:   ir.NewError(ir.ErrUpstream, 0, "", "upstream produced no events"),
 				usage: usage,
 			}
+		}
+		// 工具入参发到一半断流：残缺调用会被客户端存进历史，
+		// 下一轮重放时整个请求都会被上游拒收，不能当成功。
+		if truncated := agg.IncompleteTools(); len(truncated) > 0 {
+			msg := "truncated tool input: " + strings.Join(truncated, ", ")
+			if !call.Stream {
+				// 非流式：一个字节都还没写出，可以换目标重来。
+				// 这里不写 rec：重试成功后没有代码会把错误字段清掉。
+				return relayclient.OutcomeRetrying, attemptResult{
+					err:   ir.NewError(ir.ErrUpstream, 0, truncatedToolInput, msg),
+					usage: usage,
+				}
+			}
+			// 流式：内容已发出、状态码已定，收不回来了，
+			// 只能记下事实并照常终止，至少让客户端拿到一个完整的流。
+			rec.ErrorCode = truncatedToolInput
+			rec.ErrorMessage = msg
 		}
 		p.writeSuccess(w, call, encoder, agg, rec)
 		return relayclient.OutcomeNormal, attemptResult{usage: usage}

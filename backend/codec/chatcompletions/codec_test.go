@@ -268,6 +268,139 @@ func TestStreamDecoderAssignsDistinctBlocksPerSlot(t *testing.T) {
 	}
 }
 
+// aggregateStream 把一串上游帧喂给解码器并聚合成一条响应。
+func aggregateStream(t *testing.T, frames ...string) *ir.Response {
+	t.Helper()
+	dec := newStreamDecoder()
+	var agg ir.Aggregator
+	for _, f := range frames {
+		events, err := dec.Feed("", f)
+		if err != nil {
+			t.Fatalf("feed %s: %v", f, err)
+		}
+		for _, ev := range events {
+			agg.Add(ev)
+		}
+	}
+	for _, ev := range dec.Finish() {
+		agg.Add(ev)
+	}
+	return agg.Response()
+}
+
+// toolUses 摘出响应里的工具调用块。
+func toolUses(resp *ir.Response) []*ir.ToolUse {
+	var out []*ir.ToolUse
+	for _, b := range resp.Content {
+		if b.Type == ir.BlockToolUse && b.ToolUse != nil {
+			out = append(out, b.ToolUse)
+		}
+	}
+	return out
+}
+
+// 有的实现（GLM/智谱）首帧就把 id、name、完整 arguments 一次给全，
+// 此时入参必须只计一次，否则聚合出 `{"a":1}{"a":1}` 这种非法 JSON。
+func TestFirstFrameCarryingEverythingIsNotDoubleCounted(t *testing.T) {
+	resp := aggregateStream(t,
+		`{"id":"i","model":"m","choices":[{"index":0,"delta":{"tool_calls":[
+		  {"index":0,"id":"c1","type":"function","function":{"name":"f","arguments":"{\"a\":1}"}}]}}]}`,
+		`{"id":"i","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		doneSentinel,
+	)
+	calls := toolUses(resp)
+	if len(calls) != 1 {
+		t.Fatalf("want one tool call, got %d: %+v", len(calls), resp.Content)
+	}
+	if calls[0].Input != `{"a":1}` {
+		t.Fatalf("input = %q, want exactly one copy", calls[0].Input)
+	}
+}
+
+// 有的实现先发几片 arguments 才补上 name。块开启帧只有一次机会带上
+// name，所以必须等它到齐，且期间的 arguments 一片都不能丢。
+func TestArgumentsBeforeNameKeepBothIntact(t *testing.T) {
+	resp := aggregateStream(t,
+		`{"id":"i","model":"m","choices":[{"index":0,"delta":{"tool_calls":[
+		  {"index":0,"function":{"arguments":"{\"a\":"}}]}}]}`,
+		`{"id":"i","model":"m","choices":[{"index":0,"delta":{"tool_calls":[
+		  {"index":0,"id":"c1","function":{"name":"f","arguments":"1}"}}]}}]}`,
+		`{"id":"i","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		doneSentinel,
+	)
+	calls := toolUses(resp)
+	if len(calls) != 1 {
+		t.Fatalf("want one tool call, got %d: %+v", len(calls), resp.Content)
+	}
+	if calls[0].Name != "f" {
+		t.Errorf("name = %q, want f", calls[0].Name)
+	}
+	if calls[0].Input != `{"a":1}` {
+		t.Errorf("input = %q, want the fragments joined in order", calls[0].Input)
+	}
+}
+
+// 上游复用同一个 index 表示另一次调用时必须另起一块，
+// 并进原块会把两次调用的入参串成一份非法 JSON。
+func TestReusedIndexWithNewIDStartsAnotherBlock(t *testing.T) {
+	resp := aggregateStream(t,
+		`{"id":"i","model":"m","choices":[{"index":0,"delta":{"tool_calls":[
+		  {"index":0,"id":"c1","function":{"name":"f","arguments":"{\"a\":1}"}}]}}]}`,
+		`{"id":"i","model":"m","choices":[{"index":0,"delta":{"tool_calls":[
+		  {"index":0,"id":"c2","function":{"name":"g","arguments":"{\"b\":2}"}}]}}]}`,
+		`{"id":"i","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		doneSentinel,
+	)
+	calls := toolUses(resp)
+	if len(calls) != 2 {
+		t.Fatalf("want two tool calls, got %d: %+v", len(calls), resp.Content)
+	}
+	if calls[0].ID != "c1" || calls[0].Input != `{"a":1}` {
+		t.Errorf("first call = %+v", calls[0])
+	}
+	if calls[1].ID != "c2" || calls[1].Input != `{"b":2}` {
+		t.Errorf("second call = %+v", calls[1])
+	}
+}
+
+// name 始终不到达也不能静默丢掉调用：上游已经决定要调工具了，
+// 丢掉会让客户端看到一次没有调用的回答。
+func TestSlotWithoutNameIsAnnouncedAtClose(t *testing.T) {
+	resp := aggregateStream(t,
+		`{"id":"i","model":"m","choices":[{"index":0,"delta":{"tool_calls":[
+		  {"index":0,"function":{"arguments":"{\"a\":"}}]}}]}`,
+		`{"id":"i","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		doneSentinel,
+	)
+	calls := toolUses(resp)
+	if len(calls) != 1 {
+		t.Fatalf("want one tool call, got %d: %+v", len(calls), resp.Content)
+	}
+	if calls[0].Name != unknownToolName {
+		t.Errorf("name = %q, want the placeholder", calls[0].Name)
+	}
+	if calls[0].Input != "{}" {
+		t.Errorf("input = %q, truncated arguments must normalize to an empty object", calls[0].Input)
+	}
+}
+
+// 另外三个协议都靠 id 把结果回指到调用，上游不给就得合成。
+func TestMissingCallIDIsSynthesized(t *testing.T) {
+	resp := aggregateStream(t,
+		`{"id":"i","model":"m","choices":[{"index":0,"delta":{"tool_calls":[
+		  {"index":0,"function":{"name":"f","arguments":"{}"}}]}}]}`,
+		`{"id":"i","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		doneSentinel,
+	)
+	calls := toolUses(resp)
+	if len(calls) != 1 {
+		t.Fatalf("want one tool call, got %d: %+v", len(calls), resp.Content)
+	}
+	if calls[0].ID == "" {
+		t.Error("a call id must be synthesized when the upstream gives none")
+	}
+}
+
 func TestUsageAndFinishReasonCollapseIntoOneMessageDelta(t *testing.T) {
 	dec := newStreamDecoder()
 	frames := []string{
@@ -332,6 +465,7 @@ func TestBothCacheFieldNamesAreRead(t *testing.T) {
 	}{
 		{"openai style", `{"id":"i","choices":[],"usage":{"prompt_tokens":10,"prompt_tokens_details":{"cached_tokens":4}}}`},
 		{"deepseek style", `{"id":"i","choices":[],"usage":{"prompt_tokens":10,"prompt_cache_hit_tokens":4}}`},
+		{"anthropic style alias", `{"id":"i","choices":[],"usage":{"prompt_tokens":10,"cache_read_input_tokens":4}}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -342,7 +476,27 @@ func TestBothCacheFieldNamesAreRead(t *testing.T) {
 			if resp.Usage.CacheReadTokens != 4 {
 				t.Errorf("cache_read = %d, want 4", resp.Usage.CacheReadTokens)
 			}
+			// 本协议的 prompt_tokens 含缓存，IR 的 InputTokens 不含。
+			if resp.Usage.InputTokens != 6 {
+				t.Errorf("input = %d, want 10 minus the 4 cached", resp.Usage.InputTokens)
+			}
 		})
+	}
+}
+
+// 口径换算必须可逆：减掉的缓存量编码回去要加回来，
+// 否则每穿一次协议边界输入总量就缩水一次。
+func TestUsageCacheSemanticsRoundTrip(t *testing.T) {
+	want := ir.Usage{InputTokens: 90, OutputTokens: 45, CacheReadTokens: 30}
+	wire := renderUsage(want)
+	if wire.PromptTokens != 120 {
+		t.Errorf("prompt_tokens = %d, want the cached tokens added back", wire.PromptTokens)
+	}
+	if wire.TotalTokens != 165 {
+		t.Errorf("total_tokens = %d, want 165", wire.TotalTokens)
+	}
+	if got := convertUsage(wire); got != want {
+		t.Errorf("round trip = %+v, want %+v", got, want)
 	}
 }
 

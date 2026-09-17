@@ -234,7 +234,9 @@ func TestStreamFoldsThoughtTokensIntoOutputAndInfersToolUse(t *testing.T) {
 	resp := aggregateStream(t, streamRaw)
 
 	// 推理消耗不含在 candidatesTokenCount 里，但计费上属于输出。
-	want := ir.Usage{InputTokens: 120, OutputTokens: 45, CacheReadTokens: 30}
+	// promptTokenCount 120 含 cachedContentTokenCount 30，
+	// 而 IR 的 InputTokens 是不含缓存的新鲜输入，故为 90。
+	want := ir.Usage{InputTokens: 90, OutputTokens: 45, CacheReadTokens: 30}
 	if resp.Usage != want {
 		t.Errorf("usage = %+v, want %+v", resp.Usage, want)
 	}

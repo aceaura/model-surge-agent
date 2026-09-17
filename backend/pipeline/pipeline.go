@@ -54,6 +54,9 @@ type Record struct {
 	FirstTokenMS     int
 	ErrorCode        string
 	ErrorMessage     string
+	// Sanitized 是 ir.Sanitize 对本次请求做出的修复说明；
+	// 为空表示请求本身合法，未被改动。
+	Sanitized []string
 }
 
 type Options struct {
@@ -92,6 +95,8 @@ type Call struct {
 // Serve 处理一次客户端请求，自行把响应或错误写进 w。
 func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) {
 	start := p.now()
+	// 先修畸形再估算：sanitize 会增删块，而 est_tokens 只算一次并在重试间复用。
+	sanitized := ir.Sanitize(call.Request)
 	// est_tokens 只在首次 dispatch 前算一次，重试复用：请求没变，重算没意义。
 	est := int(ir.EstimateRequest(call.Request))
 
@@ -101,6 +106,7 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 		InboundProtocol: call.Protocol,
 		UserModel:       call.UserModel,
 		Stream:          call.Stream,
+		Sanitized:       sanitized,
 	}
 	defer func() {
 		rec.LatencyMS = msSince(start, p.now())

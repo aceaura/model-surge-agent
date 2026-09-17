@@ -16,6 +16,16 @@ type streamDecoder struct {
 
 func newStreamDecoder() *streamDecoder { return &streamDecoder{} }
 
+// isPlaceholderInput 判断开启帧上的 input 是否不含信息。
+func isPlaceholderInput(input string) bool {
+	switch strings.TrimSpace(input) {
+	case "", "null", "{}":
+		return true
+	default:
+		return false
+	}
+}
+
 func (d *streamDecoder) Feed(event, data string) ([]ir.Event, error) {
 	// ping 帧的 data 可能是空对象，解析它没有意义。
 	if event == evPing {
@@ -61,13 +71,21 @@ func (d *streamDecoder) Feed(event, data string) ([]ir.Event, error) {
 				return nil, nil
 			}
 			block = b
-			// 块开启时的 input 是占位空对象，真正入参由后续 input_json_delta
-			// 累积。留着它会被当成前缀拼进入参，产出非法 JSON。
-			if block.ToolUse != nil {
+			// 块开启时的 input 通常是占位空对象，真正入参由后续 input_json_delta
+			// 累积；留着占位符会被当成前缀拼进入参，产出非法 JSON。
+			if block.ToolUse != nil && isPlaceholderInput(block.ToolUse.Input) {
 				block.ToolUse.Input = ""
 			}
 		}
-		return []ir.Event{{Type: ir.EvBlockStart, Index: ev.Index, Block: &block}}, nil
+		out := []ir.Event{{Type: ir.EvBlockStart, Index: ev.Index, Block: &block}}
+		// 有实现在开启帧就给出完整入参且不再发增量。IR 约定入参只走增量事件，
+		// 所以补发一帧：留在块里会被下游编码器按「开启帧入参必为空」丢掉。
+		if block.ToolUse != nil && block.ToolUse.Input != "" {
+			input := block.ToolUse.Input
+			block.ToolUse.Input = ""
+			out = append(out, ir.Event{Type: ir.EvToolInput, Index: ev.Index, Text: input})
+		}
+		return out, nil
 
 	case evContentBlockDelta:
 		if ev.Delta == nil {

@@ -242,6 +242,57 @@ func TestEncodeRepairsTruncatedToolInput(t *testing.T) {
 	}
 }
 
+// 本协议要求首条消息是 user。历史被裁剪成 assistant 起头时
+// 必须补一条占位消息，否则整个请求被拒。
+func TestEncodeInsertsLeadingUserMessage(t *testing.T) {
+	wire, err := EncodeRequest(&ir.Request{
+		Model: "claude-opus-5",
+		Messages: []ir.Message{
+			{Role: ir.RoleAssistant, Content: []ir.Block{{Type: ir.BlockText, Text: "picking up"}}},
+			{Role: ir.RoleUser, Content: []ir.Block{{Type: ir.BlockText, Text: "go on"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRequest: %v", err)
+	}
+	var got wireRequest
+	if err := json.Unmarshal(wire, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Messages) != 3 {
+		t.Fatalf("want a placeholder plus the two originals, got %d", len(got.Messages))
+	}
+	if got.Messages[0].Role != "user" {
+		t.Fatalf("first message must be user, got %q", got.Messages[0].Role)
+	}
+	if !strings.Contains(string(got.Messages[0].Content), leadingUserPlaceholder) {
+		t.Fatalf("placeholder text missing: %s", got.Messages[0].Content)
+	}
+	if got.Messages[1].Role != "assistant" || !strings.Contains(string(got.Messages[1].Content), "picking up") {
+		t.Fatalf("original assistant message must survive: %+v", got.Messages[1])
+	}
+}
+
+// 已经是 user 起头时不能插入：无条件插入会改变前缀，打掉上游的 prompt cache。
+func TestEncodeLeavesLeadingUserAlone(t *testing.T) {
+	wire, err := EncodeRequest(&ir.Request{
+		Model: "claude-opus-5",
+		Messages: []ir.Message{
+			{Role: ir.RoleUser, Content: []ir.Block{{Type: ir.BlockText, Text: "hi"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRequest: %v", err)
+	}
+	var got wireRequest
+	if err := json.Unmarshal(wire, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Messages) != 1 {
+		t.Fatalf("want the single original message, got %d", len(got.Messages))
+	}
+}
+
 func TestDecodeRequestRejectsBadInput(t *testing.T) {
 	cases := map[string]string{
 		"malformed":     `{`,

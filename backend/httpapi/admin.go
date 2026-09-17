@@ -303,6 +303,7 @@ func summaryOf(rec pipeline.Record) agentv1.RequestSummary {
 		FirstTokenMS:     rec.FirstTokenMS,
 		ErrorCode:        rec.ErrorCode,
 		ErrorMessage:     rec.ErrorMessage,
+		Sanitized:        rec.Sanitized,
 	}
 }
 

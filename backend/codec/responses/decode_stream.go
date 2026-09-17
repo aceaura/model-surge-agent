@@ -143,14 +143,19 @@ func (d *streamDecoder) itemAdded(ev wireStreamEvent) ([]ir.Event, error) {
 			return out, nil
 		}
 		idx := d.allocate(key)
-		return append(out, ir.Event{
+		out = append(out, ir.Event{
 			Type:  ir.EvBlockStart,
 			Index: idx,
 			Block: &ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
 				ID:   ev.Item.CallID,
 				Name: ev.Item.Name,
 			}},
-		}), nil
+		})
+		// 有实现在开启帧就给出完整 arguments 且不再发增量，当一次 delta 发出。
+		if ev.Item.Arguments != "" {
+			out = append(out, ir.Event{Type: ir.EvToolInput, Index: idx, Text: ev.Item.Arguments})
+		}
+		return out, nil
 	case itemReasoning:
 		key := reasoningKey(ev.OutputIndex)
 		if _, exists := d.lookup(key); exists {
@@ -361,14 +366,22 @@ func convertUsage(u wireUsage) ir.Usage {
 	if u.InputTokensDetails != nil {
 		out.CacheReadTokens = u.InputTokensDetails.CachedTokens
 	}
+	// 本协议的 input_tokens 含缓存命中，而 IR 的 InputTokens 定义为
+	// 不含缓存的新鲜输入，故减去。上游数字不自洽时钳到 0，不出负数。
+	out.InputTokens -= out.CacheReadTokens
+	if out.InputTokens < 0 {
+		out.InputTokens = 0
+	}
 	return out
 }
 
 func renderUsage(u ir.Usage) wireUsage {
+	// 加回缓存命中：本协议的客户端期望 input_tokens 是输入总量。
+	input := u.InputTokens + u.CacheReadTokens
 	out := wireUsage{
-		InputTokens:  u.InputTokens,
+		InputTokens:  input,
 		OutputTokens: u.OutputTokens,
-		TotalTokens:  u.InputTokens + u.OutputTokens,
+		TotalTokens:  input + u.OutputTokens,
 	}
 	if u.CacheReadTokens > 0 {
 		out.InputTokensDetails = &wireInputDetails{CachedTokens: u.CacheReadTokens}

@@ -211,10 +211,14 @@ func TestRequestMatrixCarriesNoForeignSignature(t *testing.T) {
 
 // streamFixture 是各出站协议的一段流，四类语义齐全：
 // 文本、推理、工具调用（分片入参）、用量、终止原因。
+//
+// 四份都描述同一次调用：输入总量 120（其中缓存命中 30）、输出 45。
+// anthropic 的 input_tokens 不含缓存命中故写 90，另外三家的对应字段
+// 含缓存故写 120 —— 这个差异正是 IR 要抹平的口径漂移。
 var streamFixture = map[string]string{
 	codec.ProtocolAnthropic: strings.Join([]string{
 		`event: message_start`,
-		`data: {"type":"message_start","message":{"id":"msg_1","model":"native","role":"assistant","usage":{"input_tokens":120,"cache_read_input_tokens":30}}}`,
+		`data: {"type":"message_start","message":{"id":"msg_1","model":"native","role":"assistant","usage":{"input_tokens":90,"cache_read_input_tokens":30}}}`,
 		``,
 		`event: content_block_start`,
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`,
@@ -347,7 +351,8 @@ func TestUpstreamStreamsAgreeOnSemantics(t *testing.T) {
 		if resp.StopReason != ir.StopToolUse {
 			t.Errorf("%s: stop_reason = %q, want tool_use", name, resp.StopReason)
 		}
-		want := ir.Usage{InputTokens: 120, OutputTokens: 45, CacheReadTokens: 30}
+		// IR 口径：InputTokens 是不含缓存的新鲜输入，总量仍为 90+30=120。
+		want := ir.Usage{InputTokens: 90, OutputTokens: 45, CacheReadTokens: 30}
 		if resp.Usage != want {
 			t.Errorf("%s: usage = %+v, want %+v", name, resp.Usage, want)
 		}
@@ -407,9 +412,14 @@ func TestStreamMatrixPreservesFourSemantics(t *testing.T) {
 				if resp.StopReason != ir.StopToolUse {
 					t.Errorf("stop_reason = %q, want tool_use\n%s", resp.StopReason, rendered)
 				}
-				want := ir.Usage{InputTokens: 120, OutputTokens: 45, CacheReadTokens: 30}
+				// IR 口径：InputTokens 不含缓存命中。
+				want := ir.Usage{InputTokens: 90, OutputTokens: 45, CacheReadTokens: 30}
 				if resp.Usage != want {
 					t.Errorf("usage = %+v, want %+v\n%s", resp.Usage, want, rendered)
+				}
+				// 守恒：无论走哪一格，客户端可见的输入总量都得是 120。
+				if total := resp.Usage.InputTokens + resp.Usage.CacheReadTokens; total != 120 {
+					t.Errorf("total input = %d, want 120\n%s", total, rendered)
 				}
 
 				var (
@@ -739,4 +749,620 @@ func findThinking(req *ir.Request) *ir.Thinking {
 		}
 	}
 	return nil
+}
+
+// --- 畸形请求矩阵 ---
+
+// malformedFixtures 是四类真实会被上游 400 拒收的畸形请求，每类都以三种
+// 入站协议的等价写法给出。矩阵要证明的不是「修得漂亮」，而是修完之后
+// 四个出站协议都拿得到自己能接受的请求体——修复发生在 IR 层，
+// 但被拒收的是 wire body，只有编码后才能验。
+//
+// verify 只断言结构（某个 wire 标记在或不在、两段内容的先后），不断言
+// 原始入参字节：四个出站编码器都会把非法工具入参改写成 {}，
+// 断言字节会把这层防御误判成缺陷。
+var malformedFixtures = []struct {
+	name   string
+	bodies map[string]string
+	verify func(t *testing.T, outProtocol string, encoded []byte)
+}{
+	{
+		// 孤儿工具结果：结果找不到宣告它的 tool_use。Sanitize 会把它降级为
+		// 文本，所以出站体里内容还在，但不能再以工具结果的形态出现——
+		// 没有宣告方的工具结果是上游拒收的直接原因。
+		name: "orphan-tool-result",
+		bodies: map[string]string{
+			codec.ProtocolAnthropic: `{
+			  "model": "user-model",
+			  "max_tokens": 1024,
+			  "messages": [
+			    {"role": "user", "content": "hi"},
+			    {"role": "user", "content": [
+			      {"type": "tool_result", "tool_use_id": "call_x", "content": "orphan output"}
+			    ]}
+			  ]
+			}`,
+			codec.ProtocolChatCompletions: `{
+			  "model": "user-model",
+			  "max_tokens": 1024,
+			  "messages": [
+			    {"role": "user", "content": "hi"},
+			    {"role": "tool", "tool_call_id": "call_x", "content": "orphan output"}
+			  ]
+			}`,
+			codec.ProtocolResponses: `{
+			  "model": "user-model",
+			  "max_output_tokens": 1024,
+			  "input": [
+			    {"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},
+			    {"type":"function_call_output","call_id":"call_x","output":"orphan output"}
+			  ]
+			}`,
+		},
+		verify: func(t *testing.T, out string, encoded []byte) {
+			text := string(encoded)
+			if !strings.Contains(text, "orphan output") {
+				t.Errorf("降级后内容丢失: %s", text)
+			}
+			if marker := toolResultMarker(out); strings.Contains(text, marker) {
+				t.Errorf("孤儿结果仍以工具结果形态发出（%s）: %s", marker, text)
+			}
+		},
+	},
+	{
+		// 错序结果：两个并行调用的结果按相反顺序给出。上游按顺序把结果
+		// 绑回调用，错序会让参数与结果对错，所以出站体里 a 必须排在 b 前。
+		name: "misordered-tool-results",
+		bodies: map[string]string{
+			codec.ProtocolAnthropic: `{
+			  "model": "user-model",
+			  "max_tokens": 1024,
+			  "messages": [
+			    {"role": "user", "content": "find"},
+			    {"role": "assistant", "content": [
+			      {"type": "tool_use", "id": "call_a", "name": "grep", "input": {"pattern": "A"}},
+			      {"type": "tool_use", "id": "call_b", "name": "ls", "input": {"path": "/"}}
+			    ]},
+			    {"role": "user", "content": [
+			      {"type": "tool_result", "tool_use_id": "call_b", "content": "b out"},
+			      {"type": "tool_result", "tool_use_id": "call_a", "content": "a out"}
+			    ]}
+			  ]
+			}`,
+			codec.ProtocolChatCompletions: `{
+			  "model": "user-model",
+			  "max_tokens": 1024,
+			  "messages": [
+			    {"role": "user", "content": "find"},
+			    {"role": "assistant", "tool_calls": [
+			      {"index":0,"id":"call_a","type":"function","function":{"name":"grep","arguments":"{\"pattern\":\"A\"}"}},
+			      {"index":1,"id":"call_b","type":"function","function":{"name":"ls","arguments":"{\"path\":\"/\"}"}}
+			    ]},
+			    {"role": "tool", "tool_call_id": "call_b", "content": "b out"},
+			    {"role": "tool", "tool_call_id": "call_a", "content": "a out"}
+			  ]
+			}`,
+			codec.ProtocolResponses: `{
+			  "model": "user-model",
+			  "max_output_tokens": 1024,
+			  "input": [
+			    {"type":"message","role":"user","content":[{"type":"input_text","text":"find"}]},
+			    {"type":"function_call","call_id":"call_a","name":"grep","arguments":"{\"pattern\":\"A\"}"},
+			    {"type":"function_call","call_id":"call_b","name":"ls","arguments":"{\"path\":\"/\"}"},
+			    {"type":"function_call_output","call_id":"call_b","output":"b out"},
+			    {"type":"function_call_output","call_id":"call_a","output":"a out"}
+			  ]
+			}`,
+		},
+		verify: func(t *testing.T, out string, encoded []byte) {
+			text := string(encoded)
+			ai := strings.Index(text, "a out")
+			bi := strings.Index(text, "b out")
+			if ai < 0 || bi < 0 {
+				t.Fatalf("结果内容缺失 a=%d b=%d: %s", ai, bi, text)
+			}
+			if ai > bi {
+				t.Errorf("结果顺序未与调用对齐（a 应在 b 前）: %s", text)
+			}
+		},
+	},
+	{
+		// 悬空调用：助手宣告了工具却没有任何结果，上下文压缩截断后的典型形态。
+		// Sanitize 丢弃该调用，同一条消息里的正文必须留下。
+		name: "unanswered-tool-use",
+		bodies: map[string]string{
+			codec.ProtocolAnthropic: `{
+			  "model": "user-model",
+			  "max_tokens": 1024,
+			  "messages": [
+			    {"role": "user", "content": "hi"},
+			    {"role": "assistant", "content": [
+			      {"type": "text", "text": "let me look"},
+			      {"type": "tool_use", "id": "call_z", "name": "ls", "input": {"path": "/"}}
+			    ]}
+			  ]
+			}`,
+			codec.ProtocolChatCompletions: `{
+			  "model": "user-model",
+			  "max_tokens": 1024,
+			  "messages": [
+			    {"role": "user", "content": "hi"},
+			    {"role": "assistant", "content": "let me look", "tool_calls": [
+			      {"index":0,"id":"call_z","type":"function","function":{"name":"ls","arguments":"{\"path\":\"/\"}"}}
+			    ]}
+			  ]
+			}`,
+			codec.ProtocolResponses: `{
+			  "model": "user-model",
+			  "max_output_tokens": 1024,
+			  "input": [
+			    {"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},
+			    {"type":"message","role":"assistant","content":[{"type":"output_text","text":"let me look"}]},
+			    {"type":"function_call","call_id":"call_z","name":"ls","arguments":"{\"path\":\"/\"}"}
+			  ]
+			}`,
+		},
+		verify: func(t *testing.T, out string, encoded []byte) {
+			text := string(encoded)
+			if strings.Contains(text, "call_z") {
+				t.Errorf("悬空调用仍被发往上游: %s", text)
+			}
+			if !strings.Contains(text, "let me look") {
+				t.Errorf("同消息内的正文被连带丢弃: %s", text)
+			}
+		},
+	},
+	{
+		// 空白 prefill：尾部助手消息只有空白。Anthropic 对此直接 400
+		// （text content blocks must contain non-whitespace text）。
+		// 用纯空白而非零块消息：responses 协议表达不出零块消息，
+		// 空白文本是三家都能等价写出的形态。
+		name: "whitespace-prefill",
+		bodies: map[string]string{
+			codec.ProtocolAnthropic: `{
+			  "model": "user-model",
+			  "max_tokens": 1024,
+			  "messages": [
+			    {"role": "user", "content": "hi"},
+			    {"role": "assistant", "content": "   "}
+			  ]
+			}`,
+			codec.ProtocolChatCompletions: `{
+			  "model": "user-model",
+			  "max_tokens": 1024,
+			  "messages": [
+			    {"role": "user", "content": "hi"},
+			    {"role": "assistant", "content": "   "}
+			  ]
+			}`,
+			codec.ProtocolResponses: `{
+			  "model": "user-model",
+			  "max_output_tokens": 1024,
+			  "input": [
+			    {"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},
+			    {"type":"message","role":"assistant","content":[{"type":"output_text","text":"   "}]}
+			  ]
+			}`,
+		},
+		verify: func(t *testing.T, out string, encoded []byte) {
+			text := string(encoded)
+			if !strings.Contains(text, "hi") {
+				t.Errorf("正常消息被误删: %s", text)
+			}
+			if marker := assistantRoleMarker(out); strings.Contains(text, marker) {
+				t.Errorf("空白 prefill 仍被发出（%s）: %s", marker, text)
+			}
+		},
+	},
+}
+
+// TestMalformedFixturesAgreeOnSemantics 是矩阵的前置断言：三份等价 body
+// 必须解出语义等价的 IR。比的是扁平化的块序列而非消息布局——
+// responses 会把同角色的相邻条目并进一条消息，消息条数天然不同，
+// 但块的种类与顺序必须一致，否则出站差异无法归因。
+func TestMalformedFixturesAgreeOnSemantics(t *testing.T) {
+	for _, fx := range malformedFixtures {
+		t.Run(fx.name, func(t *testing.T) {
+			var want string
+			for _, in := range inboundNames() {
+				body, ok := fx.bodies[in]
+				if !ok {
+					t.Fatalf("inbound %q 缺 %q fixture: 补一份，否则这一列被静默跳过", in, fx.name)
+				}
+				c, _ := codec.Inbound(in)
+				req, err := c.DecodeRequest([]byte(body))
+				if err != nil {
+					t.Fatalf("%s decode: %v", in, err)
+				}
+				got := semanticSnapshot(req)
+				if want == "" {
+					want = got
+					continue
+				}
+				if got != want {
+					t.Errorf("%s 解出的语义与其他入站不等价\n got: %s\nwant: %s", in, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestMalformedRequestMatrixProducesAcceptableBodies 是四类畸形 × 三入站 ×
+// 四出站的十二格。走的是与 pipeline 相同的顺序：入站解码 → Sanitize →
+// 出站编码，因为畸形是在 IR 层修的，而被上游拒收的是编码后的 wire body。
+func TestMalformedRequestMatrixProducesAcceptableBodies(t *testing.T) {
+	for _, fx := range malformedFixtures {
+		for _, in := range inboundNames() {
+			for _, out := range outboundNames() {
+				t.Run(fx.name+"/"+in+"→"+out, func(t *testing.T) {
+					encoded := sanitizeAcross(t, in, out, fx.bodies[in])
+					if !json.Valid(encoded) {
+						t.Fatalf("编出的请求体不是合法 JSON: %s", encoded)
+					}
+					fx.verify(t, out, encoded)
+				})
+			}
+		}
+	}
+}
+
+// sanitizeAcross 与 encodeAcross 的区别只在中间多一步 Sanitize，
+// 对齐 pipeline 的真实顺序。
+func sanitizeAcross(t *testing.T, in, out, body string) []byte {
+	t.Helper()
+	ic, ok := codec.Inbound(in)
+	if !ok {
+		t.Fatalf("inbound %q not registered", in)
+	}
+	req, err := ic.DecodeRequest([]byte(body))
+	if err != nil {
+		t.Fatalf("%s decode: %v", in, err)
+	}
+	ir.Sanitize(req)
+	req.Model = "native"
+	oc, ok := codec.Outbound(out)
+	if !ok {
+		t.Fatalf("outbound %q not registered", out)
+	}
+	encoded, err := oc.EncodeRequest(req)
+	if err != nil {
+		t.Fatalf("%s encode: %v", out, err)
+	}
+	return encoded
+}
+
+// semanticSnapshot 把请求压成「块种类 + 工具 id + 文本」的扁平序列，
+// 跨过消息边界：消息布局属于各协议的表达自由，块序列才是语义。
+func semanticSnapshot(req *ir.Request) string {
+	var sb strings.Builder
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			sb.WriteString(string(b.Type))
+			switch {
+			case b.ToolUse != nil:
+				sb.WriteString(":" + b.ToolUse.ID + "/" + b.ToolUse.Name)
+			case b.ToolResult != nil:
+				sb.WriteString(":" + b.ToolResult.ToolUseID + "/" + systemText(b.ToolResult.Content))
+			default:
+				sb.WriteString(":" + b.Text)
+			}
+			sb.WriteString("|")
+		}
+	}
+	return sb.String()
+}
+
+// toolResultMarker 是各出站协议表达「这是一个工具结果」的 wire 标记。
+func toolResultMarker(protocol string) string {
+	switch protocol {
+	case codec.ProtocolAnthropic:
+		return `"type":"tool_result"`
+	case codec.ProtocolChatCompletions:
+		return `"role":"tool"`
+	case codec.ProtocolResponses:
+		return `"function_call_output"`
+	case codec.ProtocolGemini:
+		return `"functionResponse"`
+	default:
+		return ""
+	}
+}
+
+// assistantRoleMarker 是各出站协议表达助手消息的 wire 标记。
+func assistantRoleMarker(protocol string) string {
+	if protocol == codec.ProtocolGemini {
+		return `"role":"model"`
+	}
+	return `"role":"assistant"`
+}
+
+// --- 畸形上游流矩阵 ---
+
+// malformedStreams 是三类真实出现过的畸形上游流。frames 只给能表达该形态的
+// 出站协议：有些形态在某些协议里根本写不出来（如 gemini 的函数调用 args
+// 一次到齐，表达不出截断），漏掉的格子不是覆盖缺口而是协议事实。
+var malformedStreams = []struct {
+	name   string
+	frames map[string]string
+	verify func(t *testing.T, client string, agg *ir.Aggregator, rendered string)
+}{
+	{
+		// 首帧全量：上游在块开启帧就给出完整入参，之后不再发增量。
+		// 解码器若把开启帧的入参当占位清掉，整个调用的参数就静默丢了。
+		name: "tool-args-complete-on-first-frame",
+		frames: map[string]string{
+			codec.ProtocolAnthropic: strings.Join([]string{
+				`event: message_start`,
+				`data: {"type":"message_start","message":{"id":"msg_1","model":"native","role":"assistant","usage":{"input_tokens":10}}}`,
+				``,
+				`event: content_block_start`,
+				`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_9","name":"grep","input":{"pattern":"TODO"}}}`,
+				``,
+				`event: content_block_stop`,
+				`data: {"type":"content_block_stop","index":0}`,
+				``,
+				`event: message_delta`,
+				`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5}}`,
+				``,
+				`event: message_stop`,
+				`data: {"type":"message_stop"}`,
+				``,
+			}, "\n"),
+			codec.ProtocolChatCompletions: strings.Join([]string{
+				`data: {"id":"msg_1","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_9","type":"function","function":{"name":"grep","arguments":"{\"pattern\":\"TODO\"}"}}]}}]}`,
+				``,
+				`data: {"id":"msg_1","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+				``,
+				`data: [DONE]`,
+				``,
+			}, "\n"),
+			codec.ProtocolResponses: strings.Join([]string{
+				`event: response.created`,
+				`data: {"type":"response.created","response":{"id":"msg_1","model":"native","status":"in_progress"}}`,
+				``,
+				`event: response.output_item.added`,
+				`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_9","name":"grep","arguments":"{\"pattern\":\"TODO\"}"}}`,
+				``,
+				`event: response.output_item.done`,
+				`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","call_id":"call_9","name":"grep","arguments":"{\"pattern\":\"TODO\"}"}}`,
+				``,
+				`event: response.completed`,
+				`data: {"type":"response.completed","response":{"id":"msg_1","model":"native","status":"completed","output":[{"type":"function_call","call_id":"call_9","name":"grep"}],"usage":{"input_tokens":10,"output_tokens":5}}}`,
+				``,
+			}, "\n"),
+			// gemini 的函数调用本来就只有这一种形态。
+			codec.ProtocolGemini: strings.Join([]string{
+				`data: {"responseId":"msg_1","modelVersion":"native","candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"id":"call_9","name":"grep","args":{"pattern":"TODO"}}}]}}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5}}`,
+				``,
+				`data: {"candidates":[{"index":0,"finishReason":"STOP"}]}`,
+				``,
+			}, "\n"),
+		},
+		verify: func(t *testing.T, client string, agg *ir.Aggregator, rendered string) {
+			assertCompleteGrepCall(t, agg, rendered)
+		},
+	},
+	{
+		// 先 args 后 name：首个分片只有 arguments，id 与 name 在后续分片才到。
+		// 只有 chat_completions 能表达——另外三家的块开启帧必带 name。
+		// 解码器必须缓冲这些分片，边到边发会产出一个无名调用。
+		name: "tool-args-before-name",
+		frames: map[string]string{
+			codec.ProtocolChatCompletions: strings.Join([]string{
+				`data: {"id":"msg_1","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{"role":"assistant"}}]}`,
+				``,
+				`data: {"id":"msg_1","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"pattern\":"}}]}}]}`,
+				``,
+				`data: {"id":"msg_1","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_9","type":"function","function":{"name":"grep","arguments":"\"TODO\"}"}}]}}]}`,
+				``,
+				`data: {"id":"msg_1","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+				``,
+				`data: [DONE]`,
+				``,
+			}, "\n"),
+		},
+		verify: func(t *testing.T, client string, agg *ir.Aggregator, rendered string) {
+			assertCompleteGrepCall(t, agg, rendered)
+		},
+	},
+	{
+		// 截断入参：上游在 arguments 发到一半断流。这种响应不能当成功，
+		// 客户端会把残缺调用存进历史，下一轮重放时整个请求都会被上游拒收。
+		// 矩阵这里只验「畸形能穿过转换被识别出来」——处置在 pipeline 层。
+		name: "tool-args-truncated",
+		frames: map[string]string{
+			codec.ProtocolAnthropic: strings.Join([]string{
+				`event: message_start`,
+				`data: {"type":"message_start","message":{"id":"msg_1","model":"native","role":"assistant","usage":{"input_tokens":10}}}`,
+				``,
+				`event: content_block_start`,
+				`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_9","name":"grep","input":{}}}`,
+				``,
+				`event: content_block_delta`,
+				`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"pattern\":"}}`,
+				``,
+				`event: message_delta`,
+				`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5}}`,
+				``,
+				`event: message_stop`,
+				`data: {"type":"message_stop"}`,
+				``,
+			}, "\n"),
+			codec.ProtocolChatCompletions: strings.Join([]string{
+				`data: {"id":"msg_1","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_9","type":"function","function":{"name":"grep","arguments":"{\"pattern\":"}}]}}]}`,
+				``,
+				`data: {"id":"msg_1","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+				``,
+				`data: [DONE]`,
+				``,
+			}, "\n"),
+			codec.ProtocolResponses: strings.Join([]string{
+				`event: response.created`,
+				`data: {"type":"response.created","response":{"id":"msg_1","model":"native","status":"in_progress"}}`,
+				``,
+				`event: response.output_item.added`,
+				`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_9","name":"grep"}}`,
+				``,
+				`event: response.function_call_arguments.delta`,
+				`data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"pattern\":"}`,
+				``,
+				`event: response.incomplete`,
+				`data: {"type":"response.incomplete","response":{"id":"msg_1","model":"native","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":10,"output_tokens":5}}}`,
+				``,
+			}, "\n"),
+			// gemini 缺席：它的 args 一次到齐，表达不出截断。
+		},
+		verify: func(t *testing.T, client string, agg *ir.Aggregator, rendered string) {
+			bad := agg.IncompleteTools()
+			if len(bad) == 0 {
+				t.Errorf("截断入参未被识别，客户端会把残缺调用存进历史\n%s", rendered)
+			}
+		},
+	},
+}
+
+// TestMalformedStreamMatrixSurvivesTranslation 把每份畸形流按「出站解码 →
+// 入站编码 → 用该协议自己的解码器读回」走一遍，断言畸形形态在转换后
+// 仍能被正确识别或修复。用协议自己的解码器读回是唯一能同时验证
+// 编码格式与语义的方式。
+func TestMalformedStreamMatrixSurvivesTranslation(t *testing.T) {
+	for _, fx := range malformedStreams {
+		for _, up := range outboundNames() {
+			raw, ok := fx.frames[up]
+			if !ok {
+				continue
+			}
+			for _, client := range inboundNames() {
+				t.Run(fx.name+"/"+up+"→"+client, func(t *testing.T) {
+					events := decodeStream(t, up, raw)
+					rendered := renderStream(t, client, events)
+					fx.verify(t, client, aggregator(t, client, rendered), rendered)
+				})
+			}
+		}
+	}
+}
+
+// assertCompleteGrepCall 断言聚合结果里有一个入参完整可解析的 grep 调用。
+func assertCompleteGrepCall(t *testing.T, agg *ir.Aggregator, rendered string) {
+	t.Helper()
+	if bad := agg.IncompleteTools(); len(bad) > 0 {
+		t.Errorf("入参被判为截断 %v，但上游给的是完整入参\n%s", bad, rendered)
+	}
+	var use *ir.ToolUse
+	for _, b := range agg.Response().Content {
+		if b.Type == ir.BlockToolUse {
+			use = b.ToolUse
+		}
+	}
+	if use == nil {
+		t.Fatalf("tool_use 在转换中丢失\n%s", rendered)
+	}
+	if use.Name != "grep" {
+		t.Errorf("tool name = %q, want grep\n%s", use.Name, rendered)
+	}
+	var args struct{ Pattern string }
+	if err := json.Unmarshal([]byte(use.Input), &args); err != nil || args.Pattern != "TODO" {
+		t.Errorf("tool input = %q, want pattern TODO\n%s", use.Input, rendered)
+	}
+}
+
+// aggregator 与 aggregate 的区别是返回聚合器本身，
+// 以便断言 IncompleteTools 这类只在聚合器上暴露的判定。
+func aggregator(t *testing.T, protocol, raw string) *ir.Aggregator {
+	t.Helper()
+	agg := &ir.Aggregator{}
+	for _, ev := range decodeStream(t, protocol, raw) {
+		agg.Add(ev)
+	}
+	return agg
+}
+
+// --- 用量守恒矩阵 ---
+
+// cacheUsageFixture 是同一次调用在四个出站协议里的用量写法：
+// 输入总量 100，其中缓存命中 30，输出 20。
+//
+// anthropic 的 input_tokens 不含缓存故写 70，另外三家的对应字段含缓存
+// 故写 100 —— IR 统一按「不含缓存」存，编回客户端时再加上。
+var cacheUsageFixture = map[string]string{
+	codec.ProtocolAnthropic: strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_u","model":"native","role":"assistant","usage":{"input_tokens":70,"cache_read_input_tokens":30}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":20}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n"),
+
+	codec.ProtocolChatCompletions: strings.Join([]string{
+		`data: {"id":"msg_u","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"}}]}`,
+		``,
+		`data: {"id":"msg_u","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		``,
+		`data: {"id":"msg_u","object":"chat.completion.chunk","model":"native","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"prompt_tokens_details":{"cached_tokens":30}}}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n"),
+
+	codec.ProtocolResponses: strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"msg_u","model":"native","status":"in_progress"}}`,
+		``,
+		`event: response.content_part.added`,
+		`data: {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text"}}`,
+		``,
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"ok"}`,
+		``,
+		`event: response.output_item.done`,
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant"}}`,
+		``,
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"id":"msg_u","model":"native","status":"completed","usage":{"input_tokens":100,"output_tokens":20,"input_tokens_details":{"cached_tokens":30}}}}`,
+		``,
+	}, "\n"),
+
+	codec.ProtocolGemini: strings.Join([]string{
+		`data: {"responseId":"msg_u","modelVersion":"native","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"ok"}]}}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20,"cachedContentTokenCount":30}}`,
+		``,
+		`data: {"candidates":[{"index":0,"finishReason":"STOP"}]}`,
+		``,
+	}, "\n"),
+}
+
+// TestUsageConservationAcrossMatrix 走遍十二格，断言客户端可见的输入总量
+// 恒为 100。守恒是这里唯一有意义的口径：各协议对「input 含不含缓存」
+// 的定义不同，只有总量在换算前后必须一致；漂移会直接体现为账单差异。
+func TestUsageConservationAcrossMatrix(t *testing.T) {
+	for _, up := range outboundNames() {
+		for _, client := range inboundNames() {
+			t.Run(up+"→"+client, func(t *testing.T) {
+				events := decodeStream(t, up, cacheUsageFixture[up])
+				rendered := renderStream(t, client, events)
+				resp := aggregate(t, client, rendered)
+
+				want := ir.Usage{InputTokens: 70, OutputTokens: 20, CacheReadTokens: 30}
+				if resp.Usage != want {
+					t.Errorf("usage = %+v, want %+v\n%s", resp.Usage, want, rendered)
+				}
+				if total := resp.Usage.InputTokens + resp.Usage.CacheReadTokens; total != 100 {
+					t.Errorf("输入总量 = %d, want 100\n%s", total, rendered)
+				}
+			})
+		}
+	}
 }

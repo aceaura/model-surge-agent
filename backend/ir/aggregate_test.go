@@ -105,6 +105,55 @@ func TestUsageMergesAcrossFrames(t *testing.T) {
 	}
 }
 
+// 入参完整就不是截断。
+func TestIncompleteToolsIgnoresValidInput(t *testing.T) {
+	a := &Aggregator{}
+	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{
+		Type: BlockToolUse, ToolUse: &ToolUse{ID: "tu_1", Name: "read"},
+	}})
+	a.Add(Event{Type: EvToolInput, Index: 0, Text: `{"path":"a.go"}`})
+	if got := a.IncompleteTools(); len(got) != 0 {
+		t.Fatalf("IncompleteTools = %v, want none", got)
+	}
+}
+
+// 入参发到一半断流：这种响应不能当成功交给客户端。
+func TestIncompleteToolsReportsTruncatedInput(t *testing.T) {
+	a := &Aggregator{}
+	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{
+		Type: BlockToolUse, ToolUse: &ToolUse{ID: "tu_1", Name: "read"},
+	}})
+	a.Add(Event{Type: EvToolInput, Index: 0, Text: `{"path":`})
+	got := a.IncompleteTools()
+	if len(got) != 1 || got[0] != "tu_1" {
+		t.Fatalf("IncompleteTools = %v, want [tu_1]", got)
+	}
+}
+
+// 上游本就没给入参：无参调用是合法形态，不能误报成截断。
+func TestIncompleteToolsIgnoresCallWithoutInput(t *testing.T) {
+	a := &Aggregator{}
+	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{
+		Type: BlockToolUse, ToolUse: &ToolUse{ID: "tu_1", Name: "now"},
+	}})
+	if got := a.IncompleteTools(); len(got) != 0 {
+		t.Fatalf("IncompleteTools = %v, a call with no arguments is legitimate", got)
+	}
+}
+
+// id 缺失时退回用工具名作标签，光报一个块号没法诊断。
+func TestIncompleteToolsFallsBackToToolName(t *testing.T) {
+	a := &Aggregator{}
+	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{
+		Type: BlockToolUse, ToolUse: &ToolUse{Name: "read"},
+	}})
+	a.Add(Event{Type: EvToolInput, Index: 0, Text: `{"path":`})
+	got := a.IncompleteTools()
+	if len(got) != 1 || got[0] != "read" {
+		t.Fatalf("IncompleteTools = %v, want [read]", got)
+	}
+}
+
 func TestEmptyStreamYieldsEmptyContent(t *testing.T) {
 	var a Aggregator
 	got := a.Response()

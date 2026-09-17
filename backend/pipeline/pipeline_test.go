@@ -330,6 +330,67 @@ func TestCredentialsNeverReachTheRecord(t *testing.T) {
 	}
 }
 
+// 畸形请求在编码前就被修好，修复说明落进流水。
+func TestSanitizeDiagnosticsLandInTheRecord(t *testing.T) {
+	up := &fakeUpstream{handler: func(_ int, w http.ResponseWriter) {
+		writeStream(w, okStream)
+	}}
+	url := up.start(t)
+	f := newFixture(t, relaymock.Step{Target: target(url, "kimi-1/k3")})
+
+	in, ok := codec.Inbound(codec.ProtocolAnthropic)
+	if !ok {
+		t.Fatal("anthropic inbound codec not registered")
+	}
+	// tool_result 指向一个从未出现过的 tool_use：上游会拒收整个请求。
+	body := `{"model":"kimi-k3","max_tokens":1024,"stream":true,"messages":[
+	  {"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_gone",
+	     "content":[{"type":"text","text":"3 hits"}]}]}]}`
+	req, err := in.DecodeRequest([]byte(body))
+	if err != nil {
+		t.Fatalf("DecodeRequest: %v", err)
+	}
+	f.p.Serve(context.Background(), httptest.NewRecorder(), pipeline.Call{
+		RequestID: "req-1",
+		Protocol:  codec.ProtocolAnthropic,
+		Inbound:   in,
+		Request:   req,
+		UserModel: "kimi-k3",
+		ClientKey: "ck-1",
+		Stream:    true,
+	})
+
+	rec := f.col.record(t)
+	if len(rec.Sanitized) == 0 {
+		t.Fatal("want a sanitize diagnostic for the orphan tool_result")
+	}
+	if !strings.Contains(strings.Join(rec.Sanitized, "; "), "orphan") {
+		t.Fatalf("diagnostics must name the orphan: %v", rec.Sanitized)
+	}
+	raw, err := json.Marshal(up.body(t, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "tool_result") {
+		t.Fatalf("the orphan must be gone before encoding: %s", raw)
+	}
+}
+
+// 合法请求不被改动，也不产出诊断。
+func TestSanitizeLeavesHealthyRequestsUnreported(t *testing.T) {
+	up := &fakeUpstream{handler: func(_ int, w http.ResponseWriter) {
+		writeStream(w, okStream)
+	}}
+	url := up.start(t)
+	f := newFixture(t, relaymock.Step{Target: target(url, "kimi-1/k3")})
+
+	f.p.Serve(context.Background(), httptest.NewRecorder(), call(t, true))
+
+	if got := f.col.record(t).Sanitized; len(got) != 0 {
+		t.Fatalf("healthy request must produce no diagnostics, got %v", got)
+	}
+}
+
 type captureTransport struct {
 	key *string
 }
@@ -619,6 +680,72 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
 	}
 	if !strings.Contains(out, "message_stop") {
 		t.Errorf("a truncated stream must still be terminated: %s", out)
+	}
+}
+
+// truncatedToolStream 是工具入参发到一半就终止的上游流。
+const truncatedToolStream = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_1"}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_1","name":"read"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+
+// 非流式客户端还没收到任何字节，截断的工具入参可以换目标重来。
+func TestTruncatedToolInputSwapsTargetWhenNotStreaming(t *testing.T) {
+	up := &fakeUpstream{handler: func(n int, w http.ResponseWriter) {
+		if n == 0 {
+			writeStream(w, truncatedToolStream)
+			return
+		}
+		writeStream(w, okStream)
+	}}
+	url := up.start(t)
+	f := newFixture(t,
+		relaymock.Step{Target: target(url, "kimi-1/k3")},
+		relaymock.Step{Target: target(url, "ark-1/ds")},
+	)
+
+	w := httptest.NewRecorder()
+	f.p.Serve(context.Background(), w, call(t, false))
+
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "hello") {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body)
+	}
+	if got := f.col.outcomes(); len(got) != 2 || got[0] != relayclient.OutcomeRetrying {
+		t.Errorf("outcomes = %v, the truncated attempt must be retried", got)
+	}
+	if up.calls() != 2 {
+		t.Errorf("upstream calls = %d, want 2", up.calls())
+	}
+}
+
+// 流式客户端已经收到内容、状态码已定：只能记下事实并完整终止。
+func TestTruncatedToolInputIsRecordedWhenStreaming(t *testing.T) {
+	up := &fakeUpstream{handler: func(_ int, w http.ResponseWriter) {
+		writeStream(w, truncatedToolStream)
+	}}
+	url := up.start(t)
+	f := newFixture(t, relaymock.Step{Target: target(url, "kimi-1/k3")})
+
+	w := httptest.NewRecorder()
+	f.p.Serve(context.Background(), w, call(t, true))
+
+	if !strings.Contains(w.Body.String(), "message_stop") {
+		t.Errorf("the client must still get a complete stream: %s", w.Body)
+	}
+	if got := f.col.outcomes(); len(got) != 1 || got[0] != relayclient.OutcomeNormal {
+		t.Errorf("outcomes = %v, a committed stream cannot be retried", got)
+	}
+	if code := f.col.record(t).ErrorCode; code != "truncated_tool_input" {
+		t.Errorf("error_code = %q, the truncation must be recorded", code)
 	}
 }
 

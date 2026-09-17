@@ -1,5 +1,10 @@
 package ir
 
+import (
+	"encoding/json"
+	"strconv"
+)
+
 // Aggregator 把事件流聚合回 Response。
 //
 // 对上游一律发流式请求，客户端要非流式时用它把事件收拢成一次性响应。
@@ -10,6 +15,10 @@ type Aggregator struct {
 	// order 记录块首次出现的顺序。上游的块索引不保证连续或有序
 	// （responses 的 output_index 就可能跳号），不能靠索引排序。
 	order []int
+	// sawInput 记录哪些块收到过工具入参增量，用于区分「上游本就没给入参」
+	// 与「入参发到一半断流」。记在这里而不是 Block 上：Block 要原样序列化
+	// 进下一轮请求，不该携带解码过程的状态。
+	sawInput map[int]bool
 }
 
 func (a *Aggregator) Add(ev Event) {
@@ -56,6 +65,12 @@ func (a *Aggregator) Add(ev Event) {
 				b.ToolUse = &ToolUse{}
 			}
 			b.ToolUse.Input += ev.Text
+			if ev.Text != "" {
+				if a.sawInput == nil {
+					a.sawInput = map[int]bool{}
+				}
+				a.sawInput[ev.Index] = true
+			}
 		}
 	case EvMessageDelta:
 		if ev.StopReason != "" {
@@ -80,6 +95,40 @@ func (a *Aggregator) block(index int, kind BlockType) *Block {
 }
 
 func (a *Aggregator) mergeUsage(u Usage) { MergeUsage(&a.resp.Usage, u) }
+
+// IncompleteTools 返回入参被截断的工具调用 id。
+//
+// 判定条件是「收到过入参增量，但累积值不是合法 JSON」：上游在参数发到一半
+// 断流就是这个形态。这种响应不能当成功——客户端会把残缺调用存进历史，
+// 下一轮重放时整个请求都会被上游拒收。
+func (a *Aggregator) IncompleteTools() []string {
+	var out []string
+	for _, idx := range a.order {
+		if !a.sawInput[idx] {
+			continue
+		}
+		b := a.blocks[idx]
+		if b == nil || b.Type != BlockToolUse || b.ToolUse == nil {
+			continue
+		}
+		if json.Valid([]byte(b.ToolUse.Input)) {
+			continue
+		}
+		out = append(out, toolLabel(b.ToolUse, idx))
+	}
+	return out
+}
+
+// toolLabel 给截断的调用取一个可诊断的标签。
+func toolLabel(use *ToolUse, index int) string {
+	if use.ID != "" {
+		return use.ID
+	}
+	if use.Name != "" {
+		return use.Name
+	}
+	return "block " + strconv.Itoa(index)
+}
 
 func (a *Aggregator) Response() *Response {
 	out := a.resp

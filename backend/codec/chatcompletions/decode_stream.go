@@ -3,6 +3,7 @@ package chatcompletions
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/aceaura/model-surge-agent/backend/codec"
@@ -16,11 +17,17 @@ import (
 // 并在首次出现时补发 block_start、在流结束时补发 block_stop。
 type streamDecoder struct {
 	started bool
-	// slots 把语义槽位映射到块索引。键是 "text" / "reasoning" / "tool:<n>"。
+	// slots 把语义槽位映射到块索引。键是 "text" / "reasoning"。
+	// 工具调用不走这里：它要缓冲入参并延迟宣告，状态见 toolSlots。
 	slots map[string]int
 	// order 记录槽位分配顺序，用于结束时按开启顺序闭合。
 	order []int
 	next  int
+
+	// toolSlots 按上游给的 index 索引工具调用槽位。
+	toolSlots map[int]*toolSlot
+	// callCounter 用于给没带 id 的调用合成一个。
+	callCounter int
 
 	// stopReason 与 usage 先攒着，到 [DONE] 才发一帧 message_delta。
 	// 本协议把它们分散在不同 chunk（finish_reason 一帧、usage 另一帧），
@@ -30,8 +37,22 @@ type streamDecoder struct {
 	done       bool
 }
 
+// toolSlot 是一个正在累积的工具调用。
+//
+// 必须缓冲而不能边收边发：block_start 只有一次机会带上 id 与 name，
+// 而各家实现给这两个字段的时机不同——有的首片就全给，有的先发几片
+// arguments 才补上 name。宣告前把 arguments 攒在 pending 里，
+// 等 id 与 name 都到齐再一次性放出。
+type toolSlot struct {
+	index     int
+	id        string
+	name      string
+	pending   string
+	announced bool
+}
+
 func newStreamDecoder() *streamDecoder {
-	return &streamDecoder{slots: map[string]int{}}
+	return &streamDecoder{slots: map[string]int{}, toolSlots: map[int]*toolSlot{}}
 }
 
 func (d *streamDecoder) Feed(_, data string) ([]ir.Event, error) {
@@ -116,32 +137,81 @@ func (d *streamDecoder) decodeDelta(delta wireMessage) ([]ir.Event, error) {
 		}
 	}
 
-	for i, tc := range delta.ToolCalls {
+	out = append(out, d.decodeToolCalls(delta.ToolCalls)...)
+	return out, nil
+}
+
+// decodeToolCalls 累积工具调用分片。
+func (d *streamDecoder) decodeToolCalls(calls []wireToolCall) []ir.Event {
+	var out []ir.Event
+	for i, tc := range calls {
 		// index 是本协议拼回分片的唯一依据；缺失时退回数组下标。
 		n := i
 		if tc.Index != nil {
 			n = *tc.Index
 		}
-		key := fmt.Sprintf("tool:%d", n)
-		idx, existed := d.slots[key]
-		if !existed {
-			// 块开启帧要带上 id 与 name：它们只在首片出现，
-			// 攒到后面就无从得知这个调用是哪个工具。
-			idx = d.allocate(key)
-			out = append(out, ir.Event{
-				Type:  ir.EvBlockStart,
-				Index: idx,
-				Block: &ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
-					ID:   tc.ID,
-					Name: tc.Function.Name,
-				}},
-			})
+
+		slot := d.toolSlots[n]
+		// 已宣告的槽位收到另一个非空 id：上游复用了 index 表示新调用，
+		// 并进原槽位会把两次调用的入参串成一份非法 JSON。
+		if slot != nil && slot.announced && tc.ID != "" && tc.ID != slot.id {
+			slot = nil
 		}
-		if tc.Function.Arguments != "" {
-			out = append(out, ir.Event{Type: ir.EvToolInput, Index: idx, Text: tc.Function.Arguments})
+		if slot == nil {
+			slot = &toolSlot{index: d.allocIndex()}
+			d.toolSlots[n] = slot
+		}
+		// 只有非空值才回填：后续分片的这两个字段通常是空串，覆盖会抹掉首片给的值。
+		if tc.ID != "" {
+			slot.id = tc.ID
+		}
+		if tc.Function.Name != "" {
+			slot.name = tc.Function.Name
+		}
+
+		if slot.announced {
+			if tc.Function.Arguments != "" {
+				out = append(out, ir.Event{
+					Type: ir.EvToolInput, Index: slot.index, Text: tc.Function.Arguments})
+			}
+			continue
+		}
+		slot.pending += tc.Function.Arguments
+		if slot.name != "" {
+			out = append(out, d.announce(slot)...)
 		}
 	}
-	return out, nil
+	return out
+}
+
+// announce 发出块开启帧并把缓冲的入参一次性放出。
+// id 到这一刻仍缺失就合成一个：另外三个协议都要靠它把结果回指到调用。
+func (d *streamDecoder) announce(slot *toolSlot) []ir.Event {
+	if slot.id == "" {
+		slot.id = d.synthCallID(slot.name)
+	}
+	slot.announced = true
+	out := []ir.Event{{
+		Type:  ir.EvBlockStart,
+		Index: slot.index,
+		Block: &ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
+			ID:   slot.id,
+			Name: slot.name,
+		}},
+	}}
+	if slot.pending != "" {
+		out = append(out, ir.Event{Type: ir.EvToolInput, Index: slot.index, Text: slot.pending})
+		slot.pending = ""
+	}
+	return out
+}
+
+func (d *streamDecoder) synthCallID(name string) string {
+	d.callCounter++
+	if name == "" {
+		return fmt.Sprintf("call_%d", d.callCounter)
+	}
+	return fmt.Sprintf("call_%s_%d", name, d.callCounter)
 }
 
 // slot 取槽位对应的块索引，首次出现时同时产出 block_start。
@@ -154,21 +224,56 @@ func (d *streamDecoder) slot(key string, kind ir.BlockType) (int, []ir.Event) {
 }
 
 func (d *streamDecoder) allocate(key string) int {
+	idx := d.allocIndex()
+	d.slots[key] = idx
+	return idx
+}
+
+func (d *streamDecoder) allocIndex() int {
 	idx := d.next
 	d.next++
-	d.slots[key] = idx
 	d.order = append(d.order, idx)
 	return idx
 }
 
 func (d *streamDecoder) closeAll() []ir.Event {
-	out := make([]ir.Event, 0, len(d.order))
+	out := d.announcePending()
 	for _, idx := range d.order {
 		out = append(out, ir.Event{Type: ir.EvBlockStop, Index: idx})
 	}
 	d.order = nil
 	return out
 }
+
+// announcePending 给流结束时 name 仍未到达的工具槽位补宣告。
+// 静默丢掉整个调用更糟：客户端会看到一次没有工具调用的回答，
+// 而上游其实已经决定调用工具了。
+func (d *streamDecoder) announcePending() []ir.Event {
+	pending := make([]*toolSlot, 0, len(d.toolSlots))
+	for _, slot := range d.toolSlots {
+		if !slot.announced {
+			pending = append(pending, slot)
+		}
+	}
+	// map 遍历无序，按块索引排出确定顺序。
+	sort.Slice(pending, func(i, j int) bool { return pending[i].index < pending[j].index })
+
+	var out []ir.Event
+	for _, slot := range pending {
+		if slot.name == "" {
+			slot.name = unknownToolName
+		}
+		// 残缺入参发出去会让整条历史带上语法错误的 JSON。
+		if !json.Valid([]byte(slot.pending)) {
+			slot.pending = "{}"
+		}
+		out = append(out, d.announce(slot)...)
+	}
+	return out
+}
+
+// unknownToolName 是 name 始终未到达时的占位名。
+const unknownToolName = "unknown_tool"
 
 // finish 收尾：闭合残留块，补一帧带 stop_reason 与 usage 的 message_delta，
 // 再发 message_stop。
@@ -265,24 +370,43 @@ func convertUsage(u wireUsage) ir.Usage {
 		InputTokens:  u.PromptTokens,
 		OutputTokens: u.CompletionTokens,
 	}
-	// 两种缓存字段名同义，取给出的那个。
+	// 几种缓存字段名同义，按优先级取第一个非零的。
 	if u.PromptTokensDetails != nil {
 		out.CacheReadTokens = u.PromptTokensDetails.CachedTokens
 	}
 	if out.CacheReadTokens == 0 {
 		out.CacheReadTokens = u.PromptCacheHitTokens
 	}
+	if out.CacheReadTokens == 0 {
+		out.CacheReadTokens = u.CacheReadInputTokens
+	}
+	out.CacheWriteTokens = u.CacheWriteTokens
+	if out.CacheWriteTokens == 0 {
+		out.CacheWriteTokens = u.CacheCreationTokens
+	}
+	// 本协议的 prompt_tokens 含缓存命中，而 IR 的 InputTokens 定义为
+	// 不含缓存的新鲜输入，故减去。上游数字不自洽时钳到 0，不出负数。
+	out.InputTokens -= out.CacheReadTokens
+	if out.InputTokens < 0 {
+		out.InputTokens = 0
+	}
 	return out
 }
 
 func renderUsage(u ir.Usage) wireUsage {
+	// 加回缓存命中：本协议的客户端期望 prompt_tokens 是输入总量。
+	prompt := u.InputTokens + u.CacheReadTokens
 	out := wireUsage{
-		PromptTokens:     u.InputTokens,
+		PromptTokens:     prompt,
 		CompletionTokens: u.OutputTokens,
-		TotalTokens:      u.InputTokens + u.OutputTokens,
+		TotalTokens:      prompt + u.OutputTokens,
 	}
 	if u.CacheReadTokens > 0 {
 		out.PromptTokensDetails = &wirePromptDetails{CachedTokens: u.CacheReadTokens}
+	}
+	// 本协议没有官方的缓存写入字段，用兼容层通行的别名给出。
+	if u.CacheWriteTokens > 0 {
+		out.CacheWriteTokens = u.CacheWriteTokens
 	}
 	return out
 }

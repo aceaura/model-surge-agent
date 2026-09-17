@@ -301,12 +301,20 @@ func convertError(status int, e *wireError) *ir.Error {
 }
 
 func convertUsage(u wireUsage) ir.Usage {
-	return ir.Usage{
+	out := ir.Usage{
 		InputTokens: u.PromptTokenCount,
 		// 推理消耗不含在 candidatesTokenCount 里，但计费上属于输出。
 		OutputTokens:    u.CandidatesTokenCount + u.ThoughtsTokenCount,
 		CacheReadTokens: u.CachedContentTokens,
 	}
+	// promptTokenCount 含 cachedContentTokenCount（与 Chat Completions 的
+	// prompt_tokens 同口径），而 IR 的 InputTokens 定义为不含缓存的新鲜输入，
+	// 故减去。上游数字不自洽时钳到 0，不出负数。
+	out.InputTokens -= out.CacheReadTokens
+	if out.InputTokens < 0 {
+		out.InputTokens = 0
+	}
+	return out
 }
 
 func convertFinishReason(s string) ir.StopReason {

@@ -56,6 +56,8 @@ type RequestSummary struct {
 	FirstTokenMS     int       `json:"first_token_ms,omitempty"`
 	ErrorCode        string    `json:"error_code,omitempty"`
 	ErrorMessage     string    `json:"error_message,omitempty"`
+	// Sanitized 是对客户端请求所做的畸形修复说明；为空表示请求本身合法。
+	Sanitized []string `json:"sanitized,omitempty"`
 }
 
 // RequestPage 的 NextCursor 为空表示没有下一页。
