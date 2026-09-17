@@ -271,9 +271,11 @@ func TestRecordCarriesNoCredentialShapedFields(t *testing.T) {
 // sameRecord 比较两条记录。tried_ids 单独用 slices.Equal 比，
 // 因为 nil 与空切片在这里语义相同（PG 存的是空数组）。
 func sameRecord(a, b pipeline.Record) bool {
-	if !slices.Equal(a.TriedIDs, b.TriedIDs) {
+	// 两个 JSONB 列往返后是空切片而非 nil，DeepEqual 会把它与未设值判为不同。
+	if !slices.Equal(a.TriedIDs, b.TriedIDs) || !slices.Equal(a.Sanitized, b.Sanitized) {
 		return false
 	}
 	a.TriedIDs, b.TriedIDs = nil, nil
+	a.Sanitized, b.Sanitized = nil, nil
 	return reflect.DeepEqual(a, b)
 }
