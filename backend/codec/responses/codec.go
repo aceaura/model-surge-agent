@@ -61,6 +61,20 @@ func (outboundCodec) Caps() codec.Capabilities {
 		Images:      true,
 		// instructions 是单一字符串，system 里的非文本块必须先降级成文本。
 		SystemAsText: true,
+		// 本协议独有三项：verbosity（text.verbosity）、include、truncation，
+		// 另有客户端自定义 metadata。结构化输出在 text.format 下而非顶层
+		// response_format。penalty / seed / n / logit_bias 本协议没有。
+		ServiceTier:       true,
+		ParallelToolCalls: true,
+		ResponseFormat:    true,
+		ResponseSchema:    true,
+		Verbosity:         true,
+		Include:           true,
+		Truncation:        true,
+		ClientMetadata:    true,
+		// LogProbs 为真只覆盖 top_logprobs：本协议无独立的 logprobs 开关，
+		// 给了 top_logprobs 即表示要对数概率。
+		LogProbs: true,
 		// ThinkingExcludesForcedTools 留零值：无账号、无官方文档，
 		// 推理与强制工具是否互斥**未核实**。零值不等于已确认允许，
 		// 拿到能发请求的账号后要补实测，别把它当成已有结论。

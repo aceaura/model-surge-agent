@@ -58,6 +58,35 @@ type Capabilities struct {
 	CacheControl  bool
 	TopK          bool
 	StopSequences bool
+	// 以下是调参字段的承载能力。为假时 DescribeLossy 报丢弃，
+	// 请求照常发出——拒绝请求会把一个能用的回答换成零回答，而目标协议
+	// 是调度层按策略选的，客户端无从预知，让它为此吃 400 归因方向是错的。
+	Penalties         bool // presence_penalty / frequency_penalty
+	Seed              bool
+	Candidates        bool // n / candidateCount
+	LogProbs          bool
+	LogitBias         bool
+	ServiceTier       bool
+	ParallelToolCalls bool
+	// ResponseFormat 为真表示支持「输出必须是合法 JSON」；ResponseSchema
+	// 为真表示还支持按 JSON Schema 约束结构。后者蕴含前者。
+	ResponseFormat bool
+	ResponseSchema bool
+	Verbosity      bool
+	Include        bool
+	Truncation     bool
+	ClientMetadata bool
+
+	// RequiresMaxTokens 为真表示本协议的输出上限必填，不能省略。
+	RequiresMaxTokens bool
+	// DefaultMaxTokens 是必填协议在客户端没给时的兜底值。
+	//
+	// 0 表示没有兜底值可用，此时编码必须失败而不是自己编一个数字：
+	// 一个凭空的上限会在中途截断回答，而客户端从未设过它。这条路目前
+	// 走不到（唯一 RequiresMaxTokens 的协议填了值），它守的是将来——
+	// 谁加了新的必填协议却忘了给兜底值，会立刻失败而非静默发出 0。
+	DefaultMaxTokens int
+
 	// MediaTypes 是本协议接受的 media type 白名单。nil 表示只接受 image/*。
 	// 白名单而非黑名单：上游对不认得的类型多回不可重试的 400，
 	// 而不可重试意味着换目标也救不回来，只能在发出前降级。

@@ -2113,13 +2113,13 @@ func mediaCases() []mediaCase {
 				    {"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + pngPixel + `"}}
 				  ]}
 				]}`,
-				codec.ProtocolChatCompletions: `{"model":"user-model","messages":[
+				codec.ProtocolChatCompletions: `{"model":"user-model","max_tokens":256,"messages":[
 				  {"role":"user","content":[
 				    {"type":"text","text":"look"},
 				    {"type":"image_url","image_url":{"url":"data:image/png;base64,` + pngPixel + `"}}
 				  ]}
 				]}`,
-				codec.ProtocolResponses: `{"model":"user-model","input":[
+				codec.ProtocolResponses: `{"model":"user-model","max_output_tokens":256,"input":[
 				  {"role":"user","content":[
 				    {"type":"input_text","text":"look"},
 				    {"type":"input_image","image_url":"data:image/png;base64,` + pngPixel + `"}
@@ -2138,13 +2138,13 @@ func mediaCases() []mediaCase {
 				    {"type":"document","source":{"type":"base64","media_type":"audio/wav","data":"` + wavClip + `"}}
 				  ]}
 				]}`,
-				codec.ProtocolChatCompletions: `{"model":"user-model","messages":[
+				codec.ProtocolChatCompletions: `{"model":"user-model","max_tokens":256,"messages":[
 				  {"role":"user","content":[
 				    {"type":"text","text":"listen"},
 				    {"type":"input_audio","input_audio":{"format":"wav","data":"` + wavClip + `"}}
 				  ]}
 				]}`,
-				codec.ProtocolResponses: `{"model":"user-model","input":[
+				codec.ProtocolResponses: `{"model":"user-model","max_output_tokens":256,"input":[
 				  {"role":"user","content":[
 				    {"type":"input_text","text":"listen"},
 				    {"type":"input_audio","input_audio":{"format":"wav","data":"` + wavClip + `"}}
@@ -2161,13 +2161,13 @@ func mediaCases() []mediaCase {
 				    {"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"` + pdfDoc + `"}}
 				  ]}
 				]}`,
-				codec.ProtocolChatCompletions: `{"model":"user-model","messages":[
+				codec.ProtocolChatCompletions: `{"model":"user-model","max_tokens":256,"messages":[
 				  {"role":"user","content":[
 				    {"type":"text","text":"read"},
 				    {"type":"file","file":{"filename":"spec.pdf","file_data":"data:application/pdf;base64,` + pdfDoc + `"}}
 				  ]}
 				]}`,
-				codec.ProtocolResponses: `{"model":"user-model","input":[
+				codec.ProtocolResponses: `{"model":"user-model","max_output_tokens":256,"input":[
 				  {"role":"user","content":[
 				    {"type":"input_text","text":"read"},
 				    {"type":"input_file","filename":"spec.pdf","file_data":"data:application/pdf;base64,` + pdfDoc + `"}
@@ -2185,13 +2185,13 @@ func mediaCases() []mediaCase {
 				    {"type":"document","source":{"type":"base64","media_type":"text/plain","data":"` + textFile + `"}}
 				  ]}
 				]}`,
-				codec.ProtocolChatCompletions: `{"model":"user-model","messages":[
+				codec.ProtocolChatCompletions: `{"model":"user-model","max_tokens":256,"messages":[
 				  {"role":"user","content":[
 				    {"type":"text","text":"attached"},
 				    {"type":"file","file":{"filename":"notes.txt","file_data":"data:text/plain;base64,` + textFile + `"}}
 				  ]}
 				]}`,
-				codec.ProtocolResponses: `{"model":"user-model","input":[
+				codec.ProtocolResponses: `{"model":"user-model","max_output_tokens":256,"input":[
 				  {"role":"user","content":[
 				    {"type":"input_text","text":"attached"},
 				    {"type":"input_file","filename":"notes.txt","file_data":"data:text/plain;base64,` + textFile + `"}

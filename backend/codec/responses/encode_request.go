@@ -63,6 +63,14 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	}
 	w.ToolChoice = choice
 
+	w.Include = req.Include
+	w.Truncation = req.Truncation
+	w.Metadata = req.ClientMetadata
+	w.ServiceTier = req.ServiceTier
+	w.ParallelToolCalls = req.ParallelToolCalls
+	w.TopLogProbs = req.TopLogProbs
+	w.Text = encodeText(req.ResponseFormat, req.Verbosity)
+
 	switch {
 	case req.Thinking.On():
 		r := &wireReasoning{Effort: req.Thinking.Effort}
@@ -275,4 +283,28 @@ func encodeToolChoice(tc *ir.ToolChoice) (json.RawMessage, error) {
 	default:
 		return nil, nil
 	}
+}
+
+// encodeText 写出 text（结构化输出 + 详略）。两项都空时不写整个 text 对象：
+// 空对象对上游是一次多余的表态。
+func encodeText(rf *ir.ResponseFormat, verbosity string) *wireText {
+	out := &wireText{Verbosity: verbosity}
+	switch {
+	case rf == nil:
+	case rf.Kind == ir.ResponseFormatSchema && rf.Schema != "":
+		out.Format = &wireTextFormat{
+			Type:   "json_schema",
+			Name:   rf.Name,
+			Schema: json.RawMessage(rf.Schema),
+			Strict: rf.Strict,
+		}
+	default:
+		// schema 形态缺 schema 原文时降级成 json_object：客户端要的最低限度
+		// 是「输出是 JSON」，这一点仍能满足。
+		out.Format = &wireTextFormat{Type: "json_object"}
+	}
+	if out.Format == nil && out.Verbosity == "" {
+		return nil
+	}
+	return out
 }

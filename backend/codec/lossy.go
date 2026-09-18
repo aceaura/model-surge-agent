@@ -47,6 +47,11 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	note := func(field, why string) {
 		notes[field] = fmt.Sprintf("dropped %s (%s cannot express it: %s)", field, name, why)
 	}
+	// filled 与 note 分开：兜底不是丢弃，套上 "dropped" 的措辞会让读者
+	// 以为客户端给的值被扔了，而真相是它根本没给、这个值是本服务加的。
+	filled := func(field, why string) {
+		notes[field] = fmt.Sprintf("filled in %s (%s requires it: %s)", field, name, why)
+	}
 
 	if len(req.Tools) > 0 && !caps.Tools {
 		note("tools", "no tool calling")
@@ -62,6 +67,7 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	if req.Thinking.On() && !caps.Thinking {
 		note("thinking", "no reasoning mode")
 	}
+	describeParamsLossy(req, caps, note, filled)
 
 	describeBlocksLossy(req.System, name, caps, note)
 	for _, m := range req.Messages {
@@ -228,4 +234,100 @@ func ForeignSignature(t *ir.Thinking, name string) bool {
 		return true
 	}
 	return t.SignatureFrom != name
+}
+
+// describeParamsLossy 报这一批调参字段的丢弃。
+//
+// 判据统一：只有客户端**给了**的字段才报（指针非 nil / 字符串非空 /
+// 集合非空）。没给的字段什么都没被丢，报了会让每个普通请求都拖着一串
+// 无意义的说明，真正的丢弃反而看不见。
+//
+// 这一批一律只报不拒：拒绝会把一个能用的回答换成零回答，而目标协议是
+// 调度层按策略选的、客户端无从预知，让它为一个自己控制不了的路由结果
+// 吃 400，故障归因方向是错的。要强制可以用模型配置的 overrides。
+func describeParamsLossy(req *ir.Request, caps Capabilities, note, filled func(field, why string)) {
+	if !caps.Penalties {
+		if req.PresencePenalty != nil {
+			note("presence_penalty", "no presence penalty parameter")
+		}
+		if req.FrequencyPenalty != nil {
+			note("frequency_penalty", "no frequency penalty parameter")
+		}
+	}
+	if req.Seed != nil && !caps.Seed {
+		note("seed", "no seed parameter, results are not reproducible")
+	}
+	if req.Candidates != nil && !caps.Candidates {
+		// 措辞要说清后果：客户端按数组取第二个候选会越界，
+		// 笼统的 dropped n 读不出这一点。
+		note("n", "no multi-candidate parameter, only one candidate will be returned")
+	}
+	if !caps.LogProbs {
+		if req.LogProbs != nil {
+			note("logprobs", "no log probability parameter")
+		}
+		if req.TopLogProbs != nil {
+			note("top_logprobs", "no log probability parameter")
+		}
+	}
+	if len(req.LogitBias) > 0 && !caps.LogitBias {
+		// 不翻译：偏置的键是 token id，词表随模型而变，跨模型重映射
+		// 没有正确答案。
+		note("logit_bias", "no logit bias parameter")
+	}
+	if req.ServiceTier != "" && !caps.ServiceTier {
+		note("service_tier", "no service tier parameter")
+	}
+	if req.ParallelToolCalls != nil && !caps.ParallelToolCalls {
+		note("parallel_tool_calls", "no parallel tool call switch")
+	}
+	if req.ResponseFormat != nil {
+		switch {
+		case !caps.ResponseFormat:
+			// 后果最重的一条：客户端会按 JSON 解析响应，拿到自然语言就崩。
+			note("response_format", "no structured output parameter, the response may not be JSON")
+		case req.ResponseFormat.Kind == ir.ResponseFormatSchema && !caps.ResponseSchema:
+			note("response_format.schema", "structured output is supported but not schema constraints, downgraded to plain JSON")
+		}
+	}
+	if req.Verbosity != "" && !caps.Verbosity {
+		note("verbosity", "no verbosity parameter")
+	}
+	if len(req.Include) > 0 && !caps.Include {
+		note("include", "no include parameter")
+	}
+	if req.Truncation != "" && !caps.Truncation {
+		note("truncation", "no upstream-side truncation parameter")
+	}
+	if len(req.ClientMetadata) > 0 && !caps.ClientMetadata {
+		note("metadata", "no client metadata parameter")
+	}
+	if req.MaxTokens <= 0 && caps.RequiresMaxTokens && caps.DefaultMaxTokens > 0 {
+		// 兜底不是丢弃，但同样是本服务改了客户端没给的东西，必须留痕：
+		// 否则长回答在一个客户端从未设过的上限处被截断，无从查证。
+		filled("max_tokens", fmt.Sprintf("the client gave none, defaulted to %d", caps.DefaultMaxTokens))
+	}
+}
+
+// MaxTokensFor 决定出站要写的输出上限。
+//
+// 抽成公共函数而不是留在 anthropic 的编码器里：判定「必填协议缺兜底值就
+// 失败」这条路在当前四个协议上不可达（唯一必填的那个填了值），留在编码器
+// 里就没有任何测试能走到它，等于一段没人验证过的保护。放在这里可以直接
+// 用构造出来的 Capabilities 测。
+//
+// 返回的 ok 为假表示本协议可以省略该字段。
+func MaxTokensFor(want int, caps Capabilities) (n int, ok bool, err error) {
+	if want > 0 {
+		// 客户端给了就原样用，不设下限：它要一个极短回答是它的事，
+		// 静默抬高是无痕改写客户端的意图。
+		return want, true, nil
+	}
+	if !caps.RequiresMaxTokens {
+		return 0, false, nil
+	}
+	if caps.DefaultMaxTokens <= 0 {
+		return 0, false, fmt.Errorf("max_tokens is required by this protocol but no default is configured")
+	}
+	return caps.DefaultMaxTokens, true, nil
 }

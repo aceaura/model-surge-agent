@@ -90,6 +90,17 @@ type wireGenerateCfg struct {
 	TopK            *int            `json:"topK,omitempty"`
 	StopSequences   []string        `json:"stopSequences,omitempty"`
 	ThinkingConfig  *wireThinkinCfg `json:"thinkingConfig,omitempty"`
+	// CandidateCount 对应 OpenAI 的 n。
+	CandidateCount *int `json:"candidateCount,omitempty"`
+	// ResponseLogprobs 是开关，Logprobs 是每 token 返回几个候选。
+	// 本协议把两件事分成两个字段，与 chat_completions 的
+	// logprobs / top_logprobs 一一对应。
+	ResponseLogprobs *bool `json:"responseLogprobs,omitempty"`
+	Logprobs         *int  `json:"logprobs,omitempty"`
+	// ResponseMimeType 为 application/json 即要求 JSON 输出；
+	// ResponseSchema 进一步约束结构，给了它就必须同时给 mimeType。
+	ResponseMimeType string          `json:"responseMimeType,omitempty"`
+	ResponseSchema   json.RawMessage `json:"responseSchema,omitempty"`
 }
 
 // wireThinkinCfg 的 IncludeThoughts 必须显式为真才能收到推理内容，

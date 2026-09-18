@@ -60,6 +60,17 @@ func (outboundCodec) Caps() codec.Capabilities {
 		StopSequences: true,
 		// 官方 stop 数组至多 4 项，超出即 400。
 		MaxStopSequences: 4,
+		// 本协议是这批调参字段的来源协议，除三个 responses 专有项
+		// （verbosity / include / truncation）与 metadata 外全部承载。
+		Penalties:         true,
+		Seed:              true,
+		Candidates:        true,
+		LogProbs:          true,
+		LogitBias:         true,
+		ServiceTier:       true,
+		ParallelToolCalls: true,
+		ResponseFormat:    true,
+		ResponseSchema:    true,
 		// 显式写出 false：实测本协议允许推理与强制工具共存（deepseek 上
 		// tool_choice 具名 + 思考开启回 200，同时给出文本与 tool_use）。
 		// 留空会让后来者以为只是没填，照 anthropic 抄成 true 就白丢推理。

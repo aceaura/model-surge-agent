@@ -169,6 +169,61 @@ type Request struct {
 
 	Thinking *ThinkingConfig   `json:"thinking,omitempty"`
 	Metadata map[string]string `json:"metadata,omitempty"`
+
+	// 以下调参字段全部用指针或空值表达「客户端没给」。不能用零值表达：
+	// penalty 的 0 是「不惩罚」、seed 的 0 是一个具体种子、logprobs 的
+	// false 是「明确不要」——都与「没提」不同，混起来就是替客户端表态。
+	PresencePenalty  *float64 `json:"presence_penalty,omitempty"`
+	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
+	Seed             *int     `json:"seed,omitempty"`
+	// Candidates 是候选数（OpenAI 的 n、Gemini 的 candidateCount）。
+	Candidates *int `json:"candidates,omitempty"`
+	// LogProbs 请求对数概率；TopLogProbs 是每个 token 返回几个候选。
+	LogProbs    *bool `json:"logprobs,omitempty"`
+	TopLogProbs *int  `json:"top_logprobs,omitempty"`
+	// LogitBias 是 token id → 偏置。跨模型不可翻译（词表不同），
+	// 只在目标协议支持时原样透传，否则报丢弃。
+	LogitBias map[string]float64 `json:"logit_bias,omitempty"`
+	// ServiceTier 是计费与优先级档位。取值由各家定义，本服务不校验——
+	// 上游是唯一知道哪些档位有效的一方。
+	ServiceTier string `json:"service_tier,omitempty"`
+	// ParallelToolCalls 是否允许一轮里并行多个工具调用。三态指针：
+	// 没给就不替客户端表态（同 ThinkingConfig.Enabled 的判据）。
+	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
+	// ResponseFormat 是结构化输出要求。
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
+	// Verbosity 是输出详略（responses 的 text.verbosity）。
+	Verbosity string `json:"verbosity,omitempty"`
+	// Include 要求上游额外返回哪些内容（responses 的 include）。
+	Include []string `json:"include,omitempty"`
+	// Truncation 是上游侧的历史截断策略（responses 的 truncation）。
+	Truncation string `json:"truncation,omitempty"`
+	// ClientMetadata 是客户端自定义元数据。与 Metadata 分开：后者只承载
+	// user_id 且被翻译成各协议的用户标识字段，混在一起会让 user_id
+	// 既作为用户标识、又作为一条普通元数据发出去两次。
+	ClientMetadata map[string]string `json:"client_metadata,omitempty"`
+}
+
+// ResponseFormatKind 是结构化输出的形态。
+type ResponseFormatKind string
+
+const (
+	// ResponseFormatJSON 要求输出是合法 JSON，不约束结构。
+	ResponseFormatJSON ResponseFormatKind = "json"
+	// ResponseFormatSchema 要求输出符合给定的 JSON Schema。
+	ResponseFormatSchema ResponseFormatKind = "schema"
+)
+
+// ResponseFormat 是结构化输出要求。纯文本是默认形态，不进这个类型——
+// 客户端没要求结构化时 Request.ResponseFormat 为 nil。
+type ResponseFormat struct {
+	Kind ResponseFormatKind `json:"kind"`
+	// Name 与 Schema 仅在 Kind 为 ResponseFormatSchema 时有意义。
+	Name   string `json:"name,omitempty"`
+	Schema string `json:"schema,omitempty"`
+	// Strict 要求上游严格遵循 schema。三态指针：各家默认值不同，
+	// 客户端没表态时不替它选。
+	Strict *bool `json:"strict,omitempty"`
 }
 
 // Clone 深拷贝，供换目标重试时复用同一份原始请求。
@@ -208,7 +263,56 @@ func (r *Request) Clone() *Request {
 			out.Metadata[k] = v
 		}
 	}
+	out.PresencePenalty = cloneFloat(r.PresencePenalty)
+	out.FrequencyPenalty = cloneFloat(r.FrequencyPenalty)
+	out.Seed = cloneInt(r.Seed)
+	out.Candidates = cloneInt(r.Candidates)
+	out.TopLogProbs = cloneInt(r.TopLogProbs)
+	out.LogProbs = cloneBool(r.LogProbs)
+	out.ParallelToolCalls = cloneBool(r.ParallelToolCalls)
+	if r.LogitBias != nil {
+		out.LogitBias = make(map[string]float64, len(r.LogitBias))
+		for k, v := range r.LogitBias {
+			out.LogitBias[k] = v
+		}
+	}
+	if r.ClientMetadata != nil {
+		out.ClientMetadata = make(map[string]string, len(r.ClientMetadata))
+		for k, v := range r.ClientMetadata {
+			out.ClientMetadata[k] = v
+		}
+	}
+	out.Include = append([]string(nil), r.Include...)
+	if r.ResponseFormat != nil {
+		rf := *r.ResponseFormat
+		rf.Strict = cloneBool(r.ResponseFormat.Strict)
+		out.ResponseFormat = &rf
+	}
 	return &out
+}
+
+func cloneFloat(p *float64) *float64 {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+func cloneInt(p *int) *int {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+func cloneBool(p *bool) *bool {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
 
 func cloneMessages(in []Message) []Message {

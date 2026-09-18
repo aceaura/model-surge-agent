@@ -9,10 +9,6 @@ import (
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
-// defaultMaxTokens 是 max_tokens 的兜底值。Anthropic 要求该字段必填，
-// 而 Chat Completions 与 Gemini 都允许省略，跨协议转换时必须补一个。
-const defaultMaxTokens = 4096
-
 // leadingUserPlaceholder 是首条消息不是 user 时补入的占位文本。
 const leadingUserPlaceholder = "(continuing the conversation)"
 
@@ -33,8 +29,12 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 		StopSequences: req.StopSequences,
 		Stream:        true,
 	}
-	if w.MaxTokens <= 0 {
-		w.MaxTokens = defaultMaxTokens
+	maxTokens, hasMax, err := codec.MaxTokensFor(req.MaxTokens, outboundCodec{}.Caps())
+	if err != nil {
+		return nil, fmt.Errorf("anthropic: %w", err)
+	}
+	if hasMax {
+		w.MaxTokens = maxTokens
 	}
 
 	if len(req.System) > 0 {

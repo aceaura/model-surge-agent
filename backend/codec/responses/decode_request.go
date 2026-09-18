@@ -64,6 +64,17 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	}
 	out.ToolChoice = choice
 
+	out.Include = w.Include
+	out.Truncation = w.Truncation
+	out.ClientMetadata = w.Metadata
+	out.ServiceTier = w.ServiceTier
+	out.ParallelToolCalls = w.ParallelToolCalls
+	out.TopLogProbs = w.TopLogProbs
+	if w.Text != nil {
+		out.Verbosity = w.Text.Verbosity
+		out.ResponseFormat = decodeTextFormat(w.Text.Format)
+	}
+
 	if w.Reasoning != nil && w.Reasoning.Effort != "" {
 		// "none" 是明确关闭，不是强度档位——同 chat_completions。
 		if w.Reasoning.Effort == effortNone {
@@ -350,4 +361,25 @@ func statefulFields(w wireRequest) []string {
 func hasJSONValue(raw json.RawMessage) bool {
 	trimmed := strings.TrimSpace(string(raw))
 	return trimmed != "" && trimmed != "null"
+}
+
+// decodeTextFormat 把 text.format 解成 IR 形态。type 为 text 解成 nil：
+// 那是默认形态而不是一项要求（同 chat_completions 的判据）。
+func decodeTextFormat(w *wireTextFormat) *ir.ResponseFormat {
+	if w == nil {
+		return nil
+	}
+	switch w.Type {
+	case "json_object":
+		return &ir.ResponseFormat{Kind: ir.ResponseFormatJSON}
+	case "json_schema":
+		return &ir.ResponseFormat{
+			Kind:   ir.ResponseFormatSchema,
+			Name:   w.Name,
+			Schema: string(w.Schema),
+			Strict: w.Strict,
+		}
+	default:
+		return nil
+	}
 }

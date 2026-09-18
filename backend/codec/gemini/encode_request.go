@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/aceaura/model-surge-agent/backend/codec"
+	"github.com/aceaura/model-surge-agent/backend/codec/schemadialect"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
@@ -78,6 +79,16 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 		tc.ThinkingBudget = &budget
 		cfg.ThinkingConfig = tc
 	}
+	cfg.CandidateCount = req.Candidates
+	cfg.ResponseLogprobs = req.LogProbs
+	cfg.Logprobs = req.TopLogProbs
+	// 只给了 top_logprobs 没给开关时补上开关：本协议的 logprobs 字段
+	// 在开关为假时不生效，不补等于把要求丢掉。
+	if cfg.Logprobs != nil && cfg.ResponseLogprobs == nil {
+		on := true
+		cfg.ResponseLogprobs = &on
+	}
+	applyResponseFormat(cfg, req.ResponseFormat)
 	w.GenerationConfig = cfg
 
 	return json.Marshal(w)
@@ -282,4 +293,29 @@ func encodeToolConfig(tc *ir.ToolChoice) *wireToolConfig {
 		return nil
 	}
 	return &wireToolConfig{FunctionCallingConfig: cfg}
+}
+
+// applyResponseFormat 写出本协议的结构化输出要求。
+//
+// schema 要过同一套方言归一：responseSchema 与工具 schema 受的是同一个
+// OpenAPI 3.0 子集约束（表外关键字会被拒成 400 Invalid JSON payload），
+// 原样发 JSON Schema 会让整轮被拒。归一失败时退成「只要求是 JSON」，
+// 那仍满足客户端的最低要求，比整轮 400 强。
+func applyResponseFormat(cfg *wireGenerateCfg, rf *ir.ResponseFormat) {
+	if rf == nil {
+		return
+	}
+	cfg.ResponseMimeType = "application/json"
+	if rf.Kind != ir.ResponseFormatSchema || rf.Schema == "" {
+		return
+	}
+	res, err := schemadialect.Normalize([]byte(rf.Schema), outboundCodec{}.Caps().SchemaDialect)
+	if err != nil || res.Omit {
+		return
+	}
+	if res.Changed {
+		cfg.ResponseSchema = json.RawMessage(res.Out)
+		return
+	}
+	cfg.ResponseSchema = json.RawMessage(rf.Schema)
 }

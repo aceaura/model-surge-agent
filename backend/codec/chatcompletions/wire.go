@@ -20,6 +20,33 @@ type wireRequest struct {
 	ToolChoice      json.RawMessage `json:"tool_choice,omitempty"`
 	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
 	User            string          `json:"user,omitempty"`
+
+	// 调参字段。全部用指针以区分「客户端没给」与「给了零值」：
+	// penalty 的 0 是不惩罚、seed 的 0 是一个具体种子、logprobs 的 false
+	// 是明确不要，三者都与没提不同。
+	PresencePenalty   *float64            `json:"presence_penalty,omitempty"`
+	FrequencyPenalty  *float64            `json:"frequency_penalty,omitempty"`
+	Seed              *int                `json:"seed,omitempty"`
+	N                 *int                `json:"n,omitempty"`
+	LogProbs          *bool               `json:"logprobs,omitempty"`
+	TopLogProbs       *int                `json:"top_logprobs,omitempty"`
+	LogitBias         map[string]float64  `json:"logit_bias,omitempty"`
+	ServiceTier       string              `json:"service_tier,omitempty"`
+	ParallelToolCalls *bool               `json:"parallel_tool_calls,omitempty"`
+	ResponseFormat    *wireResponseFormat `json:"response_format,omitempty"`
+}
+
+// wireResponseFormat 是结构化输出要求。type 取 text / json_object / json_schema，
+// 只有 json_schema 带 json_schema 对象。
+type wireResponseFormat struct {
+	Type       string          `json:"type"`
+	JSONSchema *wireJSONSchema `json:"json_schema,omitempty"`
+}
+
+type wireJSONSchema struct {
+	Name   string          `json:"name,omitempty"`
+	Schema json.RawMessage `json:"schema,omitempty"`
+	Strict *bool           `json:"strict,omitempty"`
 }
 
 // wireStreamOptions 的 include_usage 决定上游是否发 usage 帧。

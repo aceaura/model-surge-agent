@@ -73,6 +73,18 @@ func (outboundCodec) Caps() codec.Capabilities {
 		ThinkingExcludesForcedTools: true,
 		// 预算低于 1024 会被拒；预算还必须小于 max_tokens。
 		MinThinkingBudget: 1024,
+		// 本协议的 max_tokens 必填，缺了直接 400。
+		RequiresMaxTokens: true,
+		// 4096 是个保守取值：宁可截断也不超出任何已知模型的输出上限。
+		// 抬高它会在小窗口模型上变成不可重试的 400（max_tokens 超窗口即拒），
+		// 而截断至少给出部分回答、且 stop_reason 说明了原因。
+		// 兜底一旦发生会报一条有损诊断，客户端能看出这个上限不是它给的。
+		DefaultMaxTokens: 4096,
+		// 调参能力位全留假：本协议的请求体只有 model/messages/system/
+		// max_tokens/metadata/stop_sequences/stream/temperature/top_k/top_p/
+		// tools/tool_choice/thinking，没有承载 penalty、seed、n、logprobs、
+		// logit_bias、service_tier、parallel_tool_calls、结构化输出的字段。
+		// 这是照官方请求体核实的结果，不是没填。
 		// SchemaDialect 留零值：本协议接受完整 JSON Schema。
 		// 本协议只读图片与 PDF；音频与其他附件在编码时降级为文本。
 		MediaTypes: []string{

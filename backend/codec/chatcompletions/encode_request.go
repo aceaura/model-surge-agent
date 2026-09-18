@@ -65,6 +65,17 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	}
 	w.ToolChoice = choice
 
+	w.PresencePenalty = req.PresencePenalty
+	w.FrequencyPenalty = req.FrequencyPenalty
+	w.Seed = req.Seed
+	w.N = req.Candidates
+	w.LogProbs = req.LogProbs
+	w.TopLogProbs = req.TopLogProbs
+	w.LogitBias = req.LogitBias
+	w.ServiceTier = req.ServiceTier
+	w.ParallelToolCalls = req.ParallelToolCalls
+	w.ResponseFormat = encodeResponseFormat(req.ResponseFormat)
+
 	switch {
 	case req.Thinking.On():
 		w.ReasoningEffort = req.Thinking.Effort
@@ -287,4 +298,25 @@ func encodeToolChoice(tc *ir.ToolChoice) (json.RawMessage, error) {
 	default:
 		return nil, nil
 	}
+}
+
+// encodeResponseFormat 写出本协议的 response_format。
+//
+// schema 形态缺 schema 原文时降级成 json_object 而不是丢掉整个要求：
+// 客户端要的最低限度是「输出是 JSON」，这一点仍然能满足。
+func encodeResponseFormat(rf *ir.ResponseFormat) *wireResponseFormat {
+	if rf == nil {
+		return nil
+	}
+	if rf.Kind == ir.ResponseFormatSchema && rf.Schema != "" {
+		return &wireResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &wireJSONSchema{
+				Name:   rf.Name,
+				Schema: json.RawMessage(rf.Schema),
+				Strict: rf.Strict,
+			},
+		}
+	}
+	return &wireResponseFormat{Type: "json_object"}
 }

@@ -27,6 +27,16 @@ type wireRequest struct {
 	Store *bool  `json:"store,omitempty"`
 	User  string `json:"user,omitempty"`
 
+	// 本协议特有的调参字段。Text 下嵌结构化输出与详略两项，
+	// 与 Chat Completions 的顶层 response_format 不同位。
+	Text              *wireText         `json:"text,omitempty"`
+	Include           []string          `json:"include,omitempty"`
+	Truncation        string            `json:"truncation,omitempty"`
+	Metadata          map[string]string `json:"metadata,omitempty"`
+	ServiceTier       string            `json:"service_tier,omitempty"`
+	ParallelToolCalls *bool             `json:"parallel_tool_calls,omitempty"`
+	TopLogProbs       *int              `json:"top_logprobs,omitempty"`
+
 	// 以下四个字段把对话状态托管在上游那一侧，本服务表达不了：请求会被
 	// 分发到任意一个目标账号，那里没有这条 id 指向的历史。收下再忽略等于
 	// 悄悄丢掉客户端以为已经带上的上下文，只能显式拒收。
@@ -38,6 +48,22 @@ type wireRequest struct {
 	Conversation       json.RawMessage `json:"conversation,omitempty"`
 	ContextManagement  json.RawMessage `json:"context_management,omitempty"`
 	Prompt             json.RawMessage `json:"prompt,omitempty"`
+}
+
+// wireText 是本协议放输出形态与详略的位置。
+type wireText struct {
+	Format *wireTextFormat `json:"format,omitempty"`
+	// Verbosity 取 low / medium / high。
+	Verbosity string `json:"verbosity,omitempty"`
+}
+
+// wireTextFormat 的 type 取 text / json_object / json_schema。
+// 与 Chat Completions 不同：schema 三项平铺在这一层，不再嵌一个 json_schema 对象。
+type wireTextFormat struct {
+	Type   string          `json:"type"`
+	Name   string          `json:"name,omitempty"`
+	Schema json.RawMessage `json:"schema,omitempty"`
+	Strict *bool           `json:"strict,omitempty"`
 }
 
 type wireTool struct {

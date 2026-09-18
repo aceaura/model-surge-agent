@@ -60,6 +60,17 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	}
 	out.ToolChoice = choice
 
+	out.PresencePenalty = w.PresencePenalty
+	out.FrequencyPenalty = w.FrequencyPenalty
+	out.Seed = w.Seed
+	out.Candidates = w.N
+	out.LogProbs = w.LogProbs
+	out.TopLogProbs = w.TopLogProbs
+	out.LogitBias = w.LogitBias
+	out.ServiceTier = w.ServiceTier
+	out.ParallelToolCalls = w.ParallelToolCalls
+	out.ResponseFormat = decodeResponseFormat(w.ResponseFormat)
+
 	if w.ReasoningEffort != "" {
 		// "none" 是明确关闭，不是一个强度档位：带着它当 Effort 传下去，
 		// 出站会把它折成某个真实档位，等于把关闭请求变成开启。
@@ -302,4 +313,29 @@ func decodeToolChoice(raw json.RawMessage) (*ir.ToolChoice, error) {
 
 func badRequest(msg string) error {
 	return ir.NewError(ir.ErrInvalidRequest, 400, "invalid_request_error", msg)
+}
+
+// decodeResponseFormat 把本协议的 response_format 解成 IR 形态。
+//
+// type 为 text 解成 nil：那是默认形态，不是一项要求。解成一个非 nil 值会让
+// 出站把「没要求结构化」写成「要求纯文本」，在不支持该字段的协议上还会
+// 多报一条假的有损诊断。
+func decodeResponseFormat(w *wireResponseFormat) *ir.ResponseFormat {
+	if w == nil {
+		return nil
+	}
+	switch w.Type {
+	case "json_object":
+		return &ir.ResponseFormat{Kind: ir.ResponseFormatJSON}
+	case "json_schema":
+		out := &ir.ResponseFormat{Kind: ir.ResponseFormatSchema}
+		if w.JSONSchema != nil {
+			out.Name = w.JSONSchema.Name
+			out.Schema = string(w.JSONSchema.Schema)
+			out.Strict = w.JSONSchema.Strict
+		}
+		return out
+	default:
+		return nil
+	}
 }

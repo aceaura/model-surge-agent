@@ -734,7 +734,7 @@ curl -s $BASE/health
 |---|---|---|---|---|
 | `model` | string | 是 | 非空 | 用户模型名；空串或缺失 → 400 `model is required` |
 | `messages` | array of object | 是 | 每项 `role` + `content`，元素结构见下表 | 对话消息 |
-| `max_tokens` | int | 是（协议要求） | ≥ 1 | 响应最大输出 token 数。本服务不校验：缺失或 ≤0 时出站编码**自动补 4096**（跨协议来源可能没有此字段）；目标的 `overrides` 可强制改写 |
+| `max_tokens` | int | 是（协议要求） | ≥ 1 | 响应最大输出 token 数。本服务不校验，也**不设下限**——客户端要一个极短回答是它的事，静默抬高是无痕改写它的意图。缺失或 ≤0 时**仅在出站为 Anthropic 时**补 4096 并报有损 `filled in max_tokens`（其余三个出站协议此字段可选，直接省略）；目标的 `overrides` 可强制改写 |
 | `system` | `string \| array of object` | 否 | 字符串，或 `[{"type":"text","text":"..."}]` | 系统提示 |
 | `tools` | array of object | 否 | `[{"name","description"?,"input_schema"}]` | 工具定义；`input_schema` 为 JSON Schema |
 | `tool_choice` | object | 否 | `{"type":"auto"\|"any"\|"none"\|"tool","name"?}` | 工具选择策略；`type=tool` 时 `name` 必填 |
@@ -871,6 +871,16 @@ curl -s $BASE/v1/messages \
 | `tools` | array of object | 否 | `[{"type":"function","function":{"name","description"?,"parameters"?}}]` | 工具定义 |
 | `tool_choice` | `string \| object` | 否 | `"none"` / `"auto"` / `"required"` / `{"type":"function","function":{"name":string}}` | 工具选择策略 |
 | `reasoning_effort` | string | 否 | `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`（各上游支持范围不同） | 推理强度档位。`none` 例外：它是**明确关闭**而非档位，不会被折算成某个真实档位；省略整个字段是「没提」（三态见 [6.4](#64-跨协议能力差异)） |
+| `presence_penalty` | number | 否 | -2.0–2.0 | 出现惩罚，透传不校验；目标不支持时丢弃并报有损 |
+| `frequency_penalty` | number | 否 | -2.0–2.0 | 频率惩罚，同上 |
+| `seed` | int | 否 | 任意整数（**含 0**，0 是一个具体种子而非「没给」） | 采样种子；目标不支持时丢弃并报有损 |
+| `n` | int | 否 | ≥ 1 | 候选数。目标不支持时丢弃并报有损，**此时只会回一个候选**——本服务不在本地做 n 次扇出 |
+| `logprobs` | bool | 否 | — | 是否回对数概率。`false` 是**明确不要**，与省略不等价 |
+| `top_logprobs` | int | 否 | 0–20 | 每 token 回多少候选概率 |
+| `logit_bias` | object | 否 | `{"<token_id>": number}`，值域 -100–100 | token 偏置。**不做跨协议 token id 重映射**：各家分词器不同，重映射会把偏置加到别的词上 |
+| `service_tier` | string | 否 | 透传不校验 | 服务档位 |
+| `parallel_tool_calls` | bool | 否 | — | 是否允许并行工具调用。三态：省略=没提，`false`=明确禁止 |
+| `response_format` | object | 否 | `{"type":"text"\|"json_object"\|"json_schema","json_schema":{"name","schema","strict"?}}` | 输出格式约束。`type:"text"` 视为**没提**（那是默认形态，不是一项要求）；目标只支持 JSON 不支持 schema 时降级为纯 JSON 并报有损 |
 | `user` | string | 否 | 非空 | 终端用户标识，透传上游 |
 | 其他 | — | — | — | 未列出的字段被忽略 |
 
@@ -992,6 +1002,13 @@ curl -s $BASE/v1/chat/completions \
 | `tool_choice` | `string \| object` | 否 | `"none"` / `"auto"` / `"required"` / `{"type":"function","name":string}` | 工具选择策略 |
 | `reasoning` | object | 否 | `{"effort": "none"\|"low"\|"medium"\|"high"\|..., "summary":"auto"\|"concise"\|"detailed"}` | 推理配置。开启思考时本服务出站恒带 `summary:"auto"`（否则推理内容对客户端不可见）；`effort:"none"` 是**明确关闭**，出站不带 `summary`；省略整个字段是「没提」（三态见 [6.4](#64-跨协议能力差异)） |
 | `store` | bool | 否 | 默认 `false` | **出站恒为 `false`**：本服务不让上游留存会话（多目标重试时各上游留存状态互不可见，会分叉） |
+| `text` | object | 否 | `{"format":{"type":"text"\|"json_object"\|"json_schema","name"?,"schema"?,"strict"?},"verbosity":"low"\|"medium"\|"high"}` | 输出格式与详尽度。**schema 三项平铺在 `format` 这一层**，不像 Chat Completions 那样再嵌一个 `json_schema` 对象；`type:"text"` 视为没提 |
+| `include` | array of string | 否 | 透传不校验 | 要求额外返回的条目；目标不支持时丢弃并报有损 |
+| `truncation` | string | 否 | `auto` / `disabled` | 超长时的截断策略 |
+| `metadata` | object | 否 | `{"<key>":"<value>"}` | 客户端自定义元数据。与 `user` **各走各的**：后者是用户标识、会被翻译成各协议的用户字段，混进元数据会让它发出去两次 |
+| `service_tier` | string | 否 | 透传不校验 | 服务档位 |
+| `parallel_tool_calls` | bool | 否 | — | 是否允许并行工具调用，三态同 Chat Completions |
+| `top_logprobs` | int | 否 | 0–20 | 每 token 回多少候选概率 |
 | `user` | string | 否 | 非空 | 终端用户标识，透传上游 |
 | `previous_response_id` | string | 否 | **带值即 400** | 上游托管的会话续接，见下文「托管状态字段」 |
 | `conversation` | `string \| object` | 否 | **带值即 400** | 同上 |
@@ -1344,6 +1361,7 @@ curl -s $BASE/v1beta/models/models/demo-pool
 | thinking 签名 | 只在同族协议间透传：Anthropic `signature` 与 Responses `encrypted_content` 互不翻译，跨族时降级为纯文本推理（丢掉签名后仍可被接受） |
 | thinking 预算 ↔ 档位 | Anthropic 的 `budget_tokens` 转其他协议时折成 effort 档位（<4096→`low`，<16384→`medium`，否则 `high`）；反向转换按 `max_tokens` 比例折算并保证 1024 ≤ budget < max_tokens |
 | thinking 开关三态 | 见下表 |
+| 调参字段 | 见「调参字段的承载矩阵」 |
 
 #### 推理开关的三态
 
@@ -1365,6 +1383,36 @@ curl -s $BASE/v1beta/models/models/demo-pool
 | Gemini | `"generationConfig":{"thinkingConfig":{"thinkingBudget":0}}` | 出站独有；关闭时不带 `includeThoughts` |
 
 目标协议不支持推理时，明确关闭**不报**有损诊断——那恰好就是客户端要的结果；只有明确开启才报 `dropped thinking`。
+
+#### 调参字段的承载矩阵
+
+采样、候选、输出格式这一类调参字段各协议覆盖面不同。本服务把客户端给的值解进中立表示，能表达的按目标方言写出，不能表达的**丢弃并报有损诊断，请求照常发出**。
+
+| 字段 | Anthropic | Chat Completions | Responses | Gemini |
+|---|---|---|---|---|
+| `presence_penalty` / `frequency_penalty` | ✗ | ✓ | ✗ | ✗ |
+| `seed` | ✗ | ✓ | ✗ | ✗ |
+| `n`（候选数） | ✗ | ✓ | ✗ | ✓ `candidateCount` |
+| `logprobs` / `top_logprobs` | ✗ | ✓ | 仅 `top_logprobs` | ✓ `responseLogprobs` / `logprobs` |
+| `logit_bias` | ✗ | ✓ | ✗ | ✗ |
+| `service_tier` | ✗ | ✓ | ✓ | ✗ |
+| `parallel_tool_calls` | ✗ | ✓ | ✓ | ✗ |
+| `response_format`（纯 JSON） | ✗ | ✓ | ✓ `text.format` | ✓ `responseMimeType` |
+| `response_format`（带 schema） | ✗ | ✓ | ✓ | ✓ `responseSchema` |
+| `verbosity` | ✗ | ✗ | ✓ `text.verbosity` | ✗ |
+| `include` | ✗ | ✗ | ✓ | ✗ |
+| `truncation` | ✗ | ✗ | ✓ | ✗ |
+| 客户端 `metadata` | ✗ | ✗ | ✓ | ✗ |
+
+要点：
+
+- **只报有损，不拒请求**。拒绝会把一个能用的回答换成零回答；而目标协议是调度层按策略选的、客户端无从预知，让它为此吃一个 400 归因方向是错的。运维确需强制某个值时用目标的 `overrides`。
+- **零值都有意义，一律按「给没给」区分**。`seed:0` 是一个具体种子、`presence_penalty:0` 是「不惩罚」、`logprobs:false` 是「明确不要」、`parallel_tool_calls:false` 是「明确禁止」——与省略字段不是一回事。客户端没给的字段**不报**有损。
+- **`n` 被丢弃时只会回一个候选**，本服务不在本地做 n 次扇出（那会把一次计费变成 n 次而客户端看不出来）。
+- **schema 降级是两档**。目标支持 JSON 但不支持 schema 时降级为纯 JSON 并报 `response_format.schema`——保住「必须是 JSON」这条硬约束比整条丢掉更接近客户端意图。
+- **Gemini 的 schema 走工具 schema 同一套方言归一**：方言外的关键字会让上游回 `400 Invalid JSON payload`；归一失败时退回纯 JSON。
+- **Gemini 只给 `top_logprobs` 不给开关时本服务补上开关**：该协议的 `logprobs` 字段在 `responseLogprobs` 为假时不生效，不补等于把要求丢掉。
+- **`logit_bias` 不做跨协议 token id 重映射**：各家分词器不同，同一个 id 指向不同的词，重映射会把偏置加到别的词上。
 
 ### 6.5 用量估算兜底
 
@@ -1835,6 +1883,7 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| 2.6 | 2026-09-19 | 调参字段保真：13 个采样/候选/输出格式字段（penalties、`seed`、`n`、logprobs、`logit_bias`、`service_tier`、`parallel_tool_calls`、`response_format`、`verbosity`、`include`、`truncation`、客户端 `metadata`）首次进入中立表示，承载矩阵成文（[6.4](#64-跨协议能力差异)「调参字段的承载矩阵」）；Chat Completions 与 Responses 请求字段表补齐这些字段。**行为变更**：这些字段此前在解码阶段就被丢掉，**连同协议往返也丢**（本服务无透传快路径，`chat_completions → chat_completions` 一样经中立表示重建）；`max_tokens` 缺失时 Anthropic 出站的 4096 兜底现在会报有损 `filled in max_tokens`（此前无痕）。**明确不做**：不因目标不支持某字段而拒绝请求；不对小 `max_tokens` 设下限抬高；不做 `logit_bias` 的跨协议 token id 重映射；不在本地为 `n` 做扇出 |
 | 2.5 | 2026-09-19 | 推理开关区分三态（没提 / 明确关闭 / 明确开启），首次成文（[6.4](#64-跨协议能力差异)「推理开关的三态」）：四个协议各自的关闭写法在入站被识别、在出站被写出；明确关闭不再被参数层的 `defaults` 翻转成开启；目标协议不支持推理时明确关闭不报有损。**行为变更**：此前客户端的明确关闭在出站一律被省略，上游按自身默认执行，对默认开启推理的模型等于把关闭请求改成了开启；`reasoning_effort:"none"` / `reasoning.effort:"none"` 此前会被当成强度档位折算成某个真实档位。**文档更正**：Anthropic `thinking` 字段曾写「`type` 非 `enabled` 视为关闭」，措辞上把「没提」也读成了关闭——省略该字段与 `disabled` 并不等价 |
 | 2.4 | 2026-09-19 | 用量与 token 计数的对外口径：估算区分调度/公开两个方向，CJK 按字符加权（[6.6](#66-token-估算的两个方向)）；`count_tokens` 改用公开方向并补上估算口径说明（[5.5](#55-post-v1messagescount_tokens本地估算)）；`input_tokens` 补上用量兜底（原先只兜 output，上游不报时输入维度恒为 0）；上下文超限新增 `request is too long`、`input token count exceeds` 等文案，`token limit` 改为需伴随上下文语境的组合式判定。**行为变更**：`count_tokens` 对中文提示的回答从「每 4 字符 1 token」抬到「每字符 1.25 token」，带媒体块的请求不再报 0。**文档更正**：`input_tokens` 字段曾写「上游报的或估算的」，而在本轮之前它从不估算 |
 | 2.3 | 2026-09-19 | 出站连接层首次成文（[6.7](#67-出站连接层)）：连接复用上限抬高（标准库默认每 host 只留 2 条空闲连接）、新增响应头等待时限、写 deadline 逐次推进挡慢客户端；四层时限的分工与边界一并列明。附录 A 新增 `MSA_MAX_IDLE_CONNS`、`MSA_MAX_IDLE_CONNS_PER_HOST`、`MSA_IDLE_CONN_TIMEOUT`、`MSA_RESPONSE_HEADER_TIMEOUT` |
