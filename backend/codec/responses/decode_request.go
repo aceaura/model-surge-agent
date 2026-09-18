@@ -65,7 +65,12 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	out.ToolChoice = choice
 
 	if w.Reasoning != nil && w.Reasoning.Effort != "" {
-		out.Thinking = &ir.ThinkingConfig{Enabled: true, Effort: w.Reasoning.Effort}
+		// "none" 是明确关闭，不是强度档位——同 chat_completions。
+		if w.Reasoning.Effort == effortNone {
+			out.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOff()}
+		} else {
+			out.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), Effort: w.Reasoning.Effort}
+		}
 	}
 	if w.User != "" {
 		out.Metadata = map[string]string{"user_id": w.User}

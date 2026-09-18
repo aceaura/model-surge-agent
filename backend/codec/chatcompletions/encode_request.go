@@ -65,19 +65,27 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	}
 	w.ToolChoice = choice
 
-	if req.Thinking != nil && req.Thinking.Enabled {
+	switch {
+	case req.Thinking.On():
 		w.ReasoningEffort = req.Thinking.Effort
 		// 只有 token 预算没有档位时（来自 Anthropic 客户端）折成档位：
 		// 本协议无预算概念，不折就等于把思考请求整个丢掉。
 		if w.ReasoningEffort == "" {
 			w.ReasoningEffort = effortForBudget(req.Thinking.BudgetTokens)
 		}
+	case req.Thinking.Off():
+		// 明确关闭要写出来。不写等于「没提」，上游按自己的默认开启推理，
+		// 而客户端刚刚明确说了不要。
+		w.ReasoningEffort = effortNone
 	}
 	if id := req.Metadata["user_id"]; id != "" {
 		w.User = id
 	}
 	return json.Marshal(w)
 }
+
+// effortNone 是本协议表达「关闭推理」的取值，不是一个强度档位。
+const effortNone = "none"
 
 // effortForBudget 把 token 预算折成 effort 档位。
 // 阈值取 Anthropic 的常见用法：1024 是最小合法预算，上万即高强度思考。

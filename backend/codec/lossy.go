@@ -57,7 +57,9 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	if len(req.StopSequences) > 0 && !caps.StopSequences {
 		note("stop_sequences", "no stop sequence parameter")
 	}
-	if req.Thinking != nil && req.Thinking.Enabled && !caps.Thinking {
+	// 只有明确开启才算丢失：明确关闭在不支持推理的协议上本就是要的结果，
+	// 没提则什么都没被丢。
+	if req.Thinking.On() && !caps.Thinking {
 		note("thinking", "no reasoning mode")
 	}
 

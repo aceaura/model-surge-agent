@@ -212,7 +212,7 @@ func forcedToolChoice(tc *ir.ToolChoice) bool {
 
 // shapeParams 解开参数互斥并套上数量上限。
 func shapeParams(req *ir.Request, caps Capabilities, c *noteCollector) {
-	thinkingOn := req.Thinking != nil && req.Thinking.Enabled && caps.Thinking
+	thinkingOn := req.Thinking.On() && caps.Thinking
 
 	if thinkingOn && caps.MinThinkingBudget > 0 && req.MaxTokens > 0 &&
 		req.MaxTokens-1 < caps.MinThinkingBudget {

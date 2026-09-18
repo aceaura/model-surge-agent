@@ -121,7 +121,7 @@ func TestToolResultReferencesTheCallByName(t *testing.T) {
 func TestThinkingBecomesThoughtFlaggedTextAndForeignSignatureIsDropped(t *testing.T) {
 	body, err := EncodeRequest(&ir.Request{
 		Model:    "m",
-		Thinking: &ir.ThinkingConfig{Enabled: true, Effort: "high"},
+		Thinking: &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), Effort: "high"},
 		Messages: []ir.Message{{Role: ir.RoleAssistant, Content: []ir.Block{
 			{Type: ir.BlockThinking, Thinking: &ir.Thinking{
 				Text: "pondering", Signature: "foreign-sig", SignatureFrom: codec.ProtocolAnthropic,

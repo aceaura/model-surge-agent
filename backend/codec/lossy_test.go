@@ -54,7 +54,7 @@ func TestDescribeLossyJudgments(t *testing.T) {
 		},
 		{
 			name: "thinking config dropped",
-			req:  ir.Request{Thinking: &ir.ThinkingConfig{Enabled: true}},
+			req:  ir.Request{Thinking: &ir.ThinkingConfig{Enabled: ir.ThinkingOn()}},
 			caps: func(c Capabilities) Capabilities { c.Thinking = false; return c },
 			want: []string{"dropped thinking"},
 		},
@@ -159,7 +159,7 @@ func TestDescribeLossyReturnsNilWhenNothingDropped(t *testing.T) {
 		Tools:         []ir.Tool{{Name: "f"}},
 		TopK:          &topK,
 		StopSequences: []string{"END"},
-		Thinking:      &ir.ThinkingConfig{Enabled: true},
+		Thinking:      &ir.ThinkingConfig{Enabled: ir.ThinkingOn()},
 		System:        []ir.Block{{Type: ir.BlockText, Text: "sys", CacheCtl: "ephemeral"}},
 		Messages: msg(
 			ir.Block{Type: ir.BlockText, Text: "hi", CacheCtl: "ephemeral"},

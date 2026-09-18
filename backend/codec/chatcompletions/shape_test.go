@@ -140,7 +140,7 @@ func TestForcedToolChoiceKeepsThinking(t *testing.T) {
 	req := shapeBaseRequest()
 	req.Tools = []ir.Tool{{Name: "read", Schema: `{"type":"object","properties":{}}`}}
 	req.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: "read"}
-	req.Thinking = &ir.ThinkingConfig{Enabled: true, BudgetTokens: 4096}
+	req.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), BudgetTokens: 4096}
 
 	obj, notes := shapedBody(t, req)
 	if obj["reasoning_effort"] == nil {

@@ -152,7 +152,7 @@ func TestThinkingBudgetFoldsIntoEffort(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			body, err := EncodeRequest(&ir.Request{
 				Model:    "m",
-				Thinking: &ir.ThinkingConfig{Enabled: true, BudgetTokens: c.budget},
+				Thinking: &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), BudgetTokens: c.budget},
 			})
 			if err != nil {
 				t.Fatalf("encode: %v", err)
@@ -174,7 +174,7 @@ func TestEncodeKeepsEffortWhenClientGaveOne(t *testing.T) {
 	// 客户端给了档位就不要用预算去覆盖它：那是它明确的意图表达。
 	body, err := EncodeRequest(&ir.Request{
 		Model:    "m",
-		Thinking: &ir.ThinkingConfig{Enabled: true, Effort: "low", BudgetTokens: 32000},
+		Thinking: &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), Effort: "low", BudgetTokens: 32000},
 	})
 	if err != nil {
 		t.Fatalf("encode: %v", err)

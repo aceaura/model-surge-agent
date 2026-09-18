@@ -442,7 +442,7 @@ func TestThinkingSamplingExclusivityMatrix(t *testing.T) {
 			req := shapeRequest()
 			req.Temperature = &temp
 			req.TopP = &topP
-			req.Thinking = &ir.ThinkingConfig{Enabled: true, Effort: "medium", BudgetTokens: 4096}
+			req.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), Effort: "medium", BudgetTokens: 4096}
 			body, notes := lossyOf(t, out, req)
 
 			hasTemp := strings.Contains(string(body), `"temperature"`)

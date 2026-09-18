@@ -73,7 +73,12 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	}
 	w.ToolChoice = encodeToolChoice(req.ToolChoice)
 
-	if req.Thinking != nil && req.Thinking.Enabled {
+	switch {
+	case req.Thinking.Off():
+		// 明确关闭要写出来：本协议的 disabled 是显式取值，省略则随模型默认，
+		// 而部分模型默认开启推理。
+		w.Thinking = &wireThinking{Type: "disabled"}
+	case req.Thinking.On():
 		th := &wireThinking{Type: "enabled", BudgetTokens: req.Thinking.BudgetTokens}
 		// 只有 effort 没有预算时（来自 responses/gemini 客户端）也必须给出预算：
 		// Anthropic 的 thinking 无 effort 概念，缺 budget_tokens 会被拒。

@@ -56,8 +56,11 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	out.ToolChoice = decodeToolChoice(w.ToolChoice)
 
 	if w.Thinking != nil {
+		// type 只有 enabled / disabled 两种取值，都是客户端的明确表态，
+		// 所以这里一定给出 true 或 false，绝不留 nil——nil 是「没提」那一档。
+		enabled := w.Thinking.Type == "enabled"
 		out.Thinking = &ir.ThinkingConfig{
-			Enabled:      w.Thinking.Type == "enabled",
+			Enabled:      &enabled,
 			BudgetTokens: w.Thinking.BudgetTokens,
 		}
 	}

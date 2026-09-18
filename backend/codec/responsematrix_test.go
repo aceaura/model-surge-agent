@@ -289,7 +289,7 @@ func TestForcedToolsThinkingMatrix(t *testing.T) {
 		for _, mode := range forcedToolModes() {
 			t.Run(out+"/"+string(mode), func(t *testing.T) {
 				req := probeRequest(ir.Block{Type: ir.BlockText, Text: "ok"})
-				req.Thinking = &ir.ThinkingConfig{Enabled: true, Effort: "medium", BudgetTokens: 4096}
+				req.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), Effort: "medium", BudgetTokens: 4096}
 				req.Tools = []ir.Tool{{Name: "grep", Description: "search",
 					Schema: `{"type":"object","properties":{"pattern":{"type":"string"}}}`}}
 				req.ToolChoice = &ir.ToolChoice{Mode: mode, Name: "grep"}

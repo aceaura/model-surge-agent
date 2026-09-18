@@ -743,7 +743,7 @@ curl -s $BASE/health
 | `top_k` | int | 否 | ≥ 0 | Top-K 采样 |
 | `stop_sequences` | string[] | 否 | 非空字符串 | 自定义停止序列，命中后 `stop_reason=stop_sequence` |
 | `stream` | bool | 否 | 默认 `false` | 是否以 SSE 返回 |
-| `thinking` | object | 否 | `{"type":"enabled"\|"disabled","budget_tokens":int}` | 扩展思考。`type` 非 `"enabled"` 视为关闭；`budget_tokens` ≤0 且无 effort 档位时，出站按 `max_tokens` 的 50% 折算（不低于 1024、且小于 `max_tokens`，否则上游会拒绝） |
+| `thinking` | object | 否 | `{"type":"enabled"\|"disabled","budget_tokens":int}` | 扩展思考。`type` 为 `"enabled"` 是明确开启，其他取值均为明确关闭；**省略整个字段是「没提」，与 `disabled` 不等价**（三态见 [6.4](#64-跨协议能力差异)）。`budget_tokens` ≤0 且无 effort 档位时，出站按 `max_tokens` 的 50% 折算（不低于 1024、且小于 `max_tokens`，否则上游会拒绝） |
 | `metadata` | object | 否 | `{"user_id": string}` | 元数据；**仅 `user_id` 被读取**并转发上游 |
 | 其他 | — | — | — | 未列出的字段被忽略 |
 
@@ -870,7 +870,7 @@ curl -s $BASE/v1/messages \
 | `stream_options` | object | 否 | `{"include_usage":bool}` | 客户端语义照常；**对上游本服务恒置 `include_usage:true`**（用量须上报调度层） |
 | `tools` | array of object | 否 | `[{"type":"function","function":{"name","description"?,"parameters"?}}]` | 工具定义 |
 | `tool_choice` | `string \| object` | 否 | `"none"` / `"auto"` / `"required"` / `{"type":"function","function":{"name":string}}` | 工具选择策略 |
-| `reasoning_effort` | string | 否 | `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`（各上游支持范围不同） | 推理强度档位，透传 |
+| `reasoning_effort` | string | 否 | `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`（各上游支持范围不同） | 推理强度档位。`none` 例外：它是**明确关闭**而非档位，不会被折算成某个真实档位；省略整个字段是「没提」（三态见 [6.4](#64-跨协议能力差异)） |
 | `user` | string | 否 | 非空 | 终端用户标识，透传上游 |
 | 其他 | — | — | — | 未列出的字段被忽略 |
 
@@ -990,7 +990,7 @@ curl -s $BASE/v1/chat/completions \
 | `stream` | bool | 否 | 默认 `false` | 是否以 SSE 返回 |
 | `tools` | array of object | 否 | `[{"type":"function","name","description"?,"parameters"?}]`（**平铺，不嵌 `function`**） | 工具定义 |
 | `tool_choice` | `string \| object` | 否 | `"none"` / `"auto"` / `"required"` / `{"type":"function","name":string}` | 工具选择策略 |
-| `reasoning` | object | 否 | `{"effort": "low"\|"medium"\|"high"\|..., "summary":"auto"\|"concise"\|"detailed"}` | 推理配置。开启思考时本服务出站恒带 `summary:"auto"`（否则推理内容对客户端不可见） |
+| `reasoning` | object | 否 | `{"effort": "none"\|"low"\|"medium"\|"high"\|..., "summary":"auto"\|"concise"\|"detailed"}` | 推理配置。开启思考时本服务出站恒带 `summary:"auto"`（否则推理内容对客户端不可见）；`effort:"none"` 是**明确关闭**，出站不带 `summary`；省略整个字段是「没提」（三态见 [6.4](#64-跨协议能力差异)） |
 | `store` | bool | 否 | 默认 `false` | **出站恒为 `false`**：本服务不让上游留存会话（多目标重试时各上游留存状态互不可见，会分叉） |
 | `user` | string | 否 | 非空 | 终端用户标识，透传上游 |
 | `previous_response_id` | string | 否 | **带值即 400** | 上游托管的会话续接，见下文「托管状态字段」 |
@@ -1343,6 +1343,28 @@ curl -s $BASE/v1beta/models/models/demo-pool
 | `cache_control` | 仅 Anthropic 目标会写回该标记；其他出站协议不表达它（缓存行为由各家自动机制决定） |
 | thinking 签名 | 只在同族协议间透传：Anthropic `signature` 与 Responses `encrypted_content` 互不翻译，跨族时降级为纯文本推理（丢掉签名后仍可被接受） |
 | thinking 预算 ↔ 档位 | Anthropic 的 `budget_tokens` 转其他协议时折成 effort 档位（<4096→`low`，<16384→`medium`，否则 `high`）；反向转换按 `max_tokens` 比例折算并保证 1024 ≤ budget < max_tokens |
+| thinking 开关三态 | 见下表 |
+
+#### 推理开关的三态
+
+客户端对推理只有三种表态，本服务逐一区分，**不把「没提」与「明确关闭」合并**：部分上游模型默认开启推理，把明确关闭当成没提会让请求被静默改成开启。
+
+| 客户端表态 | 判定 | 出站行为 |
+|---|---|---|
+| 请求里完全不提推理字段 | 没提 | 出站**不写**任何推理字段，随上游模型自己的默认；模型配置的 `defaults` 此时可以填进来 |
+| 明确关闭 | 关闭 | 出站写出该协议的关闭标记（见下表）；`defaults` 因键已存在而不再生效，**客户端赢**；`overrides` 仍然压得住（那是运维的强制层） |
+| 明确开启 | 开启 | 按预算/档位折算后写出开启标记 |
+
+各协议的「明确关闭」写法（入站识别、出站写出，双向同一张表）：
+
+| 协议 | 关闭写法 | 说明 |
+|---|---|---|
+| Anthropic | `"thinking":{"type":"disabled"}` | 省略 `thinking` 是「没提」，与 `disabled` 不等价 |
+| Chat Completions | `"reasoning_effort":"none"` | `none` 是关闭，不是强度档位；不会被折算成某个真实档位 |
+| Responses | `"reasoning":{"effort":"none"}` | 关闭时**不带** `summary`：没有推理过程可摘要 |
+| Gemini | `"generationConfig":{"thinkingConfig":{"thinkingBudget":0}}` | 出站独有；关闭时不带 `includeThoughts` |
+
+目标协议不支持推理时，明确关闭**不报**有损诊断——那恰好就是客户端要的结果；只有明确开启才报 `dropped thinking`。
 
 ### 6.5 用量估算兜底
 
@@ -1813,6 +1835,7 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| 2.5 | 2026-09-19 | 推理开关区分三态（没提 / 明确关闭 / 明确开启），首次成文（[6.4](#64-跨协议能力差异)「推理开关的三态」）：四个协议各自的关闭写法在入站被识别、在出站被写出；明确关闭不再被参数层的 `defaults` 翻转成开启；目标协议不支持推理时明确关闭不报有损。**行为变更**：此前客户端的明确关闭在出站一律被省略，上游按自身默认执行，对默认开启推理的模型等于把关闭请求改成了开启；`reasoning_effort:"none"` / `reasoning.effort:"none"` 此前会被当成强度档位折算成某个真实档位。**文档更正**：Anthropic `thinking` 字段曾写「`type` 非 `enabled` 视为关闭」，措辞上把「没提」也读成了关闭——省略该字段与 `disabled` 并不等价 |
 | 2.4 | 2026-09-19 | 用量与 token 计数的对外口径：估算区分调度/公开两个方向，CJK 按字符加权（[6.6](#66-token-估算的两个方向)）；`count_tokens` 改用公开方向并补上估算口径说明（[5.5](#55-post-v1messagescount_tokens本地估算)）；`input_tokens` 补上用量兜底（原先只兜 output，上游不报时输入维度恒为 0）；上下文超限新增 `request is too long`、`input token count exceeds` 等文案，`token limit` 改为需伴随上下文语境的组合式判定。**行为变更**：`count_tokens` 对中文提示的回答从「每 4 字符 1 token」抬到「每字符 1.25 token」，带媒体块的请求不再报 0。**文档更正**：`input_tokens` 字段曾写「上游报的或估算的」，而在本轮之前它从不估算 |
 | 2.3 | 2026-09-19 | 出站连接层首次成文（[6.7](#67-出站连接层)）：连接复用上限抬高（标准库默认每 host 只留 2 条空闲连接）、新增响应头等待时限、写 deadline 逐次推进挡慢客户端；四层时限的分工与边界一并列明。附录 A 新增 `MSA_MAX_IDLE_CONNS`、`MSA_MAX_IDLE_CONNS_PER_HOST`、`MSA_IDLE_CONN_TIMEOUT`、`MSA_RESPONSE_HEADER_TIMEOUT` |
 | 2.2 | 2026-09-19 | 多轮会话状态一致性：合成工具 id 加入响应标记以保证跨轮不撞号（[3.2.5](#325-工具调用-id-的生命周期)）；`sanitized` 新增 `duplicate tool_use id ...` 说明并补齐全部配对治理形态（[3.2.1](#321-sanitized-的说明形态)）；Responses 的 `context_management` 纳入托管状态字段拒收，四个字段与拒收规则首次成文（[5.4](#54-post-v1responsesopenai-responses)）。**文档更正**：`sanitized` 曾写「合并连续同角色消息」，本服务从未有此行为也不应有——`user(tool_result)` 紧跟 `user(text)` 是每次工具回合的真实形态，合并会破坏 prompt cache 前缀 |

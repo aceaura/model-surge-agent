@@ -127,10 +127,27 @@ type ToolChoice struct {
 // Responses/Gemini 用 effort 档位。哪个可用由出站 codec 决定，
 // 无法映射的一侧留零值。
 type ThinkingConfig struct {
-	Enabled      bool   `json:"enabled"`
+	// Enabled 是三态：nil 表示客户端没提（随上游默认），false 表示客户端
+	// 明确要求关闭，true 表示明确开启。两者必须分开：只有明确关闭才该在
+	// 出站写出关闭标记，没提的那一档写出来会篡改上游默认。
+	Enabled      *bool  `json:"enabled,omitempty"`
 	Effort       string `json:"effort,omitempty"`
 	BudgetTokens int    `json:"budget_tokens,omitempty"`
 }
+
+// On 判定明确开启。nil 接收者与 nil Enabled 都算「没明确开启」。
+func (t *ThinkingConfig) On() bool {
+	return t != nil && t.Enabled != nil && *t.Enabled
+}
+
+// Off 判定明确关闭。没提不算关闭。
+func (t *ThinkingConfig) Off() bool {
+	return t != nil && t.Enabled != nil && !*t.Enabled
+}
+
+// ThinkingOn / ThinkingOff 是构造三态取值的便捷函数。
+func ThinkingOn() *bool  { v := true; return &v }
+func ThinkingOff() *bool { v := false; return &v }
 
 type Request struct {
 	Model    string    `json:"model"`

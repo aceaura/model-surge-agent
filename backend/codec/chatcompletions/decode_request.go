@@ -61,7 +61,13 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	out.ToolChoice = choice
 
 	if w.ReasoningEffort != "" {
-		out.Thinking = &ir.ThinkingConfig{Enabled: true, Effort: w.ReasoningEffort}
+		// "none" 是明确关闭，不是一个强度档位：带着它当 Effort 传下去，
+		// 出站会把它折成某个真实档位，等于把关闭请求变成开启。
+		if w.ReasoningEffort == effortNone {
+			out.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOff()}
+		} else {
+			out.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), Effort: w.ReasoningEffort}
+		}
 	}
 	if w.User != "" {
 		out.Metadata = map[string]string{"user_id": w.User}

@@ -27,7 +27,7 @@ func sampleRequest() *Request {
 		Temperature:   &temp,
 		TopK:          &topK,
 		StopSequences: []string{"END"},
-		Thinking:      &ThinkingConfig{Enabled: true, BudgetTokens: 8192},
+		Thinking:      &ThinkingConfig{Enabled: ThinkingOn(), BudgetTokens: 8192},
 		Metadata:      map[string]string{"user_id": "u1"},
 	}
 }
@@ -113,5 +113,32 @@ func TestCloneKeepsNilSlicesNil(t *testing.T) {
 	}
 	if got.ToolChoice != nil || got.Temperature != nil || got.Thinking != nil || got.Metadata != nil {
 		t.Errorf("clone invented pointers: %+v", got)
+	}
+}
+
+// TestThinkingTriStateIsExhaustive 把三态逐格钉住，包括「结构在但 Enabled
+// 未表态」这一格——它不会由入站解码产生，但 IR 是导出类型，别处构造得出来，
+// 而 On()/Off() 任何一侧把 nil 当成表态都会让出站写出客户端没要求的标记。
+func TestThinkingTriStateIsExhaustive(t *testing.T) {
+	cases := []struct {
+		name    string
+		cfg     *ThinkingConfig
+		wantOn  bool
+		wantOff bool
+	}{
+		{"nil config", nil, false, false},
+		{"enabled unset", &ThinkingConfig{BudgetTokens: 1024}, false, false},
+		{"explicit on", &ThinkingConfig{Enabled: ThinkingOn()}, true, false},
+		{"explicit off", &ThinkingConfig{Enabled: ThinkingOff()}, false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.cfg.On(); got != c.wantOn {
+				t.Errorf("On() = %v, want %v", got, c.wantOn)
+			}
+			if got := c.cfg.Off(); got != c.wantOff {
+				t.Errorf("Off() = %v, want %v", got, c.wantOff)
+			}
+		})
 	}
 }

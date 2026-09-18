@@ -150,7 +150,7 @@ func TestEncodeDisablesUpstreamStorage(t *testing.T) {
 func TestEncodeRequestsReasoningSummary(t *testing.T) {
 	body, err := EncodeRequest(&ir.Request{
 		Model:    "m",
-		Thinking: &ir.ThinkingConfig{Enabled: true, Effort: "high"},
+		Thinking: &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), Effort: "high"},
 	})
 	if err != nil {
 		t.Fatalf("encode: %v", err)

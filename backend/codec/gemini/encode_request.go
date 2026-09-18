@@ -61,7 +61,13 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 		n := req.MaxTokens
 		cfg.MaxOutputTokens = &n
 	}
-	if req.Thinking != nil && req.Thinking.Enabled {
+	switch {
+	case req.Thinking.Off():
+		// thinkingBudget 显式为 0 是本协议的关闭表达；同时不要 includeThoughts，
+		// 关了推理还要求返回思考内容是自相矛盾的请求。
+		zero := 0
+		cfg.ThinkingConfig = &wireThinkinCfg{ThinkingBudget: &zero}
+	case req.Thinking.On():
 		tc := &wireThinkinCfg{IncludeThoughts: true}
 		budget := req.Thinking.BudgetTokens
 		// 只有 effort 没有预算时（来自 responses/chat_completions 客户端）折成预算：

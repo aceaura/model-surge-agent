@@ -128,7 +128,7 @@ func TestInboundRequestsAgreeOnSemantics(t *testing.T) {
 		if req.ToolChoice == nil || req.ToolChoice.Mode != ir.ToolChoiceAuto {
 			t.Errorf("%s: tool_choice = %+v, want auto", name, req.ToolChoice)
 		}
-		if req.Thinking == nil || !req.Thinking.Enabled {
+		if !req.Thinking.On() {
 			t.Errorf("%s: thinking not enabled", name)
 		}
 
@@ -1687,7 +1687,7 @@ func lossyProbes() []lossyProbe {
 			field: "thinking",
 			build: func() *ir.Request {
 				req := probeRequest(ir.Block{Type: ir.BlockText, Text: "ok"})
-				req.Thinking = &ir.ThinkingConfig{Enabled: true, Effort: "medium", BudgetTokens: 4096}
+				req.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), Effort: "medium", BudgetTokens: 4096}
 				return req
 			},
 			expressible: func(c codec.Capabilities) bool { return c.Thinking },

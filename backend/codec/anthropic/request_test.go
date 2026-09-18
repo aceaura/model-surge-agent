@@ -86,7 +86,7 @@ func TestDecodeRequestCarriesEveryField(t *testing.T) {
 	if req.ToolChoice == nil || req.ToolChoice.Mode != ir.ToolChoiceTool || req.ToolChoice.Name != "grep" {
 		t.Errorf("tool_choice = %+v", req.ToolChoice)
 	}
-	if req.Thinking == nil || !req.Thinking.Enabled || req.Thinking.BudgetTokens != 4096 {
+	if !req.Thinking.On() || req.Thinking.BudgetTokens != 4096 {
 		t.Errorf("thinking config = %+v", req.Thinking)
 	}
 	if req.Metadata["user_id"] != "u-1" {
@@ -205,7 +205,7 @@ func TestEncodeDerivesBudgetFromEffort(t *testing.T) {
 			wire, err := EncodeRequest(&ir.Request{
 				Model:     "claude-opus-5",
 				MaxTokens: c.max,
-				Thinking:  &ir.ThinkingConfig{Enabled: true, Effort: c.effort},
+				Thinking:  &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), Effort: c.effort},
 			})
 			if err != nil {
 				t.Fatalf("EncodeRequest: %v", err)

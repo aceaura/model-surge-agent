@@ -37,7 +37,7 @@ func TestThinkingExcludesSamplingParams(t *testing.T) {
 	req := baseRequest()
 	req.Temperature = &temp
 	req.TopP = &topP
-	req.Thinking = &ir.ThinkingConfig{Enabled: true, BudgetTokens: 4096}
+	req.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), BudgetTokens: 4096}
 
 	obj, notes := shapedBody(t, req)
 	if _, ok := obj["temperature"]; ok {
@@ -75,7 +75,7 @@ func TestThinkingDisabledWhenBudgetImpossible(t *testing.T) {
 	req := baseRequest()
 	req.MaxTokens = 512
 	req.Temperature = &temp
-	req.Thinking = &ir.ThinkingConfig{Enabled: true, BudgetTokens: 4096}
+	req.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), BudgetTokens: 4096}
 
 	obj, notes := shapedBody(t, req)
 	if obj["thinking"] != nil {
@@ -241,7 +241,7 @@ func TestForcedToolChoiceDisablesThinking(t *testing.T) {
 	req.Temperature = &temp
 	req.Tools = []ir.Tool{{Name: "read", Schema: `{"type":"object","properties":{}}`}}
 	req.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: "read"}
-	req.Thinking = &ir.ThinkingConfig{Enabled: true, BudgetTokens: 4096}
+	req.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), BudgetTokens: 4096}
 
 	obj, notes := shapedBody(t, req)
 	if _, ok := obj["thinking"]; ok {
@@ -266,7 +266,7 @@ func TestAnyToolChoiceDisablesThinking(t *testing.T) {
 	req := baseRequest()
 	req.Tools = []ir.Tool{{Name: "read", Schema: `{"type":"object","properties":{}}`}}
 	req.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceAny}
-	req.Thinking = &ir.ThinkingConfig{Enabled: true, BudgetTokens: 4096}
+	req.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), BudgetTokens: 4096}
 
 	obj, notes := shapedBody(t, req)
 	if _, ok := obj["thinking"]; ok {
@@ -284,7 +284,7 @@ func TestUnforcedToolChoiceKeepsThinking(t *testing.T) {
 			req := baseRequest()
 			req.Tools = []ir.Tool{{Name: "read", Schema: `{"type":"object","properties":{}}`}}
 			req.ToolChoice = &ir.ToolChoice{Mode: mode}
-			req.Thinking = &ir.ThinkingConfig{Enabled: true, BudgetTokens: 4096}
+			req.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), BudgetTokens: 4096}
 
 			obj, notes := shapedBody(t, req)
 			if obj["thinking"] == nil {
