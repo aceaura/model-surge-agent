@@ -100,6 +100,11 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		return [][]byte{frame}, nil
 
 	case ir.EvMessageDelta:
+		// 档位也可能只在收尾帧到达（非流式响应投影成事件时就是这样），
+		// 只在 message_start 判会漏掉那一形态。
+		if ev.ServiceTier != "" {
+			e.notes = append(e.notes, codec.DroppedServiceTierNote(Name))
+		}
 		out := e.ensureStarted(ev)
 		// stop_reason 要在所有块闭合之后才发。
 		out = append(out, e.closeAll()...)
@@ -160,6 +165,11 @@ func (e *streamEncoder) encodeStart(ev ir.Event) ([][]byte, error) {
 		return nil, nil
 	}
 	e.started = true
+	// 本协议的消息头里没有执行档位的位置。上游报了就得说一声——
+	// 这一维决定计费，无声丢掉会让客户端按自己点的档位对账。
+	if ev.ServiceTier != "" {
+		e.notes = append(e.notes, codec.DroppedServiceTierNote(Name))
+	}
 	msg := &streamMsg{ID: ev.MessageID, Model: ev.Model, Role: string(ir.RoleAssistant)}
 	if msg.ID == "" {
 		msg.ID = "msg_unknown"

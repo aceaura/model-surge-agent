@@ -26,7 +26,9 @@ type streamDecoder struct {
 	// stopReason 与 usage 只在 completed/incomplete 帧出现，
 	// 到那时一并发出一帧 message_delta。
 	stopReason ir.StopReason
-	usage      *ir.Usage
+	// serviceTier 是上游回的执行档位，created 与 completed 两帧都可能带。
+	serviceTier string
+	usage       *ir.Usage
 	// notes 记录改写说明，走响应侧诊断通道。
 	notes []string
 }
@@ -138,6 +140,8 @@ func (d *streamDecoder) start(ev wireStreamEvent) []ir.Event {
 	if ev.Response != nil {
 		out.MessageID = ev.Response.ID
 		out.Model = ev.Response.Model
+		out.ServiceTier = ev.Response.ServiceTier
+		d.serviceTier = ev.Response.ServiceTier
 	}
 	return []ir.Event{out}
 }
@@ -215,8 +219,12 @@ func (d *streamDecoder) complete(ev wireStreamEvent) []ir.Event {
 			d.usage = &u
 		}
 		d.stopReason = stopReasonFor(ev.Response)
+		if ev.Response.ServiceTier != "" {
+			d.serviceTier = ev.Response.ServiceTier
+		}
 	}
-	delta := ir.Event{Type: ir.EvMessageDelta, StopReason: d.stopReason, Usage: d.usage}
+	delta := ir.Event{Type: ir.EvMessageDelta, StopReason: d.stopReason, Usage: d.usage,
+		ServiceTier: d.serviceTier}
 	if delta.StopReason == "" {
 		delta.StopReason = ir.StopEndTurn
 	}
@@ -312,10 +320,11 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 			fmt.Sprintf("undecodable response: %v", err))
 	}
 	out := &ir.Response{
-		ID:         w.ID,
-		Model:      w.Model,
-		StopReason: stopReasonFor(&w),
-		Content:    []ir.Block{},
+		ID:          w.ID,
+		Model:       w.Model,
+		StopReason:  stopReasonFor(&w),
+		Content:     []ir.Block{},
+		ServiceTier: w.ServiceTier,
 	}
 	if w.Usage != nil {
 		out.Usage = convertUsage(*w.Usage)

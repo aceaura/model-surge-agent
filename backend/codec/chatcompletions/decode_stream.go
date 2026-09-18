@@ -38,6 +38,11 @@ type streamDecoder struct {
 	messageID string
 	// notes 记录改写说明，走响应侧诊断通道。
 	notes []string
+	// maxCandidate 是见过的最大候选索引。只记最大值而不逐帧记说明：
+	// 说明按字符串去重，逐帧生成会让同一个流报出好几条不同数字的说明。
+	maxCandidate int
+	// serviceTier 是上游回的执行档位，随每个 chunk 顶层给出。
+	serviceTier string
 
 	// stopReason 与 usage 先攒着，到 [DONE] 才发一帧 message_delta。
 	// 本协议把它们分散在不同 chunk（finish_reason 一帧、usage 另一帧），
@@ -97,6 +102,10 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 		return []ir.Event{{Type: ir.EvError, Err: convertError(0, &env.Error)}}, nil
 	}
 
+	if chunk.ServiceTier != "" {
+		d.serviceTier = chunk.ServiceTier
+	}
+
 	var out []ir.Event
 	out = append(out, d.ensureStarted(chunk)...)
 
@@ -107,7 +116,11 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 
 	for _, choice := range chunk.Choices {
 		// 只处理第一路：IR 是单条响应，n>1 的其余路无处安放。
+		// 丢是结构决定的，但必须说出来——客户端为全部候选付了 token。
 		if choice.Index != 0 {
+			if choice.Index > d.maxCandidate {
+				d.maxCandidate = choice.Index
+			}
 			continue
 		}
 		if choice.Delta != nil {
@@ -132,7 +145,8 @@ func (d *streamDecoder) ensureStarted(chunk wireResponse) []ir.Event {
 	}
 	d.started = true
 	d.messageID = chunk.ID
-	return []ir.Event{{Type: ir.EvMessageStart, MessageID: chunk.ID, Model: chunk.Model}}
+	return []ir.Event{{Type: ir.EvMessageStart, MessageID: chunk.ID, Model: chunk.Model,
+		ServiceTier: chunk.ServiceTier}}
 }
 
 func (d *streamDecoder) decodeDelta(delta wireMessage) ([]ir.Event, error) {
@@ -318,7 +332,16 @@ const mergedToolNote = "merged tool call fragments that arrived under different 
 	"(matched by call id)"
 
 // Notes 实现 codec.StreamNotes。
-func (d *streamDecoder) Notes() []string { return codec.DedupeNotes(d.notes) }
+//
+// 多候选说明在这里生成而不在 Feed 里 append：数字要的是整流的结论，
+// 逐帧 append 会让每帧一条、去重挡不住。
+func (d *streamDecoder) Notes() []string {
+	notes := d.notes
+	if d.maxCandidate > 0 {
+		notes = append(notes, codec.DroppedCandidatesNote(d.maxCandidate))
+	}
+	return codec.DedupeNotes(notes)
+}
 
 // finish 收尾：闭合残留块，补一帧带 stop_reason 与 usage 的 message_delta，
 // 再发 message_stop。
@@ -328,7 +351,8 @@ func (d *streamDecoder) finish() []ir.Event {
 	}
 	d.done = true
 	out := d.closeAll()
-	delta := ir.Event{Type: ir.EvMessageDelta, StopReason: d.stopReason, Usage: d.usage}
+	delta := ir.Event{Type: ir.EvMessageDelta, StopReason: d.stopReason, Usage: d.usage,
+		ServiceTier: d.serviceTier}
 	if delta.StopReason == "" {
 		delta.StopReason = ir.StopEndTurn
 	}
@@ -341,17 +365,28 @@ func (d *streamDecoder) Finish() []ir.Event { return d.finish() }
 // DecodeResponse 解非流式响应。数据面对上游一律流式，
 // 这条路径只在探测与 count_tokens 之类的接口用到。
 func DecodeResponse(body []byte) (*ir.Response, error) {
+	resp, _, err := DecodeResponseLossy(body)
+	return resp, err
+}
+
+// DecodeResponseLossy 实现 codec.LossyResponseDecoder。
+func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	var w wireResponse
 	if err := json.Unmarshal(body, &w); err != nil {
-		return nil, ir.NewError(ir.ErrUpstream, 0, "",
+		return nil, nil, ir.NewError(ir.ErrUpstream, 0, "",
 			fmt.Sprintf("undecodable response: %v", err))
 	}
-	out := &ir.Response{ID: w.ID, Model: w.Model, Content: []ir.Block{}}
+	out := &ir.Response{ID: w.ID, Model: w.Model, Content: []ir.Block{},
+		ServiceTier: w.ServiceTier}
 	if w.Usage != nil {
 		out.Usage = convertUsage(*w.Usage)
 	}
+	maxCandidate := 0
 	for _, choice := range w.Choices {
 		if choice.Index != 0 || choice.Message == nil {
+			if choice.Index > maxCandidate {
+				maxCandidate = choice.Index
+			}
 			continue
 		}
 		out.StopReason = convertFinishReason(choice.FinishReason)
@@ -364,7 +399,7 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 		}
 		blocks, err := decodeContent(m.Content)
 		if err != nil {
-			return nil, ir.NewError(ir.ErrUpstream, 0, "",
+			return nil, nil, ir.NewError(ir.ErrUpstream, 0, "",
 				fmt.Sprintf("undecodable response content: %v", err))
 		}
 		out.Content = append(out.Content, blocks...)
@@ -376,7 +411,11 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 			}})
 		}
 	}
-	return out, nil
+	var notes []string
+	if maxCandidate > 0 {
+		notes = append(notes, codec.DroppedCandidatesNote(maxCandidate))
+	}
+	return out, notes, nil
 }
 
 func DecodeError(status int, body []byte) *ir.Error {

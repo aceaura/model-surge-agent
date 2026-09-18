@@ -909,6 +909,7 @@ curl -s $BASE/v1/messages \
 | `choices[].message` | object | 见下表 |
 | `choices[].finish_reason` | string | 停止原因，见下表 |
 | `usage` | object | 用量，见下表 |
+| `service_tier` | string | **上游实际执行的档位，原样回显**。可能低于请求里点的那个（点 `flex` 拿到 `default` 就是被降档了）。上游没回时该键不出现——本服务绝不拿请求里的值兜底，那会把降档伪装成按要求执行 |
 
 **`choices[].message`**
 
@@ -1060,6 +1061,7 @@ curl -s $BASE/v1/chat/completions \
 | `output` | array of object | 输出条目：`message`（含 `output_text` / `refusal` part）、`function_call`、`reasoning` |
 | `usage` | object | 见下表 |
 | `incomplete_details` | object | `{"reason": string}`，如 `max_output_tokens`（因长度截断）；未截断时不出现 |
+| `service_tier` | string | **上游实际执行的档位，原样回显**，出现在 `response.created` 与 `response.completed` 两帧的 `response` 对象里。语义与 Chat Completions 同一条，见该端点的说明 |
 | `error` | object | 失败时的错误对象；成功时为 null/不出现 |
 
 **`usage` 字段**
@@ -1413,6 +1415,33 @@ curl -s $BASE/v1beta/models/models/demo-pool
 - **Gemini 的 schema 走工具 schema 同一套方言归一**：方言外的关键字会让上游回 `400 Invalid JSON payload`；归一失败时退回纯 JSON。
 - **Gemini 只给 `top_logprobs` 不给开关时本服务补上开关**：该协议的 `logprobs` 字段在 `responseLogprobs` 为假时不生效，不补等于把要求丢掉。
 - **`logit_bias` 不做跨协议 token id 重映射**：各家分词器不同，同一个 id 指向不同的词，重映射会把偏置加到别的词上。
+
+#### 调参的请求侧与响应侧分工
+
+同一个参数在两侧各说一半，**两格互斥**，不会重复报：
+
+| 字段 | 目标不支持时 | 目标支持时 |
+|---|---|---|
+| `n` | 请求侧报 `dropped n`（只会回一个候选） | 请求侧**不报**；上游真回多路时响应侧报 `dropped N extra response candidate(s)`，N 是实际丢掉的路数 |
+| `logprobs` | 请求侧报 `dropped logprobs` | 请求侧报 `forwarded logprobs but the result is not returned`——参数照发给了上游、上游也会算，但按 token 的概率不跨协议承载，解码时丢掉 |
+
+两条措辞刻意分开：**`dropped` 是「换个目标就有」，`forwarded ... not returned` 是「换谁都没有」**。混用会让客户端以为换个目标能拿到对数概率。
+
+`n` 的那一格选「响应侧报实际路数」而不是请求侧提前警告，因为实际路数是能对账的数字——`usage.output_tokens` 是上游按**全部**候选算的，客户端为丢掉的那几路付了钱。
+
+#### 响应侧明确不做的维度
+
+以下都看起来像遗漏，其实是判断过的：
+
+| 维度 | 不做的理由 |
+|---|---|
+| 响应 `logprobs` | Chat Completions 的按 token 数组与 Gemini 的 `topCandidates`/`chosenCandidates` 平行数组结构不同构，逐 token 对齐要求复原上游的分词边界，而本服务不带分词器（见 [6.6](#66-token-估算的两个方向)）。四个参考实现无一承载它。 |
+| `system_fingerprint` | 它与 `seed` 配对，供客户端判断「后端配置变了所以同 seed 结果不同」。但本服务的响应来自调度层按策略选出的某个目标，同一 seed 两次请求可能落到**不同上游**——顺延上游的指纹会让客户端以为后端没变，**比不给更糟**。 |
+| Gemini `groundingMetadata` / `citationMetadata` | 本服务从不声明搜索类工具，上游不会回这些结构。 |
+| Gemini `safetyRatings` | 逐类别的评分在任何目标协议里都没有对应位置，转成文本附注会污染回答正文。整体被安全策略拦截这一情形已由 `promptFeedback.blockReason` 与 `finishReason` 覆盖。 |
+| `text.format` / `truncation` 回显 | 回显的就是客户端自己发的值，它已经知道。 |
+
+Gemini 的 `finishMessage`（上游随 `finishReason` 附的人类可读原因，比如具体触发了哪条安全策略）**会以有损说明的形式保留原文**（截断到 200 字节）。它不改 `stop_reason`——枚举值已由 `finishReason` 决定，两个来源打架只会让判定变得不可预测。
 
 ### 6.5 用量估算兜底
 
@@ -1883,6 +1912,7 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| 2.7 | 2026-09-19 | 响应侧调参保真：`service_tier` 首次原样回显（Chat Completions 顶层、Responses 的 `response` 对象；`created` 与 `completed` 两帧任一带上都认），Anthropic 出站无此位时报 `dropped service_tier from the response`；上游回多路候选而中立表示只装得下一路时报出**实际丢弃路数**（`dropped N extra response candidate(s)`，一个流恒一条），该数字可与 `usage.output_tokens` 对账；Gemini 的 `finishMessage` 原文作为说明保留（截断 200 字节，**不改写 `stop_reason`**，枚举仍只由 `finishReason` 决定）。新增第三类说明措辞 `forwarded X but the result is not returned`——与 `dropped`（换个目标就有）、`filled in`（本服务补的值）区分开，它表示换谁都拿不到。`n` 与 `logprobs` 的请求侧/响应侧分工成文（[6.4](#64-跨协议能力差异)「调参的请求侧与响应侧分工」）。**绝不拿请求里的 `service_tier` 兜底**：点 `flex` 拿到 `default` 是被降档，兜底会把降档伪装成按要求执行，而这一维决定计费。**明确不做**（五项理由成文，见 [6.4](#64-跨协议能力差异)「响应侧明确不做的维度」）：响应 `logprobs`、`system_fingerprint`、Gemini 的 grounding/citation、`safetyRatings`、`text.format` 与 `truncation` 回显 |
 | 2.6 | 2026-09-19 | 调参字段保真：13 个采样/候选/输出格式字段（penalties、`seed`、`n`、logprobs、`logit_bias`、`service_tier`、`parallel_tool_calls`、`response_format`、`verbosity`、`include`、`truncation`、客户端 `metadata`）首次进入中立表示，承载矩阵成文（[6.4](#64-跨协议能力差异)「调参字段的承载矩阵」）；Chat Completions 与 Responses 请求字段表补齐这些字段。**行为变更**：这些字段此前在解码阶段就被丢掉，**连同协议往返也丢**（本服务无透传快路径，`chat_completions → chat_completions` 一样经中立表示重建）；`max_tokens` 缺失时 Anthropic 出站的 4096 兜底现在会报有损 `filled in max_tokens`（此前无痕）。**明确不做**：不因目标不支持某字段而拒绝请求；不对小 `max_tokens` 设下限抬高；不做 `logit_bias` 的跨协议 token id 重映射；不在本地为 `n` 做扇出 |
 | 2.5 | 2026-09-19 | 推理开关区分三态（没提 / 明确关闭 / 明确开启），首次成文（[6.4](#64-跨协议能力差异)「推理开关的三态」）：四个协议各自的关闭写法在入站被识别、在出站被写出；明确关闭不再被参数层的 `defaults` 翻转成开启；目标协议不支持推理时明确关闭不报有损。**行为变更**：此前客户端的明确关闭在出站一律被省略，上游按自身默认执行，对默认开启推理的模型等于把关闭请求改成了开启；`reasoning_effort:"none"` / `reasoning.effort:"none"` 此前会被当成强度档位折算成某个真实档位。**文档更正**：Anthropic `thinking` 字段曾写「`type` 非 `enabled` 视为关闭」，措辞上把「没提」也读成了关闭——省略该字段与 `disabled` 并不等价 |
 | 2.4 | 2026-09-19 | 用量与 token 计数的对外口径：估算区分调度/公开两个方向，CJK 按字符加权（[6.6](#66-token-估算的两个方向)）；`count_tokens` 改用公开方向并补上估算口径说明（[5.5](#55-post-v1messagescount_tokens本地估算)）；`input_tokens` 补上用量兜底（原先只兜 output，上游不报时输入维度恒为 0）；上下文超限新增 `request is too long`、`input token count exceeds` 等文案，`token limit` 改为需伴随上下文语境的组合式判定。**行为变更**：`count_tokens` 对中文提示的回答从「每 4 字符 1 token」抬到「每字符 1.25 token」，带媒体块的请求不再报 0。**文档更正**：`input_tokens` 字段曾写「上游报的或估算的」，而在本轮之前它从不估算 |

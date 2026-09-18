@@ -40,7 +40,13 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 		return nil, nil, err
 	}
 	// 本协议有 signature 字段，异族来源才丢。
-	return body, codec.DescribeResponseSignatureLoss(resp, Name, true), nil
+	notes := codec.DescribeResponseSignatureLoss(resp, Name, true)
+	// 本协议的响应信封没有执行档位的位置。上游报了就得说一声——
+	// 这一维决定计费，无声丢掉会让客户端按点的档位对账。
+	if resp != nil && resp.ServiceTier != "" {
+		notes = append(notes, codec.DroppedServiceTierNote(Name))
+	}
+	return body, codec.DedupeNotes(notes), nil
 }
 
 func (inboundCodec) RenderError(err *ir.Error) (int, []byte) { return RenderError(err) }

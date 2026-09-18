@@ -143,8 +143,13 @@ func TestParamsSurviveSameProtocolRoundTrip(t *testing.T) {
 					t.Errorf("同协议往返丢了 %s: %s", w, body)
 				}
 			}
-			if notes := paramNotes(t, proto, req); len(notes) != 0 {
-				t.Errorf("同协议往返不该报有损: %v", notes)
+			// 只断言没有 dropped：同协议往返不该丢任何字段。
+			// forwarded-but-unreturned 那一类是允许的——logprobs 在
+			// 同协议往返上照样发给了上游，只是结果回不来（第十六轮）。
+			for _, n := range paramNotes(t, proto, req) {
+				if strings.HasPrefix(n, "dropped ") {
+					t.Errorf("同协议往返不该丢字段: %s", n)
+				}
 			}
 		})
 	}
@@ -185,13 +190,16 @@ func TestUnsupportedParamsAreReportedLossy(t *testing.T) {
 				req := paramBase()
 				c.set(req)
 				notes := paramNotes(t, out, req)
-				reported := containsField(notes, c.field)
+				// 只看 dropped 那一类：目标支持某字段时仍可能有
+				// forwarded-but-unreturned 的说明（logprobs 就是），
+				// 那不是「表达不了」，混在一起判会把两件事搅成一件。
+				reported := containsDroppedField(notes, c.field)
 				supported := supportsField(t, out, c.field)
 				if supported && reported {
-					t.Errorf("%s 支持 %s，不该报有损: %v", out, c.field, notes)
+					t.Errorf("%s 支持 %s，不该报丢弃: %v", out, c.field, notes)
 				}
 				if !supported && !reported {
-					t.Errorf("%s 表达不了 %s，必须报有损: %v", out, c.field, notes)
+					t.Errorf("%s 表达不了 %s，必须报丢弃: %v", out, c.field, notes)
 				}
 			})
 		}
@@ -248,6 +256,16 @@ func containsField(notes []string, field string) bool {
 		// 带前后空格匹配，避免 logprobs 命中 top_logprobs、
 		// metadata 命中 client_metadata 这类子串误判。
 		if strings.Contains(n, " "+field+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+// containsDroppedField 只认 dropped 那一类说明。
+func containsDroppedField(notes []string, field string) bool {
+	for _, n := range notes {
+		if strings.HasPrefix(n, "dropped "+field+" ") {
 			return true
 		}
 	}

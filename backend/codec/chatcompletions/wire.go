@@ -136,6 +136,8 @@ type wireResponse struct {
 	Model   string       `json:"model,omitempty"`
 	Choices []wireChoice `json:"choices"`
 	Usage   *wireUsage   `json:"usage,omitempty"`
+	// ServiceTier 是上游实际执行的档位，可能低于请求里点的那个。
+	ServiceTier string `json:"service_tier,omitempty"`
 }
 
 type wireChoice struct {

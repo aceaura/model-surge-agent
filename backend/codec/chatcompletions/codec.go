@@ -120,6 +120,12 @@ func (outboundCodec) NewStreamDecoder() codec.StreamDecoder { return newStreamDe
 
 func (outboundCodec) DecodeResponse(body []byte) (*ir.Response, error) { return DecodeResponse(body) }
 
+// DecodeResponseLossy 实现 codec.LossyResponseDecoder：本协议的响应里有
+// choices 数组，n>1 时多出来的候选在解码时被丢掉。
+func (outboundCodec) DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
+	return DecodeResponseLossy(body)
+}
+
 func (outboundCodec) DecodeError(status int, body []byte) *ir.Error {
 	return DecodeError(status, body)
 }

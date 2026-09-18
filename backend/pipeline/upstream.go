@@ -136,7 +136,7 @@ func adoptWholeResponse(resp *http.Response, outbound codec.OutboundCodec,
 		// 可以换个目标重来。留 replay 为 nil 让 read 走那条既有路径。
 		return &upstream{cancel: cancel}, nil
 	}
-	decoded, err := outbound.DecodeResponse(raw)
+	decoded, decodeNotes, err := decodeWholeResponse(outbound, raw)
 	if err != nil {
 		cancel()
 		return nil, ir.NewError(ir.ErrUpstream, 0, "",
@@ -144,9 +144,20 @@ func adoptWholeResponse(resp *http.Response, outbound codec.OutboundCodec,
 	}
 	return &upstream{
 		replay: ir.ResponseEvents(decoded),
-		notes:  []string{codec.UpstreamIgnoredStreamNote},
+		notes:  append([]string{codec.UpstreamIgnoredStreamNote}, decodeNotes...),
 		cancel: cancel,
 	}, nil
+}
+
+// decodeWholeResponse 优先走解码器的有损出口。
+//
+// 不实现该出口的协议等价于「解码不丢任何东西」，回落到普通解码。
+func decodeWholeResponse(outbound codec.OutboundCodec, raw []byte) (*ir.Response, []string, error) {
+	if d, ok := outbound.(codec.LossyResponseDecoder); ok {
+		return d.DecodeResponseLossy(raw)
+	}
+	resp, err := outbound.DecodeResponse(raw)
+	return resp, nil, err
 }
 
 // fallbackClient 是没装配 HTTP 时用的客户端。

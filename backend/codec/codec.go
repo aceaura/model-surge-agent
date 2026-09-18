@@ -190,6 +190,20 @@ type LossyResponseEncoder interface {
 	EncodeResponseLossy(resp *ir.Response) ([]byte, []string, error)
 }
 
+// LossyResponseDecoder 是非流式响应解码的可选出口，与 LossyResponseEncoder
+// 在出站方向的对称件。
+//
+// 解码同样会丢东西：上游回多路候选而中立表示只装得下一路，丢弃发生在
+// DecodeResponse 内部，而它的签名里没有说明位。流式方向已有 StreamNotes，
+// 非流式没有出口就会让同一类丢弃只在其中一条路径上可见。
+//
+// 只有响应里真有候选数组的协议实现它（chat_completions 与 gemini）。
+type LossyResponseDecoder interface {
+	// DecodeResponseLossy 除响应外返回去重、已排序的说明。
+	// 无丢弃时说明为 nil，且返回的响应必须与 DecodeResponse 等价。
+	DecodeResponseLossy(body []byte) (*ir.Response, []string, error)
+}
+
 // LossyErrorRenderer 是错误渲染的可选出口，报告错误的哪些维度因入站协议
 // 表达不了而被丢掉。
 //

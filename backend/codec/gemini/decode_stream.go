@@ -33,6 +33,9 @@ type streamDecoder struct {
 	usage      *ir.Usage
 	// notes 记录改写说明，走响应侧诊断通道。
 	notes []string
+	// maxCandidate 是见过的最大候选索引。只记最大值不逐帧记说明：
+	// 说明按字符串去重，逐帧生成会让一个流报出好几条不同数字的说明。
+	maxCandidate int
 }
 
 type openBlock struct {
@@ -43,7 +46,15 @@ type openBlock struct {
 func newStreamDecoder() *streamDecoder { return &streamDecoder{} }
 
 // Notes 实现 codec.StreamNotes。
-func (d *streamDecoder) Notes() []string { return codec.DedupeNotes(d.notes) }
+//
+// 多候选说明在这里生成而不在 Feed 里 append：数字要的是整流的结论。
+func (d *streamDecoder) Notes() []string {
+	notes := d.notes
+	if d.maxCandidate > 0 {
+		notes = append(notes, codec.DroppedCandidatesNote(d.maxCandidate))
+	}
+	return codec.DedupeNotes(notes)
+}
 
 func (d *streamDecoder) Feed(event, data string) ([]ir.Event, error) {
 	out, split, err := codec.FeedWithSplit(event, data, d.feedOne)
@@ -89,8 +100,15 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 
 	for _, cand := range frame.Candidates {
 		// 只处理第一路：IR 是单条响应，其余候选无处安放。
+		// 丢是结构决定的，但必须说出来——客户端为全部候选付了 token。
 		if cand.Index != 0 {
+			if cand.Index > d.maxCandidate {
+				d.maxCandidate = cand.Index
+			}
 			continue
+		}
+		if cand.FinishMessage != "" {
+			d.notes = append(d.notes, codec.FinishDetailNote(cand.FinishMessage))
 		}
 		if cand.Content != nil {
 			events, err := d.decodeParts(cand.Content.Parts)
@@ -243,11 +261,19 @@ func (d *streamDecoder) Finish() []ir.Event {
 // DecodeResponse 解非流式响应。数据面对上游一律流式，
 // 这条路径只在 count_tokens 之类的接口用到。
 func DecodeResponse(body []byte) (*ir.Response, error) {
+	resp, _, err := DecodeResponseLossy(body)
+	return resp, err
+}
+
+// DecodeResponseLossy 实现 codec.LossyResponseDecoder。
+func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	var w wireResponse
 	if err := json.Unmarshal(body, &w); err != nil {
-		return nil, ir.NewError(ir.ErrUpstream, 0, "",
+		return nil, nil, ir.NewError(ir.ErrUpstream, 0, "",
 			fmt.Sprintf("undecodable response: %v", err))
 	}
+	var notes []string
+	maxCandidate := 0
 	out := &ir.Response{ID: w.ResponseID, Model: w.ModelVersion, Content: []ir.Block{}}
 	if w.UsageMetadata != nil {
 		out.Usage = convertUsage(*w.UsageMetadata)
@@ -259,7 +285,13 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 	var calls int
 	for _, cand := range w.Candidates {
 		if cand.Index != 0 {
+			if cand.Index > maxCandidate {
+				maxCandidate = cand.Index
+			}
 			continue
+		}
+		if cand.FinishMessage != "" {
+			notes = append(notes, codec.FinishDetailNote(cand.FinishMessage))
 		}
 		if cand.FinishReason != "" {
 			out.StopReason = convertFinishReason(cand.FinishReason)
@@ -290,7 +322,10 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 	if calls > 0 && (out.StopReason == "" || out.StopReason == ir.StopEndTurn) {
 		out.StopReason = ir.StopToolUse
 	}
-	return out, nil
+	if maxCandidate > 0 {
+		notes = append(notes, codec.DroppedCandidatesNote(maxCandidate))
+	}
+	return out, codec.DedupeNotes(notes), nil
 }
 
 func DecodeError(status int, body []byte) *ir.Error {

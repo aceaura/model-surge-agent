@@ -31,6 +31,9 @@ type streamEncoder struct {
 	// 本协议只在首片带这两个字段，重复发送会让部分客户端建出两个调用。
 	sentToolHeader map[int]bool
 	stopReason     ir.StopReason
+	// serviceTier 是上游回的执行档位，一旦收到就挂在此后的每个 chunk 上。
+	// 不回填已发出的帧——发出去的改不了。
+	serviceTier string
 	// usage 跨帧累积：input 与 output 可能来自不同的 IR 事件。
 	usage ir.Usage
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
@@ -57,6 +60,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 	case ir.EvMessageStart:
 		e.id = ev.MessageID
 		e.model = ev.Model
+		if ev.ServiceTier != "" {
+			e.serviceTier = ev.ServiceTier
+		}
 		// Anthropic 上游在这一帧给 input_tokens，而本协议只有末尾一帧 usage，
 		// 不在这里收下就永远丢了。
 		if ev.Usage != nil {
@@ -122,6 +128,10 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		if ev.StopReason != "" {
 			e.stopReason = ev.StopReason
 		}
+		// 上游可能只在收尾帧给档位（非流式响应投影成事件时就是这样）。
+		if ev.ServiceTier != "" {
+			e.serviceTier = ev.ServiceTier
+		}
 		if ev.Usage != nil {
 			ir.MergeUsage(&e.usage, *ev.Usage)
 		}
@@ -161,6 +171,7 @@ func (e *streamEncoder) finish() ([][]byte, error) {
 	frame, err := e.marshal(wireResponse{
 		ID: e.messageID(), Object: chunkObject, Created: e.created,
 		Model: e.model, Choices: []wireChoice{}, Usage: &u,
+		ServiceTier: e.serviceTier,
 	})
 	if err != nil {
 		return nil, err
@@ -191,7 +202,8 @@ func (e *streamEncoder) toolSlot(blockIndex int) int {
 func (e *streamEncoder) chunk(delta wireMessage, finish string) ([][]byte, error) {
 	frame, err := e.marshal(wireResponse{
 		ID: e.messageID(), Object: chunkObject, Created: e.created, Model: e.model,
-		Choices: []wireChoice{{Index: 0, Delta: &delta, FinishReason: finish}},
+		Choices:     []wireChoice{{Index: 0, Delta: &delta, FinishReason: finish}},
+		ServiceTier: e.serviceTier,
 	})
 	if err != nil {
 		return nil, err
@@ -263,7 +275,8 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 		Choices: []wireChoice{{
 			Index: 0, Message: &msg, FinishReason: renderFinishReason(resp.StopReason),
 		}},
-		Usage: &u,
+		Usage:       &u,
+		ServiceTier: resp.ServiceTier,
 	}
 	if out.ID == "" {
 		out.ID = "chatcmpl-unknown"

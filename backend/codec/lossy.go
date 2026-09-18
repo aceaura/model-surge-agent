@@ -52,6 +52,12 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	filled := func(field, why string) {
 		notes[field] = fmt.Sprintf("filled in %s (%s requires it: %s)", field, name, why)
 	}
+	// unreturned 是第三种形态：字段照原样发给了上游、上游也会照办，
+	// 只是结果回不到客户端手里。既不是 dropped（没丢，发出去了）
+	// 也不是 filled（没兜底）。措辞混用会让读者以为换个目标就有。
+	unreturned := func(field, why string) {
+		notes[field] = fmt.Sprintf("forwarded %s but the result is not returned (%s)", field, why)
+	}
 
 	if len(req.Tools) > 0 && !caps.Tools {
 		note("tools", "no tool calling")
@@ -67,7 +73,7 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	if req.Thinking.On() && !caps.Thinking {
 		note("thinking", "no reasoning mode")
 	}
-	describeParamsLossy(req, caps, note, filled)
+	describeParamsLossy(req, caps, note, filled, unreturned)
 
 	describeBlocksLossy(req.System, name, caps, note)
 	for _, m := range req.Messages {
@@ -245,7 +251,7 @@ func ForeignSignature(t *ir.Thinking, name string) bool {
 // 这一批一律只报不拒：拒绝会把一个能用的回答换成零回答，而目标协议是
 // 调度层按策略选的、客户端无从预知，让它为一个自己控制不了的路由结果
 // 吃 400，故障归因方向是错的。要强制可以用模型配置的 overrides。
-func describeParamsLossy(req *ir.Request, caps Capabilities, note, filled func(field, why string)) {
+func describeParamsLossy(req *ir.Request, caps Capabilities, note, filled, unreturned func(field, why string)) {
 	if !caps.Penalties {
 		if req.PresencePenalty != nil {
 			note("presence_penalty", "no presence penalty parameter")
@@ -260,6 +266,9 @@ func describeParamsLossy(req *ir.Request, caps Capabilities, note, filled func(f
 	if req.Candidates != nil && !caps.Candidates {
 		// 措辞要说清后果：客户端按数组取第二个候选会越界，
 		// 笼统的 dropped n 读不出这一点。
+		//
+		// 目标支持该参数时这里刻意不报：上游会真的回多路，实际丢了
+		// 几路要到响应侧才知道，那个数字比「可能会丢」有用。两格互斥。
 		note("n", "no multi-candidate parameter, only one candidate will be returned")
 	}
 	if !caps.LogProbs {
@@ -269,6 +278,11 @@ func describeParamsLossy(req *ir.Request, caps Capabilities, note, filled func(f
 		if req.TopLogProbs != nil {
 			note("top_logprobs", "no log probability parameter")
 		}
+	} else if req.LogProbs != nil || req.TopLogProbs != nil {
+		// 目标支持、上游会算，但本服务的中立表示不承载按 token 的概率，
+		// 解码时丢掉。与「目标不支持」是两件事，措辞必须不同：
+		// 前者客户端换个目标就有，后者换谁都没有。
+		unreturned("logprobs", "per-token probabilities are not carried across protocols")
 	}
 	if len(req.LogitBias) > 0 && !caps.LogitBias {
 		// 不翻译：偏置的键是 token id，词表随模型而变，跨模型重映射
@@ -330,4 +344,35 @@ func MaxTokensFor(want int, caps Capabilities) (n int, ok bool, err error) {
 		return 0, false, fmt.Errorf("max_tokens is required by this protocol but no default is configured")
 	}
 	return caps.DefaultMaxTokens, true, nil
+}
+
+// DroppedCandidatesNote 是上游回了多路候选而中立表示只装得下一路的说明。
+//
+// 带上实际路数：客户端为全部候选付了 token 费用（上游的 usage 是按全部
+// 候选算的），只说「丢了些」看不出多付了多少。
+//
+// 一个流恒报一条：调用方须累计最大候选索引后只在收尾时调用本函数，
+// 逐帧生成会让每帧的数字不同、去重失效。
+func DroppedCandidatesNote(extra int) string {
+	return fmt.Sprintf("dropped %d extra response candidate(s): the neutral representation holds one", extra)
+}
+
+// maxFinishDetail 是上游收尾原因原文的保留字节数。
+// 说明会落库进流水，而原文长度不受本服务控制。
+const maxFinishDetail = 200
+
+// FinishDetailNote 是上游随 finish reason 附的人类可读原因被丢弃的说明。
+//
+// 原文必须带上：这条说明的全部价值就在原文里（比如具体触发了哪条安全
+// 策略），砍掉只剩「有个细节丢了」等于没说。
+func FinishDetailNote(detail string) string {
+	if len(detail) > maxFinishDetail {
+		detail = detail[:maxFinishDetail] + "..."
+	}
+	return "dropped the upstream finish detail: " + detail
+}
+
+// DroppedServiceTierNote 是上游回了执行档位而入站协议无处安放的说明。
+func DroppedServiceTierNote(name string) string {
+	return "dropped service_tier from the response (" + name + " has no such field)"
 }

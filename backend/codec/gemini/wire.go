@@ -130,6 +130,11 @@ type wireCandidate struct {
 	Content      *wireContent `json:"content,omitempty"`
 	FinishReason string       `json:"finishReason,omitempty"`
 	Index        int          `json:"index,omitempty"`
+	// FinishMessage 是上游随 finishReason 附的人类可读原因（比如具体
+	// 触发了哪条安全策略）。IR 的 StopReason 是五个枚举之一，装不下它，
+	// 所以只报说明、不改枚举——枚举已由 finishReason 决定，拿这里的
+	// 文本去改会让两个来源打架。
+	FinishMessage string `json:"finishMessage,omitempty"`
 }
 
 // wireFeedback 的 BlockReason 表示整个请求被安全策略拒了，

@@ -13,7 +13,8 @@ func ResponseEvents(resp *Response) []Event {
 	if resp == nil {
 		return nil
 	}
-	out := []Event{{Type: EvMessageStart, MessageID: resp.ID, Model: resp.Model}}
+	out := []Event{{Type: EvMessageStart, MessageID: resp.ID, Model: resp.Model,
+		ServiceTier: resp.ServiceTier}}
 	for i, b := range resp.Content {
 		out = append(out, blockEvents(i, b)...)
 	}

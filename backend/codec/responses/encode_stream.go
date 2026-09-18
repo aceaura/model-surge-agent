@@ -31,6 +31,8 @@ type streamEncoder struct {
 
 	stopReason ir.StopReason
 	usage      ir.Usage
+	// serviceTier 是上游回的执行档位，随 snapshot 一并写进 response 对象。
+	serviceTier string
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
 }
@@ -64,6 +66,10 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 	case ir.EvMessageStart:
 		e.id = ev.MessageID
 		e.model = ev.Model
+		// 档位要在 snapshot 之前收下：created 帧里的 response 对象就该带它。
+		if ev.ServiceTier != "" {
+			e.serviceTier = ev.ServiceTier
+		}
 		// Anthropic 上游在这一帧给 input_tokens，而本协议只在终止帧报用量，
 		// 不在这里收下就永远丢了。
 		if ev.Usage != nil {
@@ -148,6 +154,10 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 	case ir.EvMessageDelta:
 		if ev.StopReason != "" {
 			e.stopReason = ev.StopReason
+		}
+		// 上游可能只在收尾帧给档位。
+		if ev.ServiceTier != "" {
+			e.serviceTier = ev.ServiceTier
 		}
 		if ev.Usage != nil {
 			ir.MergeUsage(&e.usage, *ev.Usage)
@@ -347,10 +357,11 @@ func (e *streamEncoder) failedFrames(err *ir.Error) [][]byte {
 // 客户端 SDK 从这里取最终结果，而不是靠自己拼增量。
 func (e *streamEncoder) snapshot(status string) *wireResponse {
 	out := &wireResponse{
-		ID:     e.messageID(),
-		Object: "response",
-		Model:  e.model,
-		Status: status,
+		ID:          e.messageID(),
+		Object:      "response",
+		Model:       e.model,
+		Status:      status,
+		ServiceTier: e.serviceTier,
 	}
 	for _, index := range e.order {
 		if item := e.items[index]; item != nil {
@@ -449,6 +460,7 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 		Status:            status,
 		IncompleteDetails: incomplete,
 		Usage:             &u,
+		ServiceTier:       resp.ServiceTier,
 	}
 	if out.ID == "" {
 		out.ID = "resp_unknown"

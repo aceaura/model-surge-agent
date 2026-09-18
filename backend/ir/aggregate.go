@@ -32,6 +32,7 @@ func (a *Aggregator) Add(ev Event) {
 	case EvMessageStart:
 		a.resp.ID = ev.MessageID
 		a.resp.Model = ev.Model
+		a.mergeServiceTier(ev.ServiceTier)
 		if ev.Usage != nil {
 			a.mergeUsage(*ev.Usage)
 		}
@@ -89,6 +90,7 @@ func (a *Aggregator) Add(ev Event) {
 		if ev.StopReason != "" {
 			a.resp.StopReason = ev.StopReason
 		}
+		a.mergeServiceTier(ev.ServiceTier)
 		if ev.Usage != nil {
 			a.mergeUsage(*ev.Usage)
 		}
@@ -108,6 +110,14 @@ func (a *Aggregator) block(index int, kind BlockType) *Block {
 }
 
 func (a *Aggregator) mergeUsage(u Usage) { MergeUsage(&a.resp.Usage, u) }
+
+// mergeServiceTier 用「非空覆盖」，与 usage 的输入输出维度同口径：
+// 后到的那份更完整，而缺了这一维的帧不该把已收到的值清零。
+func (a *Aggregator) mergeServiceTier(tier string) {
+	if tier != "" {
+		a.resp.ServiceTier = tier
+	}
+}
 
 // IncompleteTools 返回入参被截断的工具调用 id。
 //

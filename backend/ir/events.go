@@ -40,10 +40,16 @@ type Event struct {
 	// 块上的 Thinking.SignatureFrom 不够用：流式编码器逐帧处理，块开始与
 	// 签名增量之间可能隔任意多帧，编码器手里只有当前这一帧，没有块的全貌，
 	// 判不出同族就会把异族签名照原样写给客户端。
-	SignatureFrom string     `json:"signature_from,omitempty"`
-	StopReason    StopReason `json:"stop_reason,omitempty"`
-	Usage         *Usage     `json:"usage,omitempty"`
-	MessageID     string     `json:"message_id,omitempty"`
-	Model         string     `json:"model,omitempty"`
-	Err           *Error     `json:"error,omitempty"`
+	SignatureFrom string `json:"signature_from,omitempty"`
+	// ServiceTier 可以出现在 EvMessageStart 或 EvMessageDelta 上。
+	//
+	// 两处都允许而不是钉死一处：chat_completions 把它放在每个 chunk 的
+	// 顶层，responses 放在 response 对象里、随 created 与 completed 两次
+	// 出现。哪一帧先到取决于上游，只认一处就会在另一种形态下丢。
+	ServiceTier string     `json:"service_tier,omitempty"`
+	StopReason  StopReason `json:"stop_reason,omitempty"`
+	Usage       *Usage     `json:"usage,omitempty"`
+	MessageID   string     `json:"message_id,omitempty"`
+	Model       string     `json:"model,omitempty"`
+	Err         *Error     `json:"error,omitempty"`
 }

@@ -202,6 +202,9 @@ type wireResponse struct {
 	// IncompleteDetails 的 reason 是本协议表达「因长度截断」的位置。
 	IncompleteDetails *wireIncomplete `json:"incomplete_details,omitempty"`
 	Error             *wireError      `json:"error,omitempty"`
+	// ServiceTier 是上游实际执行的档位，随 response.created 与
+	// response.completed 两帧各出现一次。
+	ServiceTier string `json:"service_tier,omitempty"`
 }
 
 type wireIncomplete struct {

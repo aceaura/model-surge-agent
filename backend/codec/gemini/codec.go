@@ -117,6 +117,12 @@ func (outboundCodec) NewStreamDecoder() codec.StreamDecoder { return newStreamDe
 
 func (outboundCodec) DecodeResponse(body []byte) (*ir.Response, error) { return DecodeResponse(body) }
 
+// DecodeResponseLossy 实现 codec.LossyResponseDecoder：本协议的响应里有
+// candidates 数组，且收尾原因可能附一段本服务装不下的人类可读说明。
+func (outboundCodec) DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
+	return DecodeResponseLossy(body)
+}
+
 func (outboundCodec) DecodeError(status int, body []byte) *ir.Error {
 	return DecodeError(status, body)
 }

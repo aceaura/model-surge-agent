@@ -64,4 +64,9 @@ type Response struct {
 	Content    []Block    `json:"content"`
 	StopReason StopReason `json:"stop_reason,omitempty"`
 	Usage      Usage      `json:"usage"`
+	// ServiceTier 是上游实际执行时所用的档位，原样回显。
+	//
+	// 绝不拿请求里的值兜底：客户端点了 flex 而上游降到 default 时，
+	// 兜底会把「降档了」伪装成「按你要的档位执行了」，而这一维决定计费。
+	ServiceTier string `json:"service_tier,omitempty"`
 }
