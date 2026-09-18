@@ -248,7 +248,40 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 | `error_code` | string | 错误种类（成功时为空） |
 | `error_message` | string | 错误文本（可能含上游原文；成功时为空） |
 | `sanitized` | string[] | 对客户端请求所做的畸形修复说明，如补配对的 `tool_result`、合并连续同角色消息；为空或不出现表示请求本身合法。指向客户端 bug |
-| `lossy` | string[] | 出站编码因目标协议表达不了而丢弃的字段说明，形如 `dropped top_k (chat_completions cannot express it: ...)`；为空或不出现表示无损转换。指向路由选型 |
+| `lossy` | string[] | 出站编码因目标协议表达不了而丢弃或改写的字段说明，形如 `dropped top_k (chat_completions cannot express it: ...)`；为空或不出现表示无损转换。指向路由选型 |
+
+#### 3.2.1 `sanitized` 的说明形态
+
+除请求体畸形修复外，工具声明治理也记在这里（与协议无关，任何目标协议都同样拒收）：
+
+| 形态 | 触发条件 |
+| --- | --- |
+| `dropped a tool declaration with an empty name` | 工具声明的 `name` 为空 |
+| `rewrote tool name %q to %q (illegal characters or over 64 bytes)` | 名字含 `[a-zA-Z0-9_.-]` 之外的字符（逐字符替换为 `_`），或超 64 字节（截为前 59 字符 + `_` + 名字 sha256 前 4 位十六进制；纯截断会让长前缀同名的工具撞车） |
+| `dropped a duplicate tool declaration named %q, kept the first` | 同名工具重复声明，保留首个 |
+
+改名会同步改写历史消息里对应的 `tool_use`，配对关系不受影响。
+
+#### 3.2.2 `lossy` 的说明形态
+
+请求侧结构调整按目标协议的能力位进行，写进 `lossy` 的形态：
+
+| 字段 | 形态 | 触发条件 |
+| --- | --- | --- |
+| `tool schema` | `dropped` | schema 含目标方言不接受的关键字（如 gemini 下的 `minLength`、`additionalProperties`），说明里列出被剔除的关键字名 |
+| `tool schema` | `dropped` | schema 嵌套超过归一深度上限，更深的子树原样透传 |
+| `tool schema` | `rewrote` | schema 不是合法 JSON，整体替换为空对象 schema（工具降级为无参数可调用） |
+| `tool schema` | `rewrote` | schema 顶层缺 `type`，补为 `object`（原有 `properties` 保留） |
+| `tool_choice` | `dropped` | 请求最终没有任何工具，而目标协议一律拒收此组合 |
+| `tool_choice` | `rewrote` | 指名的工具未在本请求声明，降级为 `auto` |
+| `system media` | `rewrote` | 目标协议的系统提示只承载单一字符串，附件改写为说明性文本 |
+| `<type> blocks in system` | `dropped` | 同上，且该块类型无文本可降级 |
+| `thinking` | `dropped` | `max_tokens` 太小，推理预算无法同时满足「不低于协议下限」与「小于 max_tokens」 |
+| `temperature/top_p` | `dropped` | 目标协议要求推理开启时不得带采样参数 |
+| `stop_sequences` | `dropped` | 条数超过协议上限，截断至上限 |
+| `cache_control` | `dropped` | 缓存断点数超过协议上限，丢弃最靠前的若干个（靠后的断点覆盖更长前缀，命中时省得更多） |
+
+只有真的丢掉约束才记进 `lossy`。把同一约束换个写法不记——`type` 大写化、联合类型折叠成 `nullable` 都属于此类。原因是这个字段的用途是指向路由选型：若每个带工具的 gemini 请求都恒定带一条说明，它就再也指不出哪条路由真的削弱了请求。
 
 ### 3.3 LiveEntry
 

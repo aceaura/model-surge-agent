@@ -46,6 +46,8 @@ func (outboundCodec) Caps() codec.Capabilities {
 		Tools:         true,
 		Images:        true,
 		StopSequences: true,
+		// 官方 stop 数组至多 4 项，超出即 400。
+		MaxStopSequences: 4,
 		// 图片走 image_url，wav/mp3 走 input_audio，其余走 file。
 		// input_audio 只认这两种格式名，别的音频只能降级。
 		MediaTypes: []string{
@@ -64,11 +66,17 @@ func (c outboundCodec) EncodeRequest(req *ir.Request) ([]byte, error) {
 }
 
 func (outboundCodec) EncodeRequestLossy(req *ir.Request) ([]byte, []string, error) {
-	body, err := EncodeRequest(req)
+	caps := outboundCodec{}.Caps()
+	// 在副本上做结构调整：调用方的请求要留着换目标重试，不能被本次编码改写。
+	shaped := req.Clone()
+	shapeNotes := codec.ShapeRequest(shaped, Name, caps)
+	body, err := EncodeRequest(shaped)
 	if err != nil {
 		return nil, nil, err
 	}
-	return body, codec.DescribeLossy(req, Name, outboundCodec{}.Caps()), nil
+	// 诊断按原始请求推导：shape 已把部分字段降级掉，拿改写后的请求去推
+	// 会漏报本该报的丢弃。
+	return body, codec.MergeNotes(codec.DescribeLossy(req, Name, caps), shapeNotes), nil
 }
 
 // Endpoint 的 stream 参数不影响路径：流式由请求体的 stream 字段决定。

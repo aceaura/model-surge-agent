@@ -7,8 +7,9 @@ import (
 
 // Sanitize 原地修复请求中会被上游拒收的畸形，返回人类可读的诊断说明。
 //
-// 修的是四类真实会打挂一轮对话的问题：孤儿工具结果、错序的工具结果、
-// 无人应答的工具调用、空内容消息。上游对这些普遍回不可重试的 400，
+// 修的是五类真实会打挂一轮对话的问题：畸形的工具声明（空名、重名、
+// 非法字符、超长）、孤儿工具结果、错序的工具结果、无人应答的工具调用、
+// 空内容消息。上游对这些普遍回不可重试的 400，
 // 而不可重试意味着换目标也救不回来，只能在发出前修好。
 //
 // 无畸形时不改动任何字段并返回 nil：改动会破坏上游的 prompt cache 前缀，
@@ -18,6 +19,9 @@ func Sanitize(r *Request) []string {
 		return nil
 	}
 	var notes []string
+	// 声明治理排在配对治理之前：它会改写工具名并同步历史里的 tool_use，
+	// 后续的配对判定应该看到改写后的名字。
+	notes = append(notes, governToolDecls(r)...)
 	notes = append(notes, pairTools(r)...)
 	notes = append(notes, pruneEmpty(r)...)
 	return notes

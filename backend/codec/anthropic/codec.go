@@ -48,6 +48,13 @@ func (outboundCodec) Caps() codec.Capabilities {
 		CacheControl:  true,
 		TopK:          true,
 		StopSequences: true,
+		// 官方限定至多 4 个 cache_control 断点，超出即 400。
+		CacheBreakpoints: 4,
+		// 开启 thinking 时 temperature / top_p 必须缺席。
+		ThinkingExcludesSampling: true,
+		// 预算低于 1024 会被拒；预算还必须小于 max_tokens。
+		MinThinkingBudget: 1024,
+		// SchemaDialect 留零值：本协议接受完整 JSON Schema。
 		// 本协议只读图片与 PDF；音频与其他附件在编码时降级为文本。
 		MediaTypes: []string{
 			"image/png", "image/jpeg", "image/gif", "image/webp",
@@ -64,11 +71,17 @@ func (c outboundCodec) EncodeRequest(req *ir.Request) ([]byte, error) {
 }
 
 func (outboundCodec) EncodeRequestLossy(req *ir.Request) ([]byte, []string, error) {
-	body, err := EncodeRequest(req)
+	caps := outboundCodec{}.Caps()
+	// 在副本上做结构调整：调用方的请求要留着换目标重试，不能被本次编码改写。
+	shaped := req.Clone()
+	shapeNotes := codec.ShapeRequest(shaped, Name, caps)
+	body, err := EncodeRequest(shaped)
 	if err != nil {
 		return nil, nil, err
 	}
-	return body, codec.DescribeLossy(req, Name, outboundCodec{}.Caps()), nil
+	// 诊断按原始请求推导：shape 已把部分字段降级掉，拿改写后的请求去推
+	// 会漏报本该报的丢弃。
+	return body, codec.MergeNotes(codec.DescribeLossy(req, Name, caps), shapeNotes), nil
 }
 
 // Endpoint 的 stream 参数在本协议下不影响路径：流式由请求体的 stream 字段决定。

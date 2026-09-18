@@ -47,6 +47,8 @@ func (outboundCodec) Caps() codec.Capabilities {
 		ThinkingSig: true,
 		Tools:       true,
 		Images:      true,
+		// instructions 是单一字符串，system 里的非文本块必须先降级成文本。
+		SystemAsText: true,
 		// 图片走 input_image，wav/mp3 走 input_audio，其余走 input_file。
 		MediaTypes: []string{
 			"image/png", "image/jpeg", "image/gif", "image/webp",
@@ -64,11 +66,17 @@ func (c outboundCodec) EncodeRequest(req *ir.Request) ([]byte, error) {
 }
 
 func (outboundCodec) EncodeRequestLossy(req *ir.Request) ([]byte, []string, error) {
-	body, err := EncodeRequest(req)
+	caps := outboundCodec{}.Caps()
+	// 在副本上做结构调整：调用方的请求要留着换目标重试，不能被本次编码改写。
+	shaped := req.Clone()
+	shapeNotes := codec.ShapeRequest(shaped, Name, caps)
+	body, err := EncodeRequest(shaped)
 	if err != nil {
 		return nil, nil, err
 	}
-	return body, codec.DescribeLossy(req, Name, outboundCodec{}.Caps()), nil
+	// 诊断按原始请求推导：shape 已把部分字段降级掉，拿改写后的请求去推
+	// 会漏报本该报的丢弃。
+	return body, codec.MergeNotes(codec.DescribeLossy(req, Name, caps), shapeNotes), nil
 }
 
 // Endpoint 的 stream 参数不影响路径：流式由请求体的 stream 字段决定。

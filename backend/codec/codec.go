@@ -7,6 +7,7 @@ package codec
 import (
 	"strings"
 
+	"github.com/aceaura/model-surge-agent/backend/codec/schemadialect"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
@@ -61,6 +62,25 @@ type Capabilities struct {
 	// 白名单而非黑名单：上游对不认得的类型多回不可重试的 400，
 	// 而不可重试意味着换目标也救不回来，只能在发出前降级。
 	MediaTypes []string
+
+	// SchemaDialect 描述本协议对工具 schema 的接受范围。零值表示全盘接受。
+	SchemaDialect schemadialect.Dialect
+	// CacheBreakpoints 是 cache_control 断点数量上限。
+	// 0 表示不支持断点（由 CacheControl 位表达），负数表示无上限。
+	CacheBreakpoints int
+	// MaxStopSequences 是停止序列数量上限。0 表示无上限。
+	MaxStopSequences int
+	// ThinkingExcludesSampling 为真表示开启推理时不得同时发
+	// temperature / top_p，同发会拿到不可重试的 400。
+	ThinkingExcludesSampling bool
+	// MinThinkingBudget 是推理预算的下限。0 表示无下限。
+	// 预算还必须低于 max_tokens，两个约束在 max_tokens 过小时无解，
+	// 此时只能关掉推理。
+	MinThinkingBudget int
+	// SystemAsText 为真表示本协议把系统提示承载为单一字符串
+	// （responses 的 instructions、gemini 的 systemInstruction），
+	// 因此 system 里的非文本块必须先降级成文本才不会丢。
+	SystemAsText bool
 }
 
 // AcceptsMedia 判断本协议能否原生承载该 media type。

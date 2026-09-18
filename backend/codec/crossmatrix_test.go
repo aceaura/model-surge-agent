@@ -1625,10 +1625,13 @@ type lossyProbe struct {
 	expressible func(codec.Capabilities) bool
 }
 
+// probeRequest 的 max_tokens 取 8192 而非一个小值：anthropic 要求推理预算
+// 同时不低于 1024 且小于 max_tokens，max_tokens 太小时两个约束无解，
+// shapeParams 会（正确地）关掉 thinking，thinking 探针就测不到能力位了。
 func probeRequest(blocks ...ir.Block) *ir.Request {
 	return &ir.Request{
 		Model:     "native",
-		MaxTokens: 256,
+		MaxTokens: 8192,
 		Messages: []ir.Message{
 			{Role: ir.RoleUser, Content: []ir.Block{{Type: ir.BlockText, Text: "hi"}}},
 			{Role: ir.RoleAssistant, Content: blocks},

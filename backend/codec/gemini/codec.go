@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/aceaura/model-surge-agent/backend/codec"
+	"github.com/aceaura/model-surge-agent/backend/codec/schemadialect"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
@@ -33,6 +34,21 @@ func (outboundCodec) Caps() codec.Capabilities {
 		Images:        true,
 		TopK:          true,
 		StopSequences: true,
+		// systemInstruction 是单一 Content，system 里的非文本块必须先降级成文本。
+		SystemAsText: true,
+		// 本协议的 schema 是 OpenAPI 3.0 子集，不是完整 JSON Schema：
+		// 表外关键字会被当成未知字段拒收（400 Invalid JSON payload），
+		// type 取值必须大写，也不接受联合 type 数组。
+		SchemaDialect: schemadialect.Dialect{
+			Drop: []string{
+				"$schema", "$id", "additionalProperties", "patternProperties",
+				"minLength", "maxLength", "minItems", "maxItems",
+				"exclusiveMinimum", "exclusiveMaximum", "deprecated", "title",
+			},
+			UppercaseType:       true,
+			CollapseUnionType:   true,
+			OmitEmptyProperties: true,
+		},
 		// 本协议的 mimeType 是必填项且上游按白名单校验，
 		// 不在表里的类型发出去会拿到不可重试的 400。
 		MediaTypes: []string{
@@ -55,11 +71,17 @@ func (c outboundCodec) EncodeRequest(req *ir.Request) ([]byte, error) {
 }
 
 func (outboundCodec) EncodeRequestLossy(req *ir.Request) ([]byte, []string, error) {
-	body, err := EncodeRequest(req)
+	caps := outboundCodec{}.Caps()
+	// 在副本上做结构调整：调用方的请求要留着换目标重试，不能被本次编码改写。
+	shaped := req.Clone()
+	shapeNotes := codec.ShapeRequest(shaped, Name, caps)
+	body, err := EncodeRequest(shaped)
 	if err != nil {
 		return nil, nil, err
 	}
-	return body, codec.DescribeLossy(req, Name, outboundCodec{}.Caps()), nil
+	// 诊断按原始请求推导：shape 已把部分字段降级掉，拿改写后的请求去推
+	// 会漏报本该报的丢弃。
+	return body, codec.MergeNotes(codec.DescribeLossy(req, Name, caps), shapeNotes), nil
 }
 
 // Endpoint 与另外三个协议不同：模型名进路径，流式换方法名并加 alt=sse。

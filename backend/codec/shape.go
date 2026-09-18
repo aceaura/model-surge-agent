@@ -1,0 +1,325 @@
+package codec
+
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/aceaura/model-surge-agent/backend/codec/schemadialect"
+	"github.com/aceaura/model-surge-agent/backend/ir"
+)
+
+// emptyObjectSchema 是工具 schema 的兜底形态。
+//
+// 补齐而非省略：anthropic 的 input_schema 必填，gemini 又要求 type 存在，
+// 省略字段会拿到不可重试的 400。而「无参数可调用的工具」至少还能被调用。
+const emptyObjectSchema = `{"type":"object","properties":{}}`
+
+// ShapeRequest 按目标协议的结构约束调整请求，返回有损说明。
+//
+// 本函数原地改写 req，调用方须传入自己拥有的副本。
+//
+// 四个阶段的顺序不可交换：tool_choice 的校验依赖 shapeTools 定下的最终
+// 工具集合（被丢弃的工具不能再被指向），采样参数的取舍依赖 thinking
+// 是否已被关闭，断点预算依赖 system 折叠后的最终块布局。
+//
+// 不返回 error：每个分支都有确定的降级路径。返回 error 会逼调用方在
+// 「整轮失败」与「忽略错误」之间二选一，而两者都比降级差。
+func ShapeRequest(req *ir.Request, name string, caps Capabilities) []string {
+	if req == nil {
+		return nil
+	}
+	c := &noteCollector{name: name}
+	shapeTools(req, caps, c)
+	shapeParams(req, caps, c)
+	shapeSystem(req, caps, c)
+	budgetCache(req, caps, c)
+	return c.notes()
+}
+
+// noteCollector 按字段名去重：同一字段在多个工具或多条消息上被改写只报一条。
+type noteCollector struct {
+	name string
+	seen map[string]string
+}
+
+func (c *noteCollector) drop(field, why string) {
+	c.put(field, fmt.Sprintf("dropped %s (%s cannot express it: %s)", field, c.name, why))
+}
+
+func (c *noteCollector) rewrite(field, why string) {
+	c.put(field, fmt.Sprintf("rewrote %s (%s cannot express it: %s)", field, c.name, why))
+}
+
+func (c *noteCollector) put(field, text string) {
+	if c.seen == nil {
+		c.seen = map[string]string{}
+	}
+	// 先到先得：同一字段上第一条原因通常是更具体的那条
+	// （方言剔除先于兜底补齐）。
+	if _, ok := c.seen[field]; !ok {
+		c.seen[field] = text
+	}
+}
+
+func (c *noteCollector) notes() []string {
+	if len(c.seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(c.seen))
+	for _, v := range c.seen {
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// MergeNotes 合并多组有损说明，去重后排序。
+func MergeNotes(groups ...[]string) []string {
+	seen := map[string]bool{}
+	for _, g := range groups {
+		for _, n := range g {
+			seen[n] = true
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// shapeTools 归一工具 schema，并把 tool_choice 校正到与最终工具集合相容。
+func shapeTools(req *ir.Request, caps Capabilities, c *noteCollector) {
+	for i := range req.Tools {
+		shapeToolSchema(&req.Tools[i], caps, c)
+	}
+	shapeToolChoice(req, c)
+}
+
+func shapeToolSchema(t *ir.Tool, caps Capabilities, c *noteCollector) {
+	raw := strings.TrimSpace(t.Schema)
+	// 合法性判定不走 Normalize：方言为空时它直接原样返回，坏字节会一路
+	// 送到编码器里炸成不可重试的错。schema 坏了不等于这轮对话没救，
+	// 把工具降级成「无参数可调用」比整轮 400 对用户更有用。
+	if raw != "" && !json.Valid([]byte(raw)) {
+		c.rewrite("tool schema", "schema is not valid JSON, replaced with an empty object schema")
+		t.Schema = emptyObjectSchema
+		return
+	}
+	if raw == "" {
+		t.Schema = emptyObjectSchema
+		raw = emptyObjectSchema
+	} else if filled, ok := fillObjectType(raw); ok {
+		// 缺 type 的 schema 在 anthropic 与 gemini 都会被拒。只补 type 而不是
+		// 整体换成空对象：原有的 properties 是模型填参的唯一依据，换掉等于
+		// 把工具变成无参可调。
+		c.rewrite("tool schema", "schema declares no top-level type, filled in as an object")
+		t.Schema = filled
+		raw = filled
+	}
+
+	res, err := schemadialect.Normalize([]byte(raw), caps.SchemaDialect)
+	if err != nil {
+		c.rewrite("tool schema", "schema is not valid JSON, replaced with an empty object schema")
+		t.Schema = emptyObjectSchema
+		return
+	}
+	if res.Omit {
+		// 空 properties 的 parameters 会被本协议拒收，整体省略。
+		// 不报有损：没有参数的工具省掉 parameters 没丢任何约束。
+		t.Schema = ""
+		return
+	}
+	if res.Changed {
+		t.Schema = string(res.Out)
+	}
+	if res.Truncated {
+		c.drop("tool schema", "schema nesting exceeds the normalization depth cap, deeper subtrees passed through as-is")
+	}
+	// 只有被剔除的关键字才是真丢了约束。type 大写化与联合折叠是把同一
+	// 约束换个写法，报进有损会让 gemini 的每个带工具请求都带一条说明，
+	// 那个字段就再也指不出哪条路由真的削弱了请求。
+	if len(res.DroppedKeys) > 0 {
+		c.drop("tool schema", "schema keywords not in this protocol's dialect: "+strings.Join(res.DroppedKeys, ", "))
+	}
+}
+
+// fillObjectType 在 schema 顶层缺 type 时补上 object，返回补齐后的字节。
+// 已有 type、或根不是 JSON 对象时返回 ok=false，调用方照原样使用。
+//
+// 只看顶层：子 schema 缺 type 上游多能容忍，顶层缺则一定被拒。
+func fillObjectType(raw string) (string, bool) {
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+		return "", false
+	}
+	if _, ok := obj["type"]; ok {
+		return "", false
+	}
+	obj["type"] = "object"
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return "", false
+	}
+	return string(out), true
+}
+
+func shapeToolChoice(req *ir.Request, c *noteCollector) {
+	if req.ToolChoice == nil {
+		return
+	}
+	if len(req.Tools) == 0 {
+		// 上游一律回「tool_choice is only allowed when tools are specified」，
+		// 且这是不可重试的 400。
+		c.drop("tool_choice", "no tools remain in the request")
+		req.ToolChoice = nil
+		return
+	}
+	if req.ToolChoice.Mode != ir.ToolChoiceTool {
+		return
+	}
+	for _, t := range req.Tools {
+		if t.Name == req.ToolChoice.Name {
+			return
+		}
+	}
+	// 指向未声明的工具同样是不可重试的 400。降级 auto 而非丢弃：
+	// 客户端的意图是「要用工具」，auto 比完全不给保留得更多。
+	c.rewrite("tool_choice", "the named tool is not declared in this request, downgraded to auto")
+	req.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceAuto}
+}
+
+// shapeParams 解开参数互斥并套上数量上限。
+func shapeParams(req *ir.Request, caps Capabilities, c *noteCollector) {
+	thinkingOn := req.Thinking != nil && req.Thinking.Enabled && caps.Thinking
+
+	if thinkingOn && caps.MinThinkingBudget > 0 && req.MaxTokens > 0 &&
+		req.MaxTokens-1 < caps.MinThinkingBudget {
+		// 预算必须同时低于 max_tokens 且不低于协议下限，两个约束在
+		// max_tokens 过小时无解。关掉 thinking 保住这一轮，
+		// 而不是发一个注定被拒的请求。
+		c.drop("thinking", "max_tokens leaves no room for this protocol's minimum reasoning budget")
+		req.Thinking = nil
+		thinkingOn = false
+	}
+
+	if thinkingOn && caps.ThinkingExcludesSampling {
+		if req.Temperature != nil || req.TopP != nil {
+			c.drop("temperature/top_p", "sampling parameters must be absent while reasoning is enabled")
+			req.Temperature = nil
+			req.TopP = nil
+		}
+	}
+
+	if caps.MaxStopSequences > 0 && len(req.StopSequences) > caps.MaxStopSequences {
+		c.drop("stop_sequences", fmt.Sprintf("at most %d stop sequences", caps.MaxStopSequences))
+		req.StopSequences = req.StopSequences[:caps.MaxStopSequences]
+	}
+}
+
+// shapeSystem 把系统提示折成本协议能承载的形态。
+//
+// 清空块对所有协议生效。折成单一字符串只对 SystemAsText 的协议生效：
+// 那些协议的编码器只会取文本块，非文本块会被静默吃掉——客户端放在
+// system 里的截图就这样消失了。
+func shapeSystem(req *ir.Request, caps Capabilities, c *noteCollector) {
+	// 空文本块先清掉，与协议无关：写出 system:[{"type":"text"}] 或空字符串
+	// 会被部分上游拒收，而空块本身不承载任何信息，清掉不算有损。
+	kept := req.System[:0]
+	for _, b := range req.System {
+		if b.Type == ir.BlockText && b.Text == "" {
+			continue
+		}
+		kept = append(kept, b)
+	}
+	req.System = kept
+	if len(req.System) == 0 {
+		req.System = nil
+		return
+	}
+	if !caps.SystemAsText {
+		return
+	}
+	parts := make([]string, 0, len(req.System))
+	cacheCtl := ""
+	for _, b := range req.System {
+		switch {
+		case b.Type == ir.BlockText:
+			if b.Text != "" {
+				parts = append(parts, b.Text)
+			}
+		case b.Type.IsMedia():
+			c.rewrite("system media", "system prompts carry text only, attachment described in words instead")
+			parts = append(parts, DowngradeMedia(b).Text)
+		default:
+			c.drop(string(b.Type)+" blocks in system", "system prompts carry text only")
+		}
+		if b.CacheCtl != "" {
+			cacheCtl = b.CacheCtl
+		}
+	}
+	if len(parts) == 0 {
+		// 空 system 不写字段：写出空字符串或空 parts 数组会被部分上游拒收。
+		req.System = nil
+		return
+	}
+	// 折成一块并以空行分隔：编码器的 joinText 无分隔拼接，
+	// 分隔符必须在这里就写进文本，否则相邻两段会粘成一句。
+	req.System = []ir.Block{{
+		Type:     ir.BlockText,
+		Text:     strings.Join(parts, "\n\n"),
+		CacheCtl: cacheCtl,
+	}}
+}
+
+// budgetCache 把缓存断点裁到协议上限内。
+//
+// 只裁不加：主动注入断点需要知道模型的缓存最小 token 数与计费策略，
+// 那属于上游配置层的知识，不在 codec 的职责范围。
+func budgetCache(req *ir.Request, caps Capabilities, c *noteCollector) {
+	if caps.CacheBreakpoints <= 0 {
+		// 不支持断点的协议由 DescribeLossy 统一报，避免同一件事报两条。
+		return
+	}
+	marked := collectCacheMarks(req)
+	excess := len(marked) - caps.CacheBreakpoints
+	if excess <= 0 {
+		return
+	}
+	// 从最靠前的开始丢：靠后的断点覆盖更长的前缀，命中时省得更多。
+	for i := 0; i < excess; i++ {
+		*marked[i] = ""
+	}
+	c.drop("cache_control", fmt.Sprintf("at most %d cache breakpoints, earliest ones dropped", caps.CacheBreakpoints))
+}
+
+// collectCacheMarks 按出现顺序收集所有带断点的块，返回可写指针。
+func collectCacheMarks(req *ir.Request) []*string {
+	var out []*string
+	walk := func(blocks []ir.Block) {
+		for i := range blocks {
+			if blocks[i].CacheCtl != "" {
+				out = append(out, &blocks[i].CacheCtl)
+			}
+			if blocks[i].ToolResult != nil {
+				for j := range blocks[i].ToolResult.Content {
+					nested := &blocks[i].ToolResult.Content[j]
+					if nested.CacheCtl != "" {
+						out = append(out, &nested.CacheCtl)
+					}
+				}
+			}
+		}
+	}
+	walk(req.System)
+	for i := range req.Messages {
+		walk(req.Messages[i].Content)
+	}
+	return out
+}
