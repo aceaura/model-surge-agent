@@ -124,3 +124,40 @@ func TestOptionalOverridesTakeEffect(t *testing.T) {
 		t.Errorf("config = %+v", c)
 	}
 }
+
+// TestCORSOriginsDefaultToOpen 钉住不配就是放开所有来源。
+//
+// 默认放开而不是默认全拦：数据面本来就必须部署在受信网络或反代之后
+// （它不做自身鉴权），再加一层 CORS 默认拦只会让浏览器端的调试莫名失败。
+func TestCORSOriginsDefaultToOpen(t *testing.T) {
+	setRequired(t)
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(c.CORSOrigins) != 0 {
+		t.Errorf("cors origins = %v, want empty (open)", c.CORSOrigins)
+	}
+}
+
+// TestCORSOriginsSplitAndTrim 钉住列表解析。
+//
+// 空项必须丢掉：尾逗号留下的空来源永远匹配不上任何 Origin，
+// 看起来像配了其实没生效。
+func TestCORSOriginsSplitAndTrim(t *testing.T) {
+	setRequired(t)
+	t.Setenv("MSA_CORS_ORIGINS", " https://a.example.com , https://b.example.com ,")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"https://a.example.com", "https://b.example.com"}
+	if len(c.CORSOrigins) != len(want) {
+		t.Fatalf("cors origins = %v, want %v", c.CORSOrigins, want)
+	}
+	for i, w := range want {
+		if c.CORSOrigins[i] != w {
+			t.Errorf("origin[%d] = %q, want %q", i, c.CORSOrigins[i], w)
+		}
+	}
+}

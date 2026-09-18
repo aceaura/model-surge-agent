@@ -34,6 +34,10 @@ type Config struct {
 	EstimateUsage bool
 	AccessLog     bool
 	LogRetention  time.Duration
+
+	// CORSOrigins 是允许跨域的来源。空或含 "*" 表示放开所有来源，
+	// 此时不发 Allow-Credentials——浏览器拒绝 `*` 与凭据并存。
+	CORSOrigins []string
 }
 
 // Load 收集所有问题一次报全，而不是逐个失败：改配置的人通常在容器日志里
@@ -85,6 +89,7 @@ func Load() (Config, error) {
 	c.EstimateUsage = boolOr(&errs, "MSA_ESTIMATE_USAGE", true)
 	c.AccessLog = boolOr(&errs, "MSA_ACCESS_LOG", true)
 	c.LogRetention = durationOr(&errs, "MSA_LOG_RETENTION", 14*24*time.Hour)
+	c.CORSOrigins = listOr("MSA_CORS_ORIGINS")
 
 	if len(errs) > 0 {
 		return Config{}, errors.Join(errs...)
@@ -97,6 +102,20 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// listOr 读一个逗号分隔的列表，空项丢掉。
+//
+// 丢空项是为了容忍 "a,b," 这种尾逗号：留着会变成一个空字符串来源，
+// 而空来源永远匹配不上任何 Origin，看起来像配了其实没生效。
+func listOr(key string) []string {
+	var out []string
+	for _, part := range strings.Split(os.Getenv(key), ",") {
+		if v := strings.TrimSpace(part); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func intOr(errs *[]error, key string, fallback int) int {

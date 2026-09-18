@@ -101,11 +101,22 @@ func TestEveryPathAliasReachesTheRightInboundProtocol(t *testing.T) {
 func TestGeminiHasNoInboundEndpoint(t *testing.T) {
 	// gemini 只作为上游协议存在。开一个入站端点就得实现它的入站 codec，
 	// 而没有客户端需要本服务扮演 gemini。
+	//
+	// /v1beta/models/... 回 405 而非 404：单模型查询占了这个前缀的 GET，
+	// 于是 POST 变成方法不匹配。两个码都表示「这里没有对话端点」，而 405
+	// 还带 Allow: GET，比 404 更能说明这个前缀上到底有什么。
 	f := newFixture(t)
-	for _, path := range []string{"/v1beta/models/x:generateContent", "/gemini/v1/messages"} {
+	cases := map[string]int{
+		"/v1beta/models/x:generateContent": http.StatusMethodNotAllowed,
+		"/gemini/v1/messages":              http.StatusNotFound,
+	}
+	for path, want := range cases {
 		resp := f.post(t, path, `{}`, nil)
-		if resp.Code != http.StatusNotFound {
-			t.Errorf("%s: status = %d, want 404", path, resp.Code)
+		if resp.Code != want {
+			t.Errorf("%s: status = %d, want %d", path, resp.Code, want)
+		}
+		if len(f.relay.Dispatches()) != 0 {
+			t.Errorf("%s: must not dispatch", path)
 		}
 	}
 }
@@ -213,16 +224,17 @@ func TestCountTokensEstimatesLocallyWithoutTouchingUpstream(t *testing.T) {
 }
 
 func TestModelListShapeFollowsTheRequestPath(t *testing.T) {
-	// 清单外形按路径决定：SDK 解析不出自己认识的字段名会直接报错。
+	// 带族前缀的路径外形固定：SDK 解析不出自己认识的字段名会直接报错。
+	// 不带族前缀的 /v1/models 与 /models 两族都会打，外形按请求头推断，
+	// 那几条在 manifest_test.go 里。
 	cases := []struct {
 		path       string
 		wantKeys   []string
 		wantAbsent string
 	}{
-		{"/v1/models", []string{`"display_name"`, `"has_more"`}, `"object":"list"`},
-		{"/anthropic/v1/models", []string{`"display_name"`}, `"object":"list"`},
+		{"/anthropic/v1/models", []string{`"display_name"`, `"has_more"`}, `"object":"list"`},
 		{"/openai/v1/models", []string{`"object":"list"`, `"owned_by"`}, `"display_name"`},
-		{"/models", []string{`"object":"list"`, `"owned_by"`}, `"display_name"`},
+		{"/v1beta/models", []string{`"models"`, `"supportedGenerationMethods"`}, `"object":"list"`},
 	}
 	for _, c := range cases {
 		t.Run(c.path, func(t *testing.T) {
@@ -363,6 +375,12 @@ func newFixture(t *testing.T, maxBody ...int64) *fixture {
 // 改目标而不是暴露 relaymock 的 steps：目标是在 mock 构造时定下的，
 // 事后改字段要么得导出内部切片，要么在服务已经起来之后改共享状态。
 func newFixtureWithTarget(t *testing.T, tune func(*relayclient.Target), maxBody ...int64) *fixture {
+	return newFixtureTuned(t, tune, nil, maxBody...)
+}
+
+// newFixtureTuned 同上，另外可以改服务本身的配置。
+func newFixtureTuned(t *testing.T, tune func(*relayclient.Target),
+	tuneServer func(*httpapi.Server), maxBody ...int64) *fixture {
 	t.Helper()
 
 	spy := &upstreamSpy{}
@@ -409,6 +427,9 @@ func newFixtureWithTarget(t *testing.T, tune func(*relayclient.Target), maxBody 
 		Recorder:     rec,
 		MaxBodyBytes: limit,
 	}
+	if tuneServer != nil {
+		tuneServer(srv)
+	}
 	f.handler = srv.Handler()
 	return f
 }
@@ -426,9 +447,32 @@ func (f *fixture) post(t *testing.T, path, body string, headers map[string]strin
 }
 
 func (f *fixture) get(t *testing.T, path string) *httptest.ResponseRecorder {
+	return f.getWith(t, path, nil)
+}
+
+// getWith 带头发 GET。清单外形按头推断，那几条用例必须能自定头。
+func (f *fixture) getWith(t *testing.T, path string,
+	headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
+	r := httptest.NewRequest(http.MethodGet, path, nil)
+	for k, v := range headers {
+		r.Header.Set(k, v)
+	}
 	w := httptest.NewRecorder()
-	f.handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+	f.handler.ServeHTTP(w, r)
+	return w
+}
+
+// do 发一个任意方法、任意头的无体请求。预检用它。
+func (f *fixture) do(t *testing.T, method, path string,
+	headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(method, path, nil)
+	for k, v := range headers {
+		r.Header.Set(k, v)
+	}
+	w := httptest.NewRecorder()
+	f.handler.ServeHTTP(w, r)
 	return w
 }
 

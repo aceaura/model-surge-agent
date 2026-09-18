@@ -43,15 +43,27 @@ var responsesPaths = []string{
 
 // modelPaths 把清单路径映射到要渲染成哪个协议的外形。
 //
-// 外形按请求路径而非按 Accept 决定：清单的字段名各家不同（Anthropic 的
-// display_name 与 OpenAI 的 owned_by），SDK 解析不出自己认识的形状就会报错。
+// 清单的字段名各家不同（Anthropic 的 display_name、OpenAI 的 owned_by、
+// Gemini 的 displayName），SDK 解析不出自己认识的形状就会报错。
+//
+// 带族前缀的路径钉死外形，无前缀的取 familyAuto 按请求头推断：/v1/models
+// 与 /models 是两族 SDK 共用的路径，钉死任一族都会让另一族解析失败。
+// 判定见 clientFamily。
 var modelPaths = map[string]string{
-	"/v1/models":           codec.ProtocolAnthropic,
-	"/v1/v1/models":        codec.ProtocolAnthropic,
+	"/v1/models":           familyAuto,
+	"/v1/v1/models":        familyAuto,
+	"/models":              familyAuto,
 	"/anthropic/v1/models": codec.ProtocolAnthropic,
 	"/openai/v1/models":    codec.ProtocolChatCompletions,
-	"/models":              codec.ProtocolChatCompletions,
+	// 只有 Gemini 客户端会打 /v1beta，无需推断。
+	"/v1beta/models": codec.ProtocolGemini,
 }
+
+// modelIDSuffix 是单模型查询在清单路径之后的那一段。
+//
+// 用 {id...} 通配而非 {id}：Gemini 客户端会把清单里的资源名 models/xxx
+// 原样回传，那里面带斜杠，单段模式匹配不到。
+const modelIDSuffix = "/{id...}"
 
 // register 把一组别名指向同一个处理函数，并限定方法。
 func register(mux *http.ServeMux, method string, paths []string, h http.HandlerFunc) {

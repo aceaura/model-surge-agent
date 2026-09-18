@@ -33,7 +33,7 @@
 
 | 面 | 路径前缀 | 鉴权 | 面向 |
 |---|---|---|---|
-| 公共数据面 | `/v1/*`、`/anthropic/*`、`/openai/*`、`/messages`、`/models` 等（见 [5.1](#51-路径别名与协议识别)） | 无自身鉴权；客户端凭据转发调度层比对 | 终端客户端（SDK、CLI、IDE 插件） |
+| 公共数据面 | `/v1/*`、`/anthropic/*`、`/openai/*`、`/v1beta/*`、`/messages`、`/models` 等（见 [5.1](#51-路径别名与协议识别)） | 无自身鉴权；客户端凭据转发调度层比对 | 终端客户端（SDK、CLI、IDE 插件、浏览器内 SDK） |
 | 管理面 | `/admin/*` | `Authorization: Bearer <MSA_ADMIN_KEY>` | 运维与前端观测台 |
 | 健康探针 | `/health` | 无 | 编排器、反向代理 |
 
@@ -81,7 +81,7 @@
 
 ### 2.3 内容类型、编码与请求体上限
 
-- 请求体：`application/json`，UTF-8。请求侧的 `Content-Type` **不校验**——能否解码由 JSON 解析器给出确定答案，按此头提前拒收只会把能正常服务的请求拒掉。
+- 请求体：`application/json`，UTF-8。请求侧的 `Content-Type` **只挡表单两种**（见 [2.3.3](#233-请求体-media-type)），其余一律放过——能否解码由 JSON 解析器给出确定答案，按白名单提前拒收只会把能正常服务的请求拒掉。
 - 请求体允许带 UTF-8 BOM，服务会剥掉它再解码（`encoding/json` 不接受 BOM 前缀，一些 Windows 上的客户端会带）。
 - 非流式响应：`application/json`。
 - 流式响应：`text/event-stream`（SSE），并固定带以下响应头：
@@ -124,6 +124,26 @@
 判定是严格大于：解压后长度**正好等于**上限的请求会被接受。
 
 空请求体单独回一句明确的话，而不是透出 `unexpected end of JSON input`——后者读的人分不清是自己没发 body 还是 body 被中间层吃了。
+
+#### 2.3.3 请求体 media type
+
+`Content-Type` **不做白名单，只挡表单两种**：
+
+| `Content-Type` 的 media type | 结果 |
+|---|---|
+| `application/x-www-form-urlencoded` | **415** `invalid_request` |
+| `multipart/form-data` | **415** `invalid_request` |
+| 其余任意值（`application/json`、`text/plain`、`application/vnd.api+json` 等） | 放过，交给 JSON 解析器 |
+| 缺失该头 | 放过 |
+| 该头解不动（不是合法的 media type） | 放过 |
+
+判定忽略 charset 等参数，media type 大小写不敏感。
+
+**为什么只挡表单**：浏览器的 `fetch` 默认发 `x-www-form-urlencoded`，请求体是 urlencode 过的键值对。让它流到 JSON 解析器只会得到一句语法错误，而真正的问题是「这个端点不吃表单」——前者读的人看不出后者。
+
+**为什么不做白名单**：真实客户端带的 `Content-Type` 五花八门（缺头、`text/plain`、带自家 `+json` 后缀），按「必须是 `application/json`」挡会把一堆本能正常解码的请求挡在门外。缺头或解不动同样放过：这类客户端很多，而它们发的确实是 JSON。
+
+415 而非 400：状态码本身就说明「体的类型不对」而不是「体的字段不对」。这个闸门挂在读请求体的最前面，因此三条对话端点与 count_tokens 都覆盖到，且拒绝会按 §3.2.9 的形态入流水（`attempts` 为 0）。
 
 ### 2.4 请求 ID
 
@@ -472,7 +492,7 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 
 #### 3.2.9 受理面拒绝的流水形态
 
-请求在选目标之前就被拒（路径不存在、方法不允许、体超限、传输编码不支持、压缩体损坏、体为空、体无法解码、缺模型名）时同样入流水。不入的后果是这类接入问题在管理面完全不可见：客户端报 404，运维查 `GET /admin/requests` 一行都没有，无法判断请求究竟有没有到达本服务。
+请求在选目标之前就被拒（路径不存在、方法不允许、体超限、media type 是表单、传输编码不支持、压缩体损坏、体为空、体无法解码、缺模型名）时同样入流水。不入的后果是这类接入问题在管理面完全不可见：客户端报 404，运维查 `GET /admin/requests` 一行都没有，无法判断请求究竟有没有到达本服务。
 
 字段取值与数据面请求不同：
 
@@ -482,7 +502,7 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 | `attempts` | `0` | 与「打了一次上游但失败」（`1`）区分开 |
 | `model_id` / `account` / `outbound_protocol` | 空 | 还没选过目标 |
 | `user_model` | 能解出就填，否则空 | 缺模型名与解码失败这两条路径解不出 |
-| `status_code` | 实际回给客户端的码 | `404` / `405` / `413` / `400` |
+| `status_code` | 实际回给客户端的码 | `404` / `405` / `413` / `415` / `400` |
 | `error_code` | 对应的 `ir.ErrorKind` | 与数据面同一套取值 |
 | `path` | 客户端打的路径 | 别名相关的接入问题只能靠它定位 |
 
@@ -644,8 +664,11 @@ curl -s $BASE/health
 | OpenAI Chat Completions | POST | `/v1/chat/completions`、`/v1/v1/chat/completions`、`/openai/v1/chat/completions`、`/chat/completions` |
 | OpenAI Responses | POST | `/v1/responses`、`/v1/v1/responses`、`/openai/v1/responses`、`/responses` |
 | Count Tokens（Anthropic 形状） | POST | `/v1/messages/count_tokens`、`/v1/v1/messages/count_tokens`、`/anthropic/v1/messages/count_tokens`、`/messages/count_tokens` |
-| 模型清单（Anthropic 形状） | GET | `/v1/models`、`/v1/v1/models`、`/anthropic/v1/models` |
-| 模型清单（OpenAI 形状） | GET | `/openai/v1/models`、`/models` |
+| 模型清单（外形按客户端推断） | GET | `/v1/models`、`/v1/v1/models`、`/models` |
+| 模型清单（Anthropic 形状） | GET | `/anthropic/v1/models` |
+| 模型清单（OpenAI 形状） | GET | `/openai/v1/models` |
+| 模型清单（Gemini 形状） | GET | `/v1beta/models` |
+| 单模型查询 | GET | 上列每条清单路径 + `/{id}`，外形与该清单路径一致 |
 
 别名不是冗余：客户端会把 base_url 配成 `host`、`host/v1`、`host/anthropic` 等各种形态，而多数客户端不允许改它拼在后面的固定路径。**协议按路径识别**，与 `Accept` 头无关。
 
@@ -664,7 +687,7 @@ curl -s $BASE/health
 
 | 头 | 类型 | 必填 | 约束 / 允许值 | 含义 |
 |---|---|---|---|---|
-| `Content-Type` | string | 否 | 建议 `application/json` | **不校验**。请求体能否解码由 JSON 解析器给出确定答案，按此头提前拒收只会把能正常服务的请求拒掉 |
+| `Content-Type` | string | 否 | 建议 `application/json`；表单两种回 415 | 只挡 `application/x-www-form-urlencoded` 与 `multipart/form-data`，其余（含缺失）一律放过，交给 JSON 解析器。详见 §2.3.3 |
 | `Content-Encoding` | string | 否 | `gzip`、`deflate`、`identity` | 请求体传输编码。缺失或 `identity` 按未压缩处理；其他值回 400 并列出本服务接受的编码。详见 §2.3 |
 | `x-api-key` | string | 二选一 | 非空 | 客户端凭据（Anthropic SDK 发这个），转发调度层比对 |
 | `Authorization` | string | 二选一 | `Bearer <key>` | 客户端凭据（OpenAI SDK 发这个）。两者同给时 `x-api-key` 优先 |
@@ -1071,9 +1094,30 @@ curl -s $BASE/v1/messages/count_tokens \
 
 **使用场景**：客户端启动或刷新时拉取可选模型清单（如 Claude Code 的 `/model` 列表、OpenAI SDK 的 `models.list()`）。**禁用（`enabled=false`）的模型不列出**——客户端会把清单当可选项展示，列出必然失败的项目只会误导用户。
 
-**请求**：`GET /v1/models`（Anthropic 形状）、`GET /openai/v1/models` 或 `GET /models`（OpenAI 形状）
+**请求**：见下表。清单代理自调度层（短缓存），与 `Accept` 头无关。
 
-**形状按请求路径决定**，与 `Accept` 头无关：各家 SDK 解析不出自己认识的形状会直接报错。清单代理自调度层（短缓存）。
+**外形按客户端身份决定，路径优先于头**：
+
+| 路径 | 外形 |
+|---|---|
+| `/anthropic/v1/models` | 固定 Anthropic |
+| `/openai/v1/models` | 固定 OpenAI |
+| `/v1beta/models` | 固定 Gemini |
+| `/v1/models`、`/v1/v1/models`、`/models` | 按请求信号推断，见下表 |
+
+推断的次序固定：
+
+| 请求信号 | 外形 |
+|---|---|
+| 有 `anthropic-version` 或 `x-api-key` | Anthropic |
+| 有 `x-goog-api-key` 或 query 参数 `key` | Gemini |
+| 以上都没有 | OpenAI |
+
+**为什么要推断**：`/v1/models` 与 `/models` 两族 SDK 都会打——用户把 base_url 配成 `host`，Anthropic SDK 与 OpenAI SDK 各自拼出同一个路径。而两家清单的字段名与包装都不同（`display_name` 对 `owned_by`），给错了对方解析不出来。
+
+**为什么路径优先**：`/anthropic/...` 与 `/openai/...` 是用户显式选的族，头只是推断。让头翻盘会让「我明明配了 `/openai` 前缀」这件事失效，而用户无从判断为什么。
+
+**为什么 OpenAI 垫底**：前两族要有专有头才成立，OpenAI 是「什么专有信号都没有」的那一档（`Authorization: Bearer` 不专属于它），只能垫底。三家的凭据头名互不重叠，所以单看头名就能分族。多族头同时出现（代理链上会发生）时取 Anthropic：`anthropic-version` 没有别的含义，而 Gemini 的 `key` 参数常被中间层顺手加上。
 
 **Anthropic 形状响应** `200`：
 
@@ -1089,6 +1133,14 @@ curl -s $BASE/v1/messages/count_tokens \
 |---|---|---|
 | `object` | string | 固定 `"list"` |
 | `data` | array of object | 元素：`{"id":string,"object":"model","owned_by":string,"created":int}`；`owned_by` 填所属 collection；`created` 为固定 Unix 秒 `1704067200` |
+
+**Gemini 形状响应** `200`：
+
+| 字段 | 类型 | 取值与含义 |
+|---|---|---|
+| `models` | array of object | 元素：`{"name":"models/<id>","displayName":string,"supportedGenerationMethods":array of string}` |
+
+`name` 带 `models/` 前缀是 Gemini 的资源名约定，客户端会把这个串原样回传去做单模型查询（见 §5.7）。`supportedGenerationMethods` 固定为 `["generateContent","streamGenerateContent"]`，客户端据此判断能不能流式。
 
 **错误**
 
@@ -1110,6 +1162,77 @@ curl -s $BASE/openai/v1/models
   ]
 }
 ```
+
+### 5.7 GET /models/{id}（单模型查询）
+
+**使用场景**：SDK 的 `models.retrieve()`。客户端先拿清单再单查某一项，用于校验模型名是否可用、或展示单个模型的元信息。
+
+**请求**：上列每一条清单路径 + `/{id}`。SDK 是在它拿清单的那个 base_url 上拼 `/{id}`，所以两者必须成对存在——少一条就有一类客户端的 `retrieve()` 静默 404。
+
+| 路径参数 | 类型 | 说明 |
+|---|---|---|
+| `id` | string | 用户模型名。允许带 `models/` 前缀（Gemini 客户端回传的是清单里的资源名），前缀会被剥掉再查 |
+
+**响应** `200`：一个模型对象，字段与该路径的清单元素完全一致，但**不带清单的包装**（没有 `data` / `models` / `object:"list"`）。外形推断与 §5.6 同一套规则。
+
+**错误**
+
+| HTTP | `error_code` | 触发条件 |
+|---|---|---|
+| `404` | `not_found` | 该 id 不存在，**或存在但已禁用** |
+| `500` | `upstream` | 从调度层拉取清单失败 |
+
+禁用的模型按不存在处理：清单不列它，单查却回它会让客户端拿到一个必然失败的 id——而它从清单里根本看不到这个 id，无从判断为什么失败。
+
+404 回的是**该族的错误信封**，不是 200 包一个错误体。SDK 看到 200 会按成功去解析，拿到一个缺字段的对象，报错指向的是字段名而不是「这个模型不存在」。
+
+**示例**
+
+```bash
+curl -s $BASE/v1beta/models/models/demo-pool
+```
+
+```json
+{
+  "name": "models/demo-pool",
+  "displayName": "demo-pool",
+  "supportedGenerationMethods": ["generateContent", "streamGenerateContent"]
+}
+```
+
+### 5.8 跨域（CORS）与预检
+
+**使用场景**：浏览器里的 SDK（网页版客户端、在线 playground）直接打本服务。CORS 是纯浏览器侧的强制，服务端的全部职责就是把头发对。
+
+**配置**：环境变量 `MSA_CORS_ORIGINS`，逗号分隔的来源列表。空项会被丢掉（容忍尾逗号）。
+
+| 配置 | 行为 |
+|---|---|
+| 不配，或含 `*` | `Access-Control-Allow-Origin: *`，**不发** `Allow-Credentials` |
+| 配具体来源，且请求的 `Origin` 在列 | 回显该 `Origin`，并发 `Allow-Credentials: true` 与 `Vary: Origin` |
+| 配具体来源，但请求的 `Origin` 不在列 | 不发 CORS 头（只发 `Vary: Origin`），**请求照常处理** |
+| 请求无 `Origin` 头 | 一个 CORS 头都不发 |
+
+`*` 与 `Allow-Credentials` **不能并存**：浏览器会拒绝整个响应。要用凭据就配具体的来源白名单。
+
+不在白名单时仍然处理请求，而不是回 403：CORS 是浏览器侧的强制，服务端多拦一层只会让非浏览器客户端（它们不看 CORS）莫名被拒。回显来源时必须声明 `Vary: Origin`，否则中间缓存会把一个来源的响应喂给另一个来源。
+
+**预检**：任意路径上的 `OPTIONS` 一律回 **204**，空体，不进路由、**不记流水**。预检不是一次业务请求，记进去会让流水里每个浏览器请求都多出一条。
+
+预检必须在路由之前答掉，否则 `OPTIONS` 会落到 404/405 那套改写（§5.1），浏览器据此判定跨域失败。
+
+**放行的请求头**（`Access-Control-Allow-Headers`）用白名单而非 `*`——`*` 与 `Allow-Credentials` 并存时同样被浏览器拒绝：
+
+| 类别 | 头 |
+|---|---|
+| 通用 | `Content-Type`、`Content-Encoding`、`Content-Length`、`Authorization`、`Accept`、`Accept-Encoding` |
+| 厂商专有 | `x-api-key`、`anthropic-version`、`anthropic-beta`、`x-goog-api-key` |
+| 请求 ID | `X-Request-Id` |
+| OpenAI SDK | `x-stainless-*` 一族（arch、lang、os、package-version、runtime、runtime-version、retry-count、timeout、async、helper-method、poll-helper、custom-event） |
+
+`Access-Control-Expose-Headers` 固定为 `X-Request-Id`：不暴露则浏览器里的 JS 读不到这个头，报障时无从对账。`Access-Control-Max-Age` 为 `86400`——不设它的话浏览器对每个请求都先发一次 `OPTIONS`，延迟直接翻倍。
+
+**出错的响应也带 CORS 头**。没有它，浏览器里的 JS 读不到状态码与错误体，只看到一句 network error——正是最该看清错误的时候。
 
 ---
 
@@ -1601,6 +1724,7 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| 2.1 | 2026-09-19 | 清单外形改为按客户端身份推断（`/v1/models`、`/models` 两族 SDK 都会打，路径优先于头）；新增 Gemini 清单外形与 `/v1beta/models`；新增单模型查询端点 [5.7](#57-get-modelsid单模型查询)；新增跨域与预检 [5.8](#58-跨域cors与预检)；新增请求体 media type 闸门 [2.3.3](#233-请求体-media-type)（表单两种回 415）。**行为变更**：`/models` 从固定 OpenAI 外形改为按客户端信号推断，无专有头的请求仍得到 OpenAI 外形 |
 | 2.0 | 2026-09-17 | 每个端点补齐「使用场景 / 请求字段表（类型·必填·约束与允许值·含义）/ 响应字段表（取值与含义）/ 错误表 / 示例」；新增类型词汇表、枚举值索引；修正响应 `model` 字段含义（上游回传模型名，非用户模型名）；修正已提交边界描述（非流式客户端仍能拿到真实 HTTP 错误码）；补充跨协议能力差异表 |
 | 1.0 | 2026-09-17 | 初稿 |
 
@@ -1627,6 +1751,7 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 | `MSA_ESTIMATE_USAGE` | `true` | 上游没回 usage 时按字符数估算兜底（见 [6.5](#65-用量估算兜底)） |
 | `MSA_ACCESS_LOG` | `true` | 是否打访问日志行（关掉仍记请求流水） |
 | `MSA_LOG_RETENTION` | `336h`（14 天） | 请求流水保留期，过期清理 |
+| `MSA_CORS_ORIGINS` | 空（放开所有来源） | 允许跨域的来源，逗号分隔。空或含 `*` 时回 `Allow-Origin: *` 且不发 `Allow-Credentials`。见 [5.8](#58-跨域cors与预检) |
 
 ---
 

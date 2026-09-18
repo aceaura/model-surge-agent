@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strings"
 
@@ -32,6 +33,10 @@ func (s *Server) readBody(w http.ResponseWriter, r *http.Request) ([]byte, *ir.E
 		limit = defaultMaxBody
 	}
 	defer r.Body.Close()
+
+	if err := checkMediaType(r.Header.Get("Content-Type")); err != nil {
+		return nil, err
+	}
 
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
@@ -67,6 +72,41 @@ func (s *Server) readBody(w http.ResponseWriter, r *http.Request) ([]byte, *ir.E
 func oversize(limit int64) *ir.Error {
 	return ir.NewError(ir.ErrContextExceeded, http.StatusRequestEntityTooLarge, "",
 		fmt.Sprintf("request body exceeds the %d byte limit", limit))
+}
+
+// rejectedMediaTypes 是明确不接受的请求体类型。
+//
+// 只列表单这两种，不做「必须是 application/json」的白名单：真实客户端
+// 带的 Content-Type 五花八门（缺头、text/plain、带自家 +json 后缀），
+// 按白名单挡会把一堆本能正常解码的请求挡在门外。
+//
+// 表单类必须挡：浏览器的 fetch 默认发 x-www-form-urlencoded，body 是
+// urlencode 过的键值对。让它流到 json.Unmarshal 只会得到一句语法错误，
+// 而真正的问题是「这个端点不吃表单」，前者读的人看不出后者。
+var rejectedMediaTypes = map[string]bool{
+	"multipart/form-data":               true,
+	"application/x-www-form-urlencoded": true,
+}
+
+// checkMediaType 在读体之前挡掉不受支持的请求体类型。
+//
+// 头缺失或解不动时放过：缺头的客户端很多，而它们发的确实是 JSON。
+//
+// 显式带 415：StatusForKind 只认几档常见的，invalid_request 归 400，
+// 不带就会把「类型不对」报成「参数不对」。
+func checkMediaType(contentType string) *ir.Error {
+	if strings.TrimSpace(contentType) == "" {
+		return nil
+	}
+	mt, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return nil
+	}
+	if !rejectedMediaTypes[strings.ToLower(mt)] {
+		return nil
+	}
+	return ir.NewError(ir.ErrInvalidRequest, http.StatusUnsupportedMediaType, "content-type",
+		fmt.Sprintf("content-type %q is not supported, this endpoint takes a JSON body", mt))
 }
 
 // supportedEncodings 是本服务能解的传输编码。

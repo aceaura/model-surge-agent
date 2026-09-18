@@ -38,6 +38,9 @@ type Server struct {
 	AccessLog bool
 	// MaxBodyBytes 限制请求体大小，0 表示用默认值。
 	MaxBodyBytes int64
+	// CORSOrigins 是允许的跨域来源。空或含 `*` 表示放开所有来源，
+	// 此时不发 Allow-Credentials（浏览器拒绝那个组合）。
+	CORSOrigins []string
 }
 
 // ModelLister 给出用户模型清单。实现方决定是否走缓存。
@@ -68,8 +71,11 @@ func (s *Server) Handler() http.Handler {
 	register(mux, http.MethodPost, responsesPaths, s.dataPlane(codec.ProtocolResponses))
 	register(mux, http.MethodPost, countTokensPaths, s.countTokens)
 
-	for path, protocol := range modelPaths {
-		mux.HandleFunc(http.MethodGet+" "+path, s.listModels(protocol))
+	for path, family := range modelPaths {
+		mux.HandleFunc(http.MethodGet+" "+path, s.listModels(family))
+		// 单模型查询与清单共用路径前缀：SDK 的 models.retrieve() 是在
+		// 它拿清单的那个 base_url 上拼 /{id}，两者必须成对存在。
+		mux.HandleFunc(http.MethodGet+" "+path+modelIDSuffix, s.getModel(family))
 	}
 	mux.HandleFunc(http.MethodGet+" /health", s.health)
 
@@ -79,7 +85,8 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/admin/", s.Admin.Handler())
 	}
 
-	return s.withAccessLog(s.withRejectEnvelope(mux))
+	// CORS 在最外：预检要在路由之前答掉。访问日志在它之内，预检不进日志。
+	return s.withCORS(s.withAccessLog(s.withRejectEnvelope(mux)))
 }
 
 // dataPlane 处理一个入站协议的对话请求。
@@ -151,18 +158,52 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int64{"input_tokens": ir.EstimateRequest(req)})
 }
 
-// listModels 代理调度层的清单，按请求路径渲染成对应协议的外形。
-func (s *Server) listModels(protocol string) http.HandlerFunc {
+// listModels 代理调度层的清单，按路径或请求头渲染成对应协议族的外形。
+func (s *Server) listModels(pathFamily string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		models, err := s.Models.List(r.Context())
-		if err != nil {
-			inbound, _ := codec.Inbound(protocol)
-			writeIRError(w, inbound, ir.NewError(ir.ErrUpstream, 0, "",
-				"cannot list models: "+err.Error()))
+		family := clientFamily(r, pathFamily)
+		models, ok := s.modelsOrFail(w, r, family)
+		if !ok {
 			return
 		}
-		writeJSON(w, http.StatusOK, renderModels(protocol, models))
+		writeJSON(w, http.StatusOK, renderModels(family, models))
 	}
+}
+
+// getModel 回单个模型对象。SDK 的 models.retrieve() 会打这个端点。
+func (s *Server) getModel(pathFamily string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		family := clientFamily(r, pathFamily)
+		models, ok := s.modelsOrFail(w, r, family)
+		if !ok {
+			return
+		}
+		id := modelIDFromPath(r.PathValue("id"))
+		m, found := findModel(models, id)
+		if !found {
+			// 404 而非 200 包 error：new-api 是后者（controller/model.go:369），
+			// 那让 SDK 看到成功状态码却解不出模型对象，客户端两边对不上。
+			s.reject(w, r, envelopeProtocol(family),
+				ir.NewError(ir.ErrNotFound, http.StatusNotFound, "model",
+					"no such model: "+id))
+			return
+		}
+		writeJSON(w, http.StatusOK, renderModel(family, m))
+	}
+}
+
+// modelsOrFail 取清单，失败时已把错误写出去。
+func (s *Server) modelsOrFail(w http.ResponseWriter, r *http.Request,
+	family string) ([]relayclient.UserModelSummary, bool) {
+
+	models, err := s.Models.List(r.Context())
+	if err != nil {
+		inbound, _ := codec.Inbound(envelopeProtocol(family))
+		writeIRError(w, inbound, ir.NewError(ir.ErrUpstream, 0, "",
+			"cannot list models: "+err.Error()))
+		return nil, false
+	}
+	return models, true
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

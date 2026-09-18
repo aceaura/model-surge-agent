@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -541,6 +542,120 @@ func TestAdmissionRejectionsAreNotReported(t *testing.T) {
 	}
 	if got := f.relay.Dispatches(); len(got) != 0 {
 		t.Errorf("dispatches = %d, want 0", len(got))
+	}
+}
+
+// TestFormBodiesAreRejectedAsUnsupportedMediaType 钉住表单体回 415。
+//
+// 浏览器的 fetch 默认发 x-www-form-urlencoded。让它流到 json.Unmarshal
+// 只会得到一句语法错误，而真正的问题是「这个端点不吃表单」。
+func TestFormBodiesAreRejectedAsUnsupportedMediaType(t *testing.T) {
+	cases := []string{
+		"application/x-www-form-urlencoded",
+		"application/x-www-form-urlencoded; charset=utf-8",
+		"multipart/form-data; boundary=xyz",
+		// 大小写不敏感：HTTP 的 media type 规范如此，认死小写会漏掉一半。
+		"Application/X-WWW-Form-Urlencoded",
+	}
+	for _, ct := range cases {
+		t.Run(ct, func(t *testing.T) {
+			f := newFixture(t)
+			resp := f.postRaw(t, http.MethodPost, "/v1/messages",
+				[]byte("model=user-model&max_tokens=64"),
+				map[string]string{"Content-Type": ct})
+			if resp.Code != http.StatusUnsupportedMediaType {
+				t.Fatalf("status = %d, want 415: %s", resp.Code, resp.Body.String())
+			}
+			// 消息要说清该发什么，否则客户端只知道"不行"。
+			if !strings.Contains(resp.Body.String(), "JSON") {
+				t.Errorf("message must say a JSON body is expected: %s", resp.Body.String())
+			}
+			if f.upstreamCalls() != 0 {
+				t.Error("a form body must not reach the upstream")
+			}
+			rec := f.records.one(t)
+			if rec.StatusCode != http.StatusUnsupportedMediaType {
+				t.Errorf("recorded status = %d, want 415", rec.StatusCode)
+			}
+			if rec.ErrorCode != string(ir.ErrInvalidRequest) {
+				t.Errorf("error_code = %q, want %q", rec.ErrorCode, ir.ErrInvalidRequest)
+			}
+			if rec.Attempts != 0 {
+				t.Errorf("attempts = %d, want 0 — 从未打上游", rec.Attempts)
+			}
+		})
+	}
+}
+
+// TestForm415IsRenderedInTheClientProtocolShape 钉住 415 也走协议信封。
+//
+// 415 不在 StatusForKind 认识的那几档里，必须由 ir.Error 显式带着状态码，
+// 否则会被推导成 invalid_request 的 400——把「类型不对」报成「参数不对」。
+func TestForm415IsRenderedInTheClientProtocolShape(t *testing.T) {
+	cases := map[string]string{
+		"/v1/messages":         `"type":"error"`,
+		"/v1/chat/completions": `"error"`,
+		"/v1/responses":        `"error"`,
+	}
+	for path, marker := range cases {
+		f := newFixture(t)
+		resp := f.postRaw(t, http.MethodPost, path, []byte("a=1"),
+			map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
+		if resp.Code != http.StatusUnsupportedMediaType {
+			t.Errorf("%s: status = %d, want 415", path, resp.Code)
+		}
+		if !strings.Contains(resp.Body.String(), marker) {
+			t.Errorf("%s: body must be the protocol error envelope: %s", path, resp.Body.String())
+		}
+		if ct := resp.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+			t.Errorf("%s: content-type = %q, want json", path, ct)
+		}
+	}
+}
+
+// TestAcceptableContentTypesAreNotGated 钉住闸门只挡表单，不做白名单。
+//
+// 真实客户端带的 Content-Type 五花八门。按「必须是 application/json」的
+// 白名单挡，会把一堆本能正常解码的请求挡在门外——而它们发的确实是 JSON。
+func TestAcceptableContentTypesAreNotGated(t *testing.T) {
+	cases := []string{
+		"application/json",
+		"application/json; charset=utf-8",
+		"text/plain",
+		"text/plain;charset=UTF-8",
+		"application/vnd.api+json",
+		// 解不动的头按放过处理：拒掉它等于因为一个次要的头丢掉整次请求。
+		"!!!not a media type",
+		// 缺头的客户端很多，而它们发的确实是 JSON。
+		"",
+	}
+	for _, ct := range cases {
+		t.Run(ct, func(t *testing.T) {
+			f := newFixture(t)
+			r := httptest.NewRequest(http.MethodPost, "/v1/messages",
+				strings.NewReader(requestBodies[codec.ProtocolAnthropic]))
+			// 直接写 header map：Set("") 会把头删掉，而这里要区分
+			// 「显式的空头」与「没有这个头」——两者都得放过。
+			r.Header["Content-Type"] = []string{ct}
+			w := httptest.NewRecorder()
+			f.handler.ServeHTTP(w, r)
+			if w.Code != http.StatusOK {
+				t.Fatalf("content-type %q: status = %d, want 200: %s", ct, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// TestCountTokensIsAlsoGated 钉住闸门覆盖两条读体的路径。
+//
+// checkMediaType 挂在 readBody 最前，所以 dataPlane 与 countTokens 都覆盖到。
+// 少一条的后果是同一个坏请求在两个端点上表现不同。
+func TestCountTokensIsAlsoGated(t *testing.T) {
+	f := newFixture(t)
+	resp := f.postRaw(t, http.MethodPost, "/v1/messages/count_tokens", []byte("a=1"),
+		map[string]string{"Content-Type": "multipart/form-data; boundary=z"})
+	if resp.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("status = %d, want 415: %s", resp.Code, resp.Body.String())
 	}
 }
 
