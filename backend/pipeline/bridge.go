@@ -22,6 +22,10 @@ const incompleteStream = "incomplete_stream"
 func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call, up *upstream,
 	start time.Time, rec *Record) (string, attemptResult) {
 
+	// clientCtx 是客户端请求本身的 ctx，单独留一份。
+	// 下面那个派生 ctx 带自己的 cancel（用于收尾时掐断读协程），
+	// 拿它判「是谁断的」会把我们自己的收尾也算成客户端取消。
+	clientCtx := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	frames := up.read(ctx)
@@ -48,6 +52,11 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 		case f, ok = <-frames:
 			if !ok {
 				// channel 关了却没收到 done：读协程被 ctx 掐断了。
+				// 先分清是谁断的——客户端自己走了就不是这个目标的故障，
+				// 记成 abnormal 会累计失败计数把健康账号推向冷却。
+				if clientCtx.Err() != nil {
+					return p.clientGone(&agg, rec)
+				}
 				return p.finish(w, call, encoder, &agg, committed, tail,
 					ir.NewError(ir.ErrUpstream, 0, "", "upstream stream ended without a terminator"), rec)
 			}
@@ -61,6 +70,11 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 		}
 
 		if f.err != nil {
+			// 客户端取消会先让上游连接断开，于是 scanner 报一个读错误，
+			// 而不是 channel 干净关闭。两条路径都要先分清是谁断的。
+			if clientCtx.Err() != nil {
+				return p.clientGone(&agg, rec)
+			}
 			return p.finish(w, call, encoder, &agg, committed, tail, f.err, rec)
 		}
 
@@ -92,10 +106,10 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 					// 客户端自己断开，上游一直在正常出内容。记成 abnormal 会
 					// 累计失败计数、把好目标推向冷却——客户端多按几次停止就能
 					// 拖垮账号。按已收 usage 正常记账（上游照样计费）。
-					return relayclient.OutcomeNormal, attemptResult{
-						err:       ir.NewError(ir.ErrInternal, 0, "", "client went away: "+err.Error()),
-						committed: true, usage: usageOf(&agg),
-					}
+					//
+					// error_code 要在这里写：committed 路径不经 fail，
+					// 上层只填 outcome 与 usage，不写就是一条查不出原因的流水。
+					return p.clientGone(&agg, rec)
 				}
 			}
 		}
@@ -174,8 +188,9 @@ func (p *Pipeline) finish(w http.ResponseWriter, call Call, encoder codec.Stream
 		return outcomeFor(err), attemptResult{err: err, usage: usage}
 	}
 
-	// committed 之后 HTTP 状态已定：错误只能作为流内事件表达，
-	// 且必须补齐未闭合的块，否则客户端会一直等一个不会来的结束帧。
+	// committed 之后 HTTP 状态已定：错误只能作为流内事件表达。
+	// 编码器会在错误帧之前闭合未关的块，但不补正常终止帧——前者让客户端
+	// 的块状态机收束，后者会让它把这轮当成功。
 	rec.ErrorCode = string(err.Kind)
 	rec.ErrorMessage = err.Message
 	if encoder != nil {
@@ -217,6 +232,24 @@ func (p *Pipeline) writeSuccess(w http.ResponseWriter, call Call, encoder codec.
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+}
+
+// clientGone 收尾客户端取消。
+//
+// 记 normal 而不是 abnormal：客户端自己走了不是这个目标的故障，累计失败
+// 计数会让它无端冷却。usage 按已收事件结算——上游照样计费，不记等于漏账。
+// 不换目标重试，也不往 w 写任何东西：客户端已经不要这个回答了。
+//
+// 与流式写失败那条分支（上面的 "client went away"）判的是同一件事，
+// 区别只在观察点：那条要等写客户端失败才发现，而非流式请求在聚合完成前
+// 一个字节都不写，只能从 ctx 观察到。
+func (p *Pipeline) clientGone(agg *ir.Aggregator, rec *Record) (string, attemptResult) {
+	err := ir.NewError(ir.ErrCanceled, 0, "", "client canceled the request")
+	rec.ErrorCode = string(err.Kind)
+	rec.ErrorMessage = err.Message
+	return relayclient.OutcomeNormal, attemptResult{
+		err: err, committed: true, usage: usageOf(agg),
+	}
 }
 
 // writeStreamErrorEnd 用流内错误收尾。

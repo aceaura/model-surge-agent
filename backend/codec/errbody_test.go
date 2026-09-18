@@ -122,3 +122,54 @@ func TestKindForSeparatesContextOverflowFromInvalidRequest(t *testing.T) {
 		t.Errorf("kind = %q, want context_exceeded", got)
 	}
 }
+
+// param 指出的是哪个请求字段被拒，是 400 里最有排查价值的一维。
+func TestExtractParamReadsBothStandardPositions(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"error.param", `{"error":{"message":"bad","param":"max_tokens"}}`, "max_tokens"},
+		{"top-level param", `{"message":"bad","param":"tools[0].name"}`, "tools[0].name"},
+		{"error.param wins", `{"param":"outer","error":{"param":"inner"}}`, "inner"},
+		{"trims space", `{"error":{"param":"  top_p  "}}`, "top_p"},
+		{"absent", `{"error":{"message":"bad"}}`, ""},
+		{"null", `{"error":{"param":null}}`, ""},
+		{"not a string", `{"error":{"param":{"name":"x"}}}`, ""},
+		{"not json", `<html>502</html>`, ""},
+		{"json array", `[{"param":"x"}]`, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := codec.ExtractParam([]byte(tc.body)); got != tc.want {
+				t.Errorf("ExtractParam = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// 兜底不能覆盖结构化路径已取到的值：后者来自协议自家的字段位，更可信。
+func TestWithParamDoesNotOverwrite(t *testing.T) {
+	err := ir.NewError(ir.ErrInvalidRequest, 400, "", "bad")
+	err.Param = "from_wire"
+	codec.WithParam(err, []byte(`{"error":{"param":"from_body"}}`))
+	if err.Param != "from_wire" {
+		t.Errorf("param = %q, 已有值不该被兜底覆盖", err.Param)
+	}
+}
+
+func TestWithParamFillsWhenEmpty(t *testing.T) {
+	err := ir.NewError(ir.ErrInvalidRequest, 400, "", "bad")
+	codec.WithParam(err, []byte(`{"error":{"param":"temperature"}}`))
+	if err.Param != "temperature" {
+		t.Errorf("param = %q, want temperature", err.Param)
+	}
+}
+
+// nil 不能让兜底崩：DecodeError 的某些分支理论上可以返回 nil。
+func TestWithParamToleratesNil(t *testing.T) {
+	if got := codec.WithParam(nil, []byte(`{"error":{"param":"x"}}`)); got != nil {
+		t.Errorf("WithParam(nil) = %v, want nil", got)
+	}
+}

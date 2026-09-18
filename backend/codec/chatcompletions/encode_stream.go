@@ -306,6 +306,7 @@ func errorEnvelope(err *ir.Error) (int, wireErrorEnvelope) {
 	code, _ := json.Marshal(string(err.Kind))
 	return status, wireErrorEnvelope{Error: wireError{
 		Message: err.Message,
+		Param:   err.Param,
 		Type:    errorTypeForKind(err.Kind),
 		Code:    code,
 	}}

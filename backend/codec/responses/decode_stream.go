@@ -349,15 +349,15 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 func DecodeError(status int, body []byte) *ir.Error {
 	var env wireErrorEnvelope
 	if err := json.Unmarshal(body, &env); err == nil && env.Error.Message != "" {
-		return convertError(status, &env.Error)
+		return codec.WithParam(convertError(status, &env.Error), body)
 	}
 	// 有些错误是裸的 response 对象，错误挂在 error 字段上。
 	var resp wireResponse
 	if err := json.Unmarshal(body, &resp); err == nil && resp.Error != nil {
-		return convertError(status, resp.Error)
+		return codec.WithParam(convertError(status, resp.Error), body)
 	}
 	// 两种规范形状都不匹配：尽力从任意形状里挖消息，挖不到才回落状态码描述。
-	return codec.FallbackError(status, body)
+	return codec.WithParam(codec.FallbackError(status, body), body)
 }
 
 func convertError(status int, e *wireError) *ir.Error {
@@ -371,7 +371,9 @@ func convertError(status int, e *wireError) *ir.Error {
 	// 消息位上可能是被字符串化的下游错误体，取出里面的真消息再归类：
 	// 上下文超限的判定要看消息文本，读到一串转义引号就判不出来了。
 	msg := codec.RefineMessage(e.Message)
-	return ir.NewError(codec.KindFor(status, code, msg), status, code, msg)
+	out := ir.NewError(codec.KindFor(status, code, msg), status, code, msg)
+	out.Param = e.Param
+	return out
 }
 
 func streamError(ev wireStreamEvent) *ir.Error {

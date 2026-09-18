@@ -1,6 +1,7 @@
 package chatcompletions
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/aceaura/model-surge-agent/backend/ir"
@@ -73,5 +74,85 @@ func TestDecodeErrorUnwrapsJSONStuffedIntoMessage(t *testing.T) {
 	}
 	if got.Kind != ir.ErrContextExceeded {
 		t.Errorf("kind = %q, want context_exceeded", got.Kind)
+	}
+}
+
+// param 要一路带到 ir.Error：客户端靠它知道改哪个字段。
+// 兼容层代理常在本协议的端点上回 openai 形状的错误体，所以即便本协议
+// 自家的错误结构没有 param 位，也要能从原始字节里挖出来。
+func TestDecodeErrorCarriesParam(t *testing.T) {
+	got := DecodeError(400, []byte(`{"error":{"message":"bad value","param":"max_tokens"}}`))
+	if got.Param != "max_tokens" {
+		t.Errorf("param = %q, want max_tokens", got.Param)
+	}
+}
+
+func TestDecodeErrorLeavesParamEmptyWhenAbsent(t *testing.T) {
+	got := DecodeError(400, []byte(`{"error":{"message":"bad value"}}`))
+	if got.Param != "" {
+		t.Errorf("param = %q, 上游没给就该缺席而不是空串以外的值", got.Param)
+	}
+}
+
+// param 要出现在本协议的错误信封里：它是客户端定位问题字段的唯一线索。
+func TestRenderErrorCarriesParam(t *testing.T) {
+	e := ir.NewError(ir.ErrInvalidRequest, 400, "", "bad value")
+	e.Param = "max_tokens"
+	_, body := RenderError(e)
+	if !strings.Contains(string(body), `"param":"max_tokens"`) {
+		t.Errorf("body = %s, 应含 param", body)
+	}
+}
+
+// 流内错误同样要带 param：committed 之后状态码改不了，流内那一帧是唯一出口。
+func TestRenderStreamErrorCarriesParam(t *testing.T) {
+	e := ir.NewError(ir.ErrInvalidRequest, 400, "", "bad value")
+	e.Param = "max_tokens"
+	var joined string
+	for _, f := range RenderStreamError(e) {
+		joined += string(f)
+	}
+	if !strings.Contains(joined, "max_tokens") {
+		t.Errorf("frames = %s, 应含 param", joined)
+	}
+}
+
+// 无 param 时字段要缺席，而不是渲染成空串：客户端会把空串当成一个真字段名。
+func TestErrorEnvelopeOmitsEmptyParam(t *testing.T) {
+	_, body := RenderError(ir.NewError(ir.ErrInvalidRequest, 400, "", "bad"))
+	if strings.Contains(string(body), "param") {
+		t.Errorf("body = %s, 无 param 时该字段应缺席", body)
+	}
+}
+
+// 本协议的流式形态是扁平的 choices[].delta，没有块生命周期，也就没有可
+// 悬空的状态机——无需闭合帧。但 [DONE] 必须发：客户端靠它判定流结束。
+func TestErrorStreamCarriesDoneWithoutFinishReason(t *testing.T) {
+	e := newStreamEncoder()
+	var joined string
+	for _, ev := range []ir.Event{
+		{Type: ir.EvMessageStart, MessageID: "chatcmpl_1"},
+		{Type: ir.EvTextDelta, Index: 0, Text: "half"},
+		{Type: ir.EvError, Err: ir.NewError(ir.ErrUpstream, 500, "", "boom")},
+	} {
+		frames, err := e.Encode(ev)
+		if err != nil {
+			t.Fatalf("encode %s: %v", ev.Type, err)
+		}
+		for _, f := range frames {
+			joined += string(f)
+		}
+	}
+	for _, f := range e.Finish() {
+		joined += string(f)
+	}
+	if !strings.Contains(joined, "[DONE]") {
+		t.Errorf("缺 [DONE]，客户端会挂到超时: %s", joined)
+	}
+	if strings.Contains(joined, "finish_reason") {
+		t.Errorf("错误收尾不得带 finish_reason: %s", joined)
+	}
+	if strings.Count(joined, "[DONE]") != 1 {
+		t.Errorf("[DONE] 只该出现一次: %s", joined)
 	}
 }

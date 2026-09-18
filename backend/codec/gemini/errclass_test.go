@@ -74,3 +74,20 @@ func TestDecodeErrorUnwrapsJSONStuffedIntoMessage(t *testing.T) {
 		t.Errorf("kind = %q, want context_exceeded", got.Kind)
 	}
 }
+
+// param 要一路带到 ir.Error：客户端靠它知道改哪个字段。
+// 兼容层代理常在本协议的端点上回 openai 形状的错误体，所以即便本协议
+// 自家的错误结构没有 param 位，也要能从原始字节里挖出来。
+func TestDecodeErrorCarriesParam(t *testing.T) {
+	got := DecodeError(400, []byte(`{"error":{"message":"bad value","param":"max_tokens"}}`))
+	if got.Param != "max_tokens" {
+		t.Errorf("param = %q, want max_tokens", got.Param)
+	}
+}
+
+func TestDecodeErrorLeavesParamEmptyWhenAbsent(t *testing.T) {
+	got := DecodeError(400, []byte(`{"error":{"message":"bad value"}}`))
+	if got.Param != "" {
+		t.Errorf("param = %q, 上游没给就该缺席而不是空串以外的值", got.Param)
+	}
+}

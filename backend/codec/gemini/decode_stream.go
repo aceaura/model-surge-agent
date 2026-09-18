@@ -296,10 +296,10 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 func DecodeError(status int, body []byte) *ir.Error {
 	var env wireErrorEnvelope
 	if err := json.Unmarshal(body, &env); err == nil && env.Error.Message != "" {
-		return convertError(status, &env.Error)
+		return codec.WithParam(convertError(status, &env.Error), body)
 	}
 	// 不是本协议的错误结构：尽力从任意形状里挖消息，挖不到才回落状态码描述。
-	return codec.FallbackError(status, body)
+	return codec.WithParam(codec.FallbackError(status, body), body)
 }
 
 func convertError(status int, e *wireError) *ir.Error {

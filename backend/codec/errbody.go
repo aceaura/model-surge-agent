@@ -59,6 +59,41 @@ func FallbackError(status int, body []byte) *ir.Error {
 	return ir.NewError(KindForStatus(status, message), status, "", message)
 }
 
+// WithParam 给已归一的错误补上出问题的字段名，已有值时不覆盖。
+//
+// 放在 DecodeError 的出口统一调用，而不是各协议自己从 wire 结构里取：
+// 只有 openai 系两个协议的 wireError 有 param 位，另两个没有，而错误体常来自
+// 兼容层代理——anthropic 端点回一个 openai 形状的错误体是常态。从原始字节挖
+// 能同时覆盖结构化路径与 FallbackError 路径。
+func WithParam(err *ir.Error, body []byte) *ir.Error {
+	if err == nil || err.Param != "" {
+		return err
+	}
+	err.Param = ExtractParam(body)
+	return err
+}
+
+// ExtractParam 从上游错误体里取出出问题的请求字段名。
+//
+// 只认 error.param 与顶层 param 两种位置，与 ExtractMessage 的宽松策略刻意相反：
+// message 认错了只是文案不准，param 认错了会把客户端引向一个根本没问题的字段，
+// 让它照着改——那比不给这个字段更糟。
+func ExtractParam(body []byte) string {
+	var v map[string]any
+	if json.Unmarshal(body, &v) != nil {
+		return ""
+	}
+	if inner, ok := v["error"].(map[string]any); ok {
+		if s, ok := inner["param"].(string); ok {
+			return strings.TrimSpace(s)
+		}
+	}
+	if s, ok := v["param"].(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return ""
+}
+
 // maxUnwrapDepth 限制下钻层数：错误体来自外部，深层嵌套可能是恶意构造，
 // 也可能只是层层转发的产物，两种情况都没有再往下找的价值。
 const maxUnwrapDepth = 6

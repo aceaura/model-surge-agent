@@ -161,6 +161,18 @@ type LossyResponseEncoder interface {
 	EncodeResponseLossy(resp *ir.Response) ([]byte, []string, error)
 }
 
+// LossyErrorRenderer 是错误渲染的可选出口，报告错误的哪些维度因入站协议
+// 表达不了而被丢掉。
+//
+// 只有真的丢维度的协议才实现它：anthropic 的错误信封只有 {type,message}
+// 两个位，上游给的 param 到它这里无处安放。chat_completions 与 responses
+// 都有 param 位，无话可说，不实现。
+type LossyErrorRenderer interface {
+	// RenderErrorLossy 除状态码与响应体外返回有损说明。
+	// 无丢弃时说明为 nil，且返回的字节必须与 RenderError 逐字节相同。
+	RenderErrorLossy(err *ir.Error) (int, []byte, []string)
+}
+
 // OutboundCodec 面向上游：编请求、解响应。
 type OutboundCodec interface {
 	Name() string

@@ -702,6 +702,14 @@ data: {"type":"error","error":{"type":"api_error","message":"upstream exploded"}
 	if !strings.Contains(out, "upstream exploded") {
 		t.Errorf("the error must appear inside the stream: %s", out)
 	}
+	// 错误帧之前要闭合已开的块，客户端 SDK 的块状态机才能收束。
+	// 闭合与宣告正常结束是两件事，下一条断言守的是后者不发生。
+	if !strings.Contains(out, "content_block_stop") {
+		t.Errorf("已开的块必须在错误帧之前收到闭合帧: %s", out)
+	}
+	if strings.Index(out, "content_block_stop") > strings.Index(out, "upstream exploded") {
+		t.Errorf("闭合帧必须排在错误帧之前: %s", out)
+	}
 	// 错误事件本身就是本协议的终止形态。再补 message_stop 会让客户端
 	// 把这轮当正常结束，把残缺内容存进历史。
 	if strings.Contains(out, "message_stop") {
@@ -909,6 +917,51 @@ func TestFirstTokenTimeoutSwapsTarget(t *testing.T) {
 	}
 	if got := f.col.outcomes(); len(got) != 2 || got[0] != relayclient.OutcomeRetrying {
 		t.Errorf("outcomes = %v", got)
+	}
+}
+
+// 空闲超时与首字节超时对称，但处置相反：已 committed，状态码是 200，
+// 换目标会让客户端看到两段拼接的回答，所以只能流内报错收尾。
+func TestIdleTimeoutAfterCommitStaysInsideTheStream(t *testing.T) {
+	up := &fakeUpstream{handler: func(_ int, w http.ResponseWriter) {
+		writeStream(w, `event: message_start
+data: {"type":"message_start","message":{"id":"msg_1"}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}
+
+`)
+		// 发完就挂住，不给终止帧，逼出空闲超时。
+		time.Sleep(500 * time.Millisecond)
+	}}
+	url := up.start(t)
+	f := newFixture(t,
+		relaymock.Step{Target: target(url, "kimi-1/k3")},
+		relaymock.Step{Target: target(url, "ark-1/ds")},
+	)
+	f.p.Opts.IdleTimeout = 100 * time.Millisecond
+
+	w := httptest.NewRecorder()
+	f.p.Serve(context.Background(), w, call(t, true))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("committed 之后状态码不可改，got %d", w.Code)
+	}
+	out := w.Body.String()
+	if !strings.Contains(out, "partial") {
+		t.Errorf("超时前已收到的内容必须交给客户端: %s", out)
+	}
+	if up.calls() != 1 {
+		t.Errorf("upstream calls = %d, committed 之后不该换目标", up.calls())
+	}
+	if rec := f.col.record(t); rec.ErrorCode != "timeout" {
+		t.Errorf("error_code = %q, want timeout", rec.ErrorCode)
+	}
+	if strings.Contains(out, "message_stop") {
+		t.Errorf("超时收尾不得宣告正常结束: %s", out)
 	}
 }
 

@@ -380,9 +380,9 @@ func DecodeError(status int, body []byte) *ir.Error {
 	if err := json.Unmarshal(body, &env); err != nil || env.Error.Message == "" {
 		// 本协议的兼容实现最多，错误体形状五花八门：先尽力挖消息，
 		// 挖不到才回落状态码描述。
-		return codec.FallbackError(status, body)
+		return codec.WithParam(codec.FallbackError(status, body), body)
 	}
-	return convertError(status, &env.Error)
+	return codec.WithParam(convertError(status, &env.Error), body)
 }
 
 func convertError(status int, e *wireError) *ir.Error {
@@ -396,7 +396,9 @@ func convertError(status int, e *wireError) *ir.Error {
 	// 消息位上可能是被字符串化的下游错误体，取出里面的真消息再归类：
 	// 上下文超限的判定要看消息文本，读到一串转义引号就判不出来了。
 	msg := codec.RefineMessage(e.Message)
-	return ir.NewError(codec.KindFor(status, code, msg), status, code, msg)
+	out := ir.NewError(codec.KindFor(status, code, msg), status, code, msg)
+	out.Param = e.Param
+	return out
 }
 
 // errorCode 取 code 的文本形式：各家有时给字符串有时给数字。

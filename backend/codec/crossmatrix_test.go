@@ -2617,6 +2617,17 @@ func protocolLimitations() []protocolLimitation {
 				"省略等于把这次调用与它的结果彻底断开",
 			absent: func() bool { return !toolIDOptional(codec.ProtocolResponses) },
 		},
+		{
+			matrix: "error-shape", protocol: codec.ProtocolChatCompletions, feature: "block close",
+			reason: "本协议的流式形态是扁平的 choices[].delta，没有块生命周期，" +
+				"也就没有可悬在半开状态的块，无需闭合帧",
+			absent: func() bool { _, ok := blockCloseFrame[codec.ProtocolChatCompletions]; return !ok },
+		},
+		{
+			matrix: "error-param", protocol: codec.ProtocolAnthropic, feature: "param",
+			reason: "本协议的错误信封只有 {type,message} 两个位，param 无处安放",
+			absent: func() bool { return inboundDropsParam(codec.ProtocolAnthropic) },
+		},
 	}
 }
 
@@ -2683,6 +2694,16 @@ func TestEveryMatrixGapIsDocumented(t *testing.T) {
 		}
 		if !toolIDOptional(up) {
 			assert(t, "synth-id-omission", up, "omitted id")
+		}
+	}
+
+	// 错误路径的两组矩阵按入站协议展开：错误渲染是入站职责。
+	for _, in := range codec.InboundNames() {
+		if _, ok := blockCloseFrame[in]; !ok {
+			assert(t, "error-shape", in, "block close")
+		}
+		if inboundDropsParam(in) {
+			assert(t, "error-param", in, "param")
 		}
 	}
 }

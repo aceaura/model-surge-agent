@@ -301,6 +301,7 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 | `dropped thinking signature from the response (%s cannot express it: no signed reasoning)` | 客户端协议根本没有承载签名的字段（如 `chat_completions`） |
 | `merged tool call fragments that arrived under different indexes (matched by call id)` | `chat_completions` 上游同一次调用的分片带着不同 `index`，按 `id` 并回一个块。不并的后果是客户端收到两个 `tool_use`、拿着两份半截入参各执行一次，而 HTTP 状态码是 200 |
 | `split a stream line that carried several JSON documents` | 一行 SSE `data:` 里首尾相接挤了多个 JSON 文档。只在整帧解码失败后才拆，拆后任一份不合法即整行失败，不接受部分解码 |
+| `dropped error param %s (anthropic error envelope has no param field)` | 上游错误体给了 `error.param` 而客户端用的是 anthropic 协议，该信封没有这个位。详见 §3.2.6 |
 
 签名剥离只丢签名，不丢推理文本：文本对客户端仍然有用，只有签名是它验不了、下一轮会被上游拒收的那部分。
 
@@ -336,6 +337,62 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 **省略不记进 `lossy`**：这是恢复协议的原生形态而非削弱请求，而且 gemini 每个无 id 的调用都会触发，恒定出现的说明会把真正的有损信号淹掉。
 
 省略只发生在写请求体这一步，IR 内部的 id 保持完整——gemini 的 `functionResponse` 只有 name 没有 id，填 name 要靠一张以 id 为键的表，IR 里的 id 一清那张表就查不到了。
+
+#### 3.2.6 错误的 `param` 维度
+
+上游因某个具体字段拒收请求时，错误体里的 `error.param` 指出是哪个字段。这一维度会被归一进内部错误对象并按入站协议渲染出去：
+
+| 入站协议 | 错误信封的 `param` 位 | 处置 |
+| --- | --- | --- |
+| anthropic | 无（信封只有 `{type,message}`） | 丢弃，记一条 `lossy` |
+| chat_completions | `error.param` | 原样带出 |
+| responses | `error.param`，流内 `event: error` 同样带 | 原样带出 |
+
+| 形态 | 触发条件 |
+| --- | --- |
+| `dropped error param max_tokens (anthropic error envelope has no param field)` | 上游给了 `param` 而客户端用的是 anthropic 协议 |
+
+两点需要说明：
+
+- **这条丢弃要记进 `lossy`**，与「补块闭合帧」不同：它确实丢了信息，且只在上游真的给了 `param` 时才出现，指向性成立。恒定发生的动作若也记进来，这个字段就再也指不出哪条路由真的削弱了诊断。
+- **提取只认 `error.param` 与顶层 `param` 两种位置**，不做 `message` 那样的宽松字段名匹配。消息认错了只是文案不准，字段名认错了会让调用方去改一个根本没问题的字段，比不给这个维度更糟。
+
+#### 3.2.7 流式错误收尾的帧形态
+
+`committed` 之后（首帧已解码、HTTP 200 已写出）才失败时，状态码收不回来，错误只能落在流内。收尾遵循一条分界：**闭合已开启的块，但不宣告正常结束**。前者让客户端 SDK 的块状态机收束，后者会让它把这轮当成功、把残缺内容存进历史。
+
+| 入站协议 | 块闭合帧 | 错误帧 | 失败终态 | 不会出现 |
+| --- | --- | --- | --- | --- |
+| anthropic | 每个开着的块一个 `content_block_stop` | `event: error` | 错误帧自身即终态 | `message_delta`、`message_stop` |
+| chat_completions | 无块概念，无需闭合 | 内含 `error` 的 data 帧 | `[DONE]` | 带 `finish_reason` 的 chunk |
+| responses | 每个开着的条目一个 `output_item.done`（文本条目另有 `content_part.done`） | `event: error` | `response.failed` | `response.completed`、`response.incomplete` |
+
+三点需要说明：
+
+- **responses 的失败终态是 `response.failed`。** 只发 `error` 帧客户端会一直等一个终态事件，挂到自己的超时。该帧带 `status:"failed"` 与 `error` 对象，但**不重复携带已发出的 output items**：客户端已经逐帧收到过它们。
+- **错误收尾时闭合的 responses 条目标 `incomplete` 而非 `completed`。** 那一刻条目里的函数入参可能只有半截 JSON、推理可能缺签名，标成 `completed` 等于告诉客户端这个条目可以用。
+- **chat_completions 仍发 `[DONE]`。** 该协议的客户端靠它判定流结束，缺了会挂到超时——这与「不发 `finish_reason`」不矛盾：前者是流的边界，后者才是「正常说完了」的语义。
+
+残缺工具入参或缺签名推理块另有一层处置（见 `error_code` 的 `incomplete_stream`）：补闭合帧不改变那条判定，闭合是为了状态机，不是为了把毒历史包装成可用。
+
+#### 3.2.8 `error_code` 的取值
+
+| 取值 | 含义 | 是否累计目标失败 |
+| --- | --- | --- |
+| `invalid_request` | 请求本身有问题，换目标也没用 | 是 |
+| `authentication` | 凭据无效或权限不足 | 是 |
+| `not_found` | 模型不存在 | 是 |
+| `rate_limit` | 限流，换目标有意义 | 是 |
+| `context_exceeded` | 输入超出模型上下文窗口 | 否（是客户端的问题） |
+| `upstream` | 上游 5xx 或响应无法解码 | 是 |
+| `timeout` | 首字节或空闲超时 | 是 |
+| `internal` | 本服务自身出错 | 是 |
+| `incomplete_stream` | 流断在不能补闭合的位置（残缺工具入参、缺签名推理块） | 是 |
+| `canceled` | **客户端自己取消了请求** | **否** |
+
+`canceled` 单独成类是为了让运维能把它与真实上游故障分开统计。混在一起的后果是：客户端多按几次停止，健康账号的失败计数就会涨到冷却。流式与非流式都覆盖——非流式请求在聚合完成前一个字节都不写客户端，所以「写客户端失败」观察不到取消，只能从请求 context 判定。
+
+判定为客户端取消时：上报 `normal` 不累计失败、按已收事件结算 usage（上游照样计费）、不换目标重试（客户端已经不要这个回答了）、不向客户端写任何字节。
 
 ### 3.3 LiveEntry
 

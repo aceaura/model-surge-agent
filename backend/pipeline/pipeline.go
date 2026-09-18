@@ -287,7 +287,7 @@ func (p *Pipeline) fail(w http.ResponseWriter, call Call, rec *Record, err *ir.E
 	rec.ErrorCode = string(err.Kind)
 	rec.ErrorMessage = err.Message
 
-	status, body := call.Inbound.RenderError(err)
+	status, body := renderErrorWithLossy(call.Inbound, err, rec)
 	rec.StatusCode = status
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -393,6 +393,16 @@ func encodeResponseWithLossy(inbound codec.InboundCodec, resp *ir.Response) ([]b
 	}
 	body, err := inbound.EncodeResponse(resp)
 	return body, nil, err
+}
+
+// renderErrorWithLossy 渲染错误体，并把入站协议表达不了的维度记进流水。
+func renderErrorWithLossy(inbound codec.InboundCodec, err *ir.Error, rec *Record) (int, []byte) {
+	if lr, ok := inbound.(codec.LossyErrorRenderer); ok {
+		status, body, notes := lr.RenderErrorLossy(err)
+		rec.addResponseLossy(notes...)
+		return status, body
+	}
+	return inbound.RenderError(err)
 }
 
 func asIRError(err error, fallback ir.ErrorKind) *ir.Error {

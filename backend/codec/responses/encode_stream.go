@@ -163,8 +163,14 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		return nil, nil
 
 	case ir.EvError:
+		// 先把已开的条目标成 incomplete 闭合，再发 error，最后补 response.failed。
+		//
+		// 本协议的失败终态是 response.failed：只发 error 帧客户端会一直等一个
+		// 终态事件。但绝不发 response.completed——那会把失败说成成功。
+		out := e.closeAllAsIncomplete()
 		e.errored = true
-		return RenderStreamError(ev.Err), nil
+		out = append(out, RenderStreamError(ev.Err)...)
+		return append(out, e.failedFrames(ev.Err)...), nil
 
 	default:
 		return nil, nil
@@ -223,6 +229,14 @@ func (e *streamEncoder) ensureOpen(index int, kind ir.BlockType) ([][]byte, *ope
 }
 
 func (e *streamEncoder) closeBlock(index int) ([][]byte, error) {
+	return e.closeBlockAs(index, "completed")
+}
+
+// closeBlockAs 闭合条目并指定它的终态。
+//
+// 错误收尾时传 incomplete 而非 completed：那一刻条目里的函数入参可能只有
+// 半截 JSON、推理可能缺签名，标成 completed 等于告诉客户端这个条目可以用。
+func (e *streamEncoder) closeBlockAs(index int, status string) ([][]byte, error) {
 	item, ok := e.items[index]
 	if !ok || item.closed {
 		return nil, nil
@@ -244,12 +258,25 @@ func (e *streamEncoder) closeBlock(index int) ([][]byte, error) {
 	frames, err := e.frame(evOutputItemDone, wireStreamEvent{
 		Type:        evOutputItemDone,
 		OutputIndex: item.outputIndex,
-		Item:        item.wire("completed"),
+		Item:        item.wire(status),
 	})
 	if err != nil {
 		return nil, err
 	}
 	return append(out, frames...), nil
+}
+
+// closeAllAsIncomplete 闭合所有残留条目，供错误收尾使用。
+func (e *streamEncoder) closeAllAsIncomplete() [][]byte {
+	var out [][]byte
+	for _, index := range e.order {
+		frames, err := e.closeBlockAs(index, "incomplete")
+		if err != nil {
+			continue
+		}
+		out = append(out, frames...)
+	}
+	return out
 }
 
 // finish 闭合残留条目，再发带完整 response 对象的终止帧。
@@ -292,6 +319,28 @@ func (e *streamEncoder) Finish() [][]byte {
 		return nil
 	}
 	return out
+}
+
+// failedFrames 发 response.failed，本协议的失败终态。
+//
+// response 对象里不重复带已发出的 output items：客户端已经逐帧收到过它们，
+// 再来一份不增加信息，而为此在编码器里维护一份副本等于把聚合职责搬进来。
+func (e *streamEncoder) failedFrames(err *ir.Error) [][]byte {
+	resp := &wireResponse{
+		ID:     e.messageID(),
+		Object: "response",
+		Model:  e.model,
+		Status: "failed",
+	}
+	_, env := errorEnvelope(err)
+	resp.Error = &env.Error
+	u := renderUsage(e.usage)
+	resp.Usage = &u
+	frames, frameErr := e.frame(evFailed, wireStreamEvent{Type: evFailed, Response: resp})
+	if frameErr != nil {
+		return nil
+	}
+	return frames
 }
 
 // snapshot 组出当前的 response 对象。终止帧必须带它：
@@ -504,6 +553,7 @@ func errorEnvelope(err *ir.Error) (int, wireErrorEnvelope) {
 		Type:    errorTypeForKind(err.Kind),
 		Code:    string(err.Kind),
 		Message: err.Message,
+		Param:   err.Param,
 	}}
 }
 

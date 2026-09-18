@@ -23,6 +23,10 @@ const (
 	ErrTimeout ErrorKind = "timeout"
 	// ErrInternal 本服务自身出错。
 	ErrInternal ErrorKind = "internal"
+	// ErrCanceled 客户端自己取消了请求。既不是目标的故障也不是本服务的错，
+	// 单独成类是为了让运维能把它与真实上游故障分开统计——混在一起的话，
+	// 客户端多按几次停止就会让健康账号的失败计数涨到冷却。
+	ErrCanceled ErrorKind = "canceled"
 )
 
 // Error 是归一化的错误。StatusCode 是上游原始状态码（本地错误为 0），
@@ -33,6 +37,11 @@ type Error struct {
 	// Code 与 Message 尽量保留上游原文，便于客户端排查。
 	Code    string `json:"code,omitempty"`
 	Message string `json:"message"`
+	// Param 指出是哪个请求字段有问题，只有 openai 系协议的错误信封有这一维度。
+	// 归一时保留而非丢弃：这是 400 错误里最有排查价值的信息，客户端拿不到它
+	// 就只能逐个字段试。不进 NewError 的参数表——绝大多数调用点是本地错误、
+	// 没有这个维度，加进签名等于让四十余处调用点都跟着填一个空串。
+	Param string `json:"param,omitempty"`
 	// Retryable 由 Kind 决定，构造时统一填充。
 	Retryable bool `json:"retryable"`
 }

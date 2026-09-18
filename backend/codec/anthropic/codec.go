@@ -45,6 +45,10 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 
 func (inboundCodec) RenderError(err *ir.Error) (int, []byte) { return RenderError(err) }
 
+func (inboundCodec) RenderErrorLossy(err *ir.Error) (int, []byte, []string) {
+	return RenderErrorLossy(err)
+}
+
 func (inboundCodec) RenderStreamError(err *ir.Error) [][]byte { return RenderStreamError(err) }
 
 type outboundCodec struct{}

@@ -141,8 +141,14 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		return [][]byte{frame}, nil
 
 	case ir.EvError:
+		// 先闭合已开的块，再发错误帧。
+		//
+		// 闭合块与「宣告这轮正常结束」是两件事：前者让客户端 SDK 的块状态机
+		// 收束，后者才会让它以为这轮成功。只做前者——errored 置位后 Finish()
+		// 仍然什么都不补，message_delta 与 message_stop 一帧都不会出现。
+		out := e.closeAll()
 		e.errored = true
-		return RenderStreamError(ev.Err), nil
+		return append(out, RenderStreamError(ev.Err)...), nil
 
 	default:
 		return nil, nil
@@ -310,12 +316,27 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 
 // RenderError 编非流式错误响应。
 func RenderError(err *ir.Error) (int, []byte) {
+	status, body, _ := RenderErrorLossy(err)
+	return status, body
+}
+
+// RenderErrorLossy 与 RenderError 编出同样的字节，另外报告丢掉的维度。
+//
+// 本协议的错误信封只有 {type,message} 两个位，上游给的 param 无处安放。
+// 这条要记进 lossy：它确实丢了信息，且只在上游真的给了 param 时才出现，
+// 指向性成立——与「补块闭合帧」那种恒定发生、不丢信息的动作不同。
+func RenderErrorLossy(err *ir.Error) (int, []byte, []string) {
 	status, env := errorEnvelope(err)
+	var notes []string
+	if err != nil && err.Param != "" {
+		notes = append(notes, "dropped error param "+err.Param+
+			" (anthropic error envelope has no param field)")
+	}
 	body, marshalErr := json.Marshal(env)
 	if marshalErr != nil {
-		return status, []byte(`{"type":"error","error":{"type":"api_error","message":"internal error"}}`)
+		return status, []byte(`{"type":"error","error":{"type":"api_error","message":"internal error"}}`), notes
 	}
-	return status, body
+	return status, body, notes
 }
 
 // RenderStreamError 编流内错误帧。此时 HTTP 200 已写出，状态码不可再改，
