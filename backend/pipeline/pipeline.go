@@ -140,6 +140,9 @@ type Call struct {
 	ClientKey string
 	// Stream 表示客户端要不要 SSE。对上游一律流式，与此无关。
 	Stream bool
+	// Declarations 是客户端的协议声明（版本与 beta 特性）。
+	// 承载不了它的出站协议会把它记成有损，而不是静默丢弃。
+	Declarations codec.Declarations
 }
 
 // Serve 处理一次客户端请求，自行把响应或错误写进 w。
@@ -264,6 +267,9 @@ func (p *Pipeline) attempt(ctx context.Context, w http.ResponseWriter, call Call
 			err: retryableErr(asIRError(err, ir.ErrInternal)),
 		}
 	}
+	// 声明的丢弃与请求体的丢弃并列：客户端声明的 beta 特性没送到上游，
+	// 与它的某个字段没送到，对客户端是同一类损失。
+	lossy = codec.MergeNotes(lossy, codec.DescribeDeclarationLoss(call.Declarations, outbound))
 	// 换目标重试时覆盖而非累加：诊断描述的是最终发出去的那次编码，
 	// 混入上一个目标的丢弃项会把排查引向一个没被采用的路径。
 	rec.Lossy = lossy
@@ -277,7 +283,7 @@ func (p *Pipeline) attempt(ctx context.Context, w http.ResponseWriter, call Call
 		}
 	}
 
-	stream, irErr := p.open(ctx, outbound, target, body)
+	stream, irErr := p.open(ctx, outbound, target, body, call.Declarations)
 	if irErr != nil {
 		return outcomeFor(irErr), attemptResult{err: irErr}
 	}

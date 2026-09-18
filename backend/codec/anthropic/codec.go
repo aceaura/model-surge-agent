@@ -109,9 +109,29 @@ func (outboundCodec) EncodeRequestLossy(req *ir.Request) ([]byte, []string, erro
 }
 
 // Endpoint 的 stream 参数在本协议下不影响路径：流式由请求体的 stream 字段决定。
+//
+// 额外头返回 nil：版本头曾在这里硬编，现已移交 DeclarationHeaders——
+// 客户端声明的版本决定响应体形态，拿固定值覆盖它，客户端的解析器就对不上。
 func (outboundCodec) Endpoint(baseURL, _ string, _ bool) (string, map[string]string) {
-	return strings.TrimRight(baseURL, "/") + "/v1/messages",
-		map[string]string{"anthropic-version": apiVersion}
+	return strings.TrimRight(baseURL, "/") + "/v1/messages", nil
+}
+
+// DeclarationHeaders 把客户端的协议声明落到本协议的头上。
+//
+// 不注入本服务自己的 beta 令牌：cc-switch 与 sub2api 都注入 Claude Code 的
+// 令牌，目的是通过上游的「仅官方客户端」指纹检查。那是身份伪造，要做应当
+// 由运维在调度层的账号头里配，不该由数据面代劳。
+func (outboundCodec) DeclarationHeaders(d codec.Declarations) map[string]string {
+	h := make(map[string]string, 2)
+	if d.APIVersion != "" {
+		h["anthropic-version"] = d.APIVersion
+	} else {
+		h["anthropic-version"] = apiVersion
+	}
+	if len(d.Betas) > 0 {
+		h["anthropic-beta"] = strings.Join(d.Betas, ",")
+	}
+	return h
 }
 
 func (outboundCodec) NewStreamDecoder() codec.StreamDecoder { return newStreamDecoder() }

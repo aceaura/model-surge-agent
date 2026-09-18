@@ -124,7 +124,8 @@ func (s *Server) dataPlane(protocol string) http.HandlerFunc {
 			UserModel: req.Model,
 			ClientKey: clientKey(r),
 			// 客户端要不要 SSE 由请求体的 stream 决定；对上游一律流式，与此无关。
-			Stream: req.Stream,
+			Stream:       req.Stream,
+			Declarations: readDeclarations(r),
 		})
 	}
 }
@@ -193,13 +194,46 @@ func clientKey(r *http.Request) string {
 // 与读取时的第一优先头同名：客户端回显自己给的值时，看到的是同一个键。
 const headerRequestID = "X-Request-Id"
 
-// requestID 沿用客户端给的 id，没有才生成。
+// maxRequestIDLen 是沿用客户端请求 ID 的长度上限。
+//
+// 必须有上限：这个值会成为 request_log 的主键、X-Request-Id 响应头、
+// 以及上报 ID（report_id 带 UNIQUE 约束）。128 够装 UUID 与带前缀的
+// trace id。
+const maxRequestIDLen = 128
+
+// validRequestID 判断客户端给的 id 能否安全沿用。
+//
+// 不校验的后果是具体的：request_log 的主键写入是 ON CONFLICT DO UPDATE，
+// 客户端发一个已存在的 id 就能改掉别人那一行。
+//
+// 字符集刻意不含空格与 `/`：前者让日志行难切分，后者在按 id 拼路径的
+// 管理面查询里会改变 URL 结构。
+func validRequestID(s string) bool {
+	if s == "" || len(s) > maxRequestIDLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-', c == '_', c == '.', c == ':':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// requestID 沿用客户端给的 id，没有或不合法才生成。
 //
 // 沿用是为了让客户端日志与本服务流水能对上；重试时它保持不变，
 // 所以 request_id 能把同一次客户端请求的多次尝试串起来。
+//
+// 不合法时只是换掉，不拒绝请求：客户端的业务请求本身没问题，
+// 拒绝会把一个可自愈的卫生问题变成故障。
 func requestID(r *http.Request) string {
 	for _, h := range []string{"X-Request-Id", "X-Request-ID", "Request-Id"} {
-		if v := strings.TrimSpace(r.Header.Get(h)); v != "" {
+		if v := strings.TrimSpace(r.Header.Get(h)); validRequestID(v) {
 			return v
 		}
 	}

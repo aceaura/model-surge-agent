@@ -355,20 +355,32 @@ type fixture struct {
 
 // newFixture 装一台完整的服务。maxBody 传 0 表示用默认上限。
 func newFixture(t *testing.T, maxBody ...int64) *fixture {
+	return newFixtureWithTarget(t, nil, maxBody...)
+}
+
+// newFixtureWithTarget 同上，但可以改调度层给出的目标。
+//
+// 改目标而不是暴露 relaymock 的 steps：目标是在 mock 构造时定下的，
+// 事后改字段要么得导出内部切片，要么在服务已经起来之后改共享状态。
+func newFixtureWithTarget(t *testing.T, tune func(*relayclient.Target), maxBody ...int64) *fixture {
 	t.Helper()
 
 	spy := &upstreamSpy{}
 	up := httptest.NewServer(spy)
 	t.Cleanup(up.Close)
 
-	relay := relaymock.New(relaymock.Step{Target: relayclient.Target{
+	target := relayclient.Target{
 		ModelID:     "m-1",
 		Account:     "acc-1",
 		Protocol:    codec.ProtocolAnthropic,
 		BaseURL:     up.URL,
 		NativeModel: "native",
 		Headers:     map[string]string{"x-api-key": "sk-upstream"},
-	}})
+	}
+	if tune != nil {
+		tune(&target)
+	}
+	relay := relaymock.New(relaymock.Step{Target: target})
 	relay.Models = []relayclient.UserModelSummary{
 		{Name: "user-model", Collection: "main", Protocol: codec.ProtocolAnthropic, Enabled: true},
 		{Name: "disabled-model", Collection: "main", Enabled: false},
@@ -468,9 +480,10 @@ func (r *recorderSpy) one(t *testing.T) pipeline.Record {
 // upstreamSpy 是假上游：记下收到的请求体并回一段固定的流。
 // 字段加锁：处理函数跑在 httptest 的协程上，断言在测试协程读。
 type upstreamSpy struct {
-	mu     sync.Mutex
-	calls  int
-	stream bool
+	mu      sync.Mutex
+	calls   int
+	stream  bool
+	headers http.Header
 }
 
 func (s *upstreamSpy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -481,6 +494,7 @@ func (s *upstreamSpy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.calls++
 	s.stream = body.Stream
+	s.headers = r.Header.Clone()
 	s.mu.Unlock()
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -501,6 +515,21 @@ func (s *upstreamSpy) sawStream() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.stream
+}
+
+func (s *upstreamSpy) header(name string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.headers.Get(name)
+}
+
+// hasHeader 与 header 分开：空字符串既可能是「没这个头」也可能是
+// 「头存在但值为空」，断言「不该发出去」时必须能区分。
+func (s *upstreamSpy) hasHeader(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.headers[http.CanonicalHeaderKey(name)]
+	return ok
 }
 
 type modelLister struct{ relay *relayclient.Client }

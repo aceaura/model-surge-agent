@@ -318,11 +318,16 @@ func TestRegisteredUnderProtocolName(t *testing.T) {
 	if !ok || out.Name() != Name {
 		t.Fatalf("outbound not registered: %v %v", out, ok)
 	}
-	url, headers := out.Endpoint("https://api.example.test/coding/", "claude-opus-5", true)
+	url, _ := out.Endpoint("https://api.example.test/coding/", "claude-opus-5", true)
 	if url != "https://api.example.test/coding/v1/messages" {
 		t.Errorf("endpoint = %q", url)
 	}
-	if headers["anthropic-version"] != apiVersion {
-		t.Errorf("headers = %v", headers)
+	// 版本头不再由 Endpoint 给出：它跟着客户端声明走，见 DeclarationHeaders。
+	de, ok := out.(codec.DeclarationEncoder)
+	if !ok {
+		t.Fatal("outbound does not carry client declarations")
+	}
+	if got := de.DeclarationHeaders(codec.Declarations{})["anthropic-version"]; got != apiVersion {
+		t.Errorf("default version = %q, want %q", got, apiVersion)
 	}
 }

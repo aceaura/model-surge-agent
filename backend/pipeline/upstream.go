@@ -33,7 +33,7 @@ func (u *upstream) Close() {
 // open 发出上游请求并确认拿到了 2xx 与流式响应体。
 // 此时还没读任何帧：解码首帧的成败才决定要不要换目标。
 func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
-	target relayclient.Target, body []byte) (*upstream, *ir.Error) {
+	target relayclient.Target, body []byte, decls codec.Declarations) (*upstream, *ir.Error) {
 
 	url, extra := outbound.Endpoint(target.BaseURL, target.NativeModel, true)
 
@@ -50,6 +50,13 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 	req.Header.Set("Accept", "text/event-stream")
 	for k, v := range extra {
 		req.Header.Set(k, v)
+	}
+	// 客户端声明排在凭据头之前：调度层的头来自运维配置，
+	// 运维意图优先于客户端声明。
+	if de, ok := outbound.(codec.DeclarationEncoder); ok {
+		for k, v := range de.DeclarationHeaders(decls) {
+			req.Header.Set(k, v)
+		}
 	}
 	// 凭据头来自调度层，只写进这个 http.Request，不入库不落日志。
 	for k, v := range target.Headers {
