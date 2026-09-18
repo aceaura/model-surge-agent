@@ -90,6 +90,11 @@ func (outboundCodec) EncodeRequestLossy(req *ir.Request) ([]byte, []string, erro
 	if err != nil {
 		return nil, nil, err
 	}
+	// 体积在编码之后才测得到：IR 的估算值与实际序列化结果有偏差
+	// （JSON 转义、base64 媒体、字段名开销），而偏差正是这条预检要防的。
+	if note := codec.PayloadBudgetNote(body, Name, caps); note != "" {
+		shapeNotes = append(shapeNotes, note)
+	}
 	// 诊断按原始请求推导：shape 已把部分字段降级掉，拿改写后的请求去推
 	// 会漏报本该报的丢弃。
 	return body, codec.MergeNotes(codec.DescribeLossy(req, Name, caps), shapeNotes), nil

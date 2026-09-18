@@ -245,10 +245,7 @@ func (d *streamDecoder) announce(slot *toolSlot) []ir.Event {
 
 func (d *streamDecoder) synthCallID(name string) string {
 	d.callCounter++
-	if name == "" {
-		return fmt.Sprintf("call_%d", d.callCounter)
-	}
-	return fmt.Sprintf("call_%s_%d", name, d.callCounter)
+	return codec.SynthToolID(name, d.callCounter)
 }
 
 // slot 取槽位对应的块索引，首次出现时同时产出 block_start。

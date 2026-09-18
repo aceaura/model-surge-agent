@@ -36,6 +36,9 @@ func (outboundCodec) Caps() codec.Capabilities {
 		StopSequences: true,
 		// systemInstruction 是单一 Content，system 里的非文本块必须先降级成文本。
 		SystemAsText: true,
+		// functionCall / functionResponse 靠 name 配对，id 是可选字段：
+		// 本服务合成的 id 不写进请求体，交由上游按调用顺序消歧。
+		ToolIDOptional: true,
 		// ThinkingExcludesForcedTools 留零值：无账号、无官方文档，
 		// 推理与强制工具是否互斥**未核实**。零值不等于已确认允许，
 		// 拿到能发请求的账号后要补实测，别把它当成已有结论。
@@ -81,6 +84,11 @@ func (outboundCodec) EncodeRequestLossy(req *ir.Request) ([]byte, []string, erro
 	body, err := EncodeRequest(shaped)
 	if err != nil {
 		return nil, nil, err
+	}
+	// 体积在编码之后才测得到：IR 的估算值与实际序列化结果有偏差
+	// （JSON 转义、base64 媒体、字段名开销），而偏差正是这条预检要防的。
+	if note := codec.PayloadBudgetNote(body, Name, caps); note != "" {
+		shapeNotes = append(shapeNotes, note)
 	}
 	// 诊断按原始请求推导：shape 已把部分字段降级掉，拿改写后的请求去推
 	// 会漏报本该报的丢弃。

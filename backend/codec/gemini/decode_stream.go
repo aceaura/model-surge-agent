@@ -219,7 +219,7 @@ func (d *streamDecoder) callID(call *wireFunctionCall) string {
 		return call.ID
 	}
 	d.callCounter++
-	return fmt.Sprintf("call_%s_%d", call.Name, d.callCounter)
+	return codec.SynthToolID(call.Name, d.callCounter)
 }
 
 // Finish 补终止事件。本协议的流没有终止标记，读完即结束，
@@ -273,7 +273,7 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 				calls++
 				id := p.FunctionCall.ID
 				if id == "" {
-					id = fmt.Sprintf("call_%s_%d", p.FunctionCall.Name, calls)
+					id = codec.SynthToolID(p.FunctionCall.Name, calls)
 				}
 				out.Content = append(out.Content, ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
 					ID: id, Name: p.FunctionCall.Name, Input: string(p.FunctionCall.Args),

@@ -93,6 +93,20 @@ func budgetForEffort(effort string, maxTokens int) int {
 	}
 }
 
+// outboundToolID 决定写进请求体的调用 id：本服务合成的一律省略。
+//
+// 本协议的 id 是可选字段，缺席时上游按调用顺序消歧；而合成的 id 上游
+// 从未见过，发回去它有权拒绝或错配。
+//
+// 只在写 wire 时省略，不在 IR 上清空：toolNames 那张 id→name 表以 id 为键，
+// IR 里的 id 一清，tool_result 就填不出 name，整个请求会因为对不上调用被拒。
+func outboundToolID(id string) string {
+	if codec.IsSynthToolID(id) {
+		return ""
+	}
+	return id
+}
+
 // toolNames 建 id→函数名 表。
 //
 // 本协议的 functionResponse 只有 name 没有 id，而 IR 的 tool_result 只记 id。
@@ -161,12 +175,12 @@ func encodeMessage(m ir.Message, names map[string]string) ([]wireContent, error)
 			if !json.Valid([]byte(args)) {
 				args = "{}"
 			}
-			// 回指靠 name，但 id 是本协议的可选字段：带上它能让调用 id
-			// 原样穿过一轮，省掉下一轮解码时的合成。
+			// 回指靠 name，但 id 是本协议的可选字段：上游原生的 id 带上，
+			// 能让它原样穿过一轮，省掉下一轮解码时的合成。
 			parts = append(parts, wirePart{FunctionCall: &wireFunctionCall{
 				Name: b.ToolUse.Name,
 				Args: json.RawMessage(args),
-				ID:   b.ToolUse.ID,
+				ID:   outboundToolID(b.ToolUse.ID),
 			}})
 		case ir.BlockToolResult:
 			if b.ToolResult == nil {
@@ -183,7 +197,7 @@ func encodeMessage(m ir.Message, names map[string]string) ([]wireContent, error)
 				return nil, err
 			}
 			responseParts = append(responseParts, wirePart{FunctionResponse: &wireFunctionResp{
-				Name: name, Response: payload, ID: b.ToolResult.ToolUseID,
+				Name: name, Response: payload, ID: outboundToolID(b.ToolResult.ToolUseID),
 			}})
 		default:
 			return nil, fmt.Errorf("cannot encode block type %q", b.Type)

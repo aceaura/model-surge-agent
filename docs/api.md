@@ -281,11 +281,12 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 | `stop_sequences` | `dropped` | 条数超过协议上限，截断至上限 |
 | `cache_control` | `dropped` | 缓存断点数超过协议上限，丢弃最靠前的若干个（靠后的断点覆盖更长前缀，命中时省得更多） |
 
-此外还有一条请求侧取舍：
+此外还有两条请求侧取舍：
 
 | 字段 | 形态 | 触发条件 |
 | --- | --- | --- |
 | `thinking` | `dropped` | 目标协议拒收「推理开启 + 强制工具选择」的组合（`reasoning cannot be combined with a forced tool choice`）。关推理而不是把 `tool_choice` 降级为 `auto`：降级约束的故障不可见，上游会正常回一段文本，调用方以为模型自己决定不调工具 |
+| `tool call id` | `rewrote` | 调用 id 超出目标协议的长度上限（`the call id is longer than this protocol accepts`），收敛为「前 N-5 字节 + `_` + 原 id 的 sha256 前 4 位」。改写会同步作用于 `tool_result` 的配对键，因此客户端下一轮回传的 id 与它上一轮收到的不一致——这正是要报出来的原因。当前四个协议的上限都未设值（见下文），故这一条实际不触发 |
 
 只有真的丢掉约束才记进 `lossy`。把同一约束换个写法不记——`type` 大写化、联合类型折叠成 `nullable` 都属于此类。原因是这个字段的用途是指向路由选型：若每个带工具的 gemini 请求都恒定带一条说明，它就再也指不出哪条路由真的削弱了请求。
 
@@ -302,6 +303,39 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 | `split a stream line that carried several JSON documents` | 一行 SSE `data:` 里首尾相接挤了多个 JSON 文档。只在整帧解码失败后才拆，拆后任一份不合法即整行失败，不接受部分解码 |
 
 签名剥离只丢签名，不丢推理文本：文本对客户端仍然有用，只有签名是它验不了、下一轮会被上游拒收的那部分。
+
+#### 3.2.4 请求体字节预算
+
+出站请求体编码完成后会量一次字节数。超出该协议的预算时记一条说明，**请求仍照常发给上游**：
+
+| 形态 | 触发条件 |
+| --- | --- |
+| `request body is 631204 bytes, over the 600000-byte budget for gemini (the upstream may reject it with a misleading 400)` | 出站请求体超出该协议的 `MaxPayloadBytes` |
+
+三点需要说明：
+
+- **不在本地拒收。** 上限是按实测推出的估计值，上游可能就接受了；本地拒收会把这份余地一并剥掉。
+- **不裁历史。** 裁历史是有损且不可逆的语义改动：静默丢掉几轮对话会让模型失忆，而客户端从 200 响应里看不出任何异常。先让体积问题在诊断里可见，裁不裁由调用方按业务决定。
+- **措辞里点明「误导性 400」**是因为实测中这类超限回的是一个 `reason` 为空的 `400 Improperly formed request.`，排查者不会把它与体积联系起来。
+
+**当前四个协议的 `MaxPayloadBytes` 与 `MaxToolIDLen` 都是零值，即不设限、跳过检查。** 这是刻意的：有确凿实测证据的上限只在本服务不用的上游上（Mistral 的 9 位 id 正则、Kiro 的 ~615KB 体积门槛，后者的数据面归 Upstream 服务）。凭空猜一个上限会把本来能过的请求改坏。逻辑已就位，等某个协议实测到上限，改一个常量即可生效——有一条源码级守卫盯着四个出站协议都调用了预检，防止那天填了值却忘了挂。
+
+#### 3.2.5 工具调用 id 的生命周期
+
+上游不给调用 id 时本服务会合成一个（另外三个协议都要 id 才能把工具结果回指到调用）。合成的 id 带 `msa_synth_` 前缀，作用是让出站侧仅凭 id 文本就能判断来源：
+
+| 协议 | id 字段 | 合成 id 的处置 |
+| --- | --- | --- |
+| anthropic | `tool_use.id` / `tool_result.tool_use_id`，必填 | 保留 |
+| chat_completions | `tool_calls[].id` / `tool_call_id`，必填 | 保留 |
+| responses | `call_id`，必填 | 保留 |
+| gemini | `functionCall.id` / `functionResponse.id`，**可选** | **省略**，交由上游按调用顺序消歧 |
+
+对 gemini 省略是因为合成的 id 上游从未见过，发回去它有权拒绝或错配；对另外三个保留是因为省略会让上游彻底无法配对，比发一个陌生 id 更糟。
+
+**省略不记进 `lossy`**：这是恢复协议的原生形态而非削弱请求，而且 gemini 每个无 id 的调用都会触发，恒定出现的说明会把真正的有损信号淹掉。
+
+省略只发生在写请求体这一步，IR 内部的 id 保持完整——gemini 的 `functionResponse` 只有 name 没有 id，填 name 要靠一张以 id 为键的表，IR 里的 id 一清那张表就查不到了。
 
 ### 3.3 LiveEntry
 

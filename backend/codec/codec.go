@@ -88,6 +88,28 @@ type Capabilities struct {
 	// （responses 的 instructions、gemini 的 systemInstruction），
 	// 因此 system 里的非文本块必须先降级成文本才不会丢。
 	SystemAsText bool
+
+	// ToolIDOptional 为真表示本协议的工具调用 id 字段可以缺席，
+	// 上游靠调用顺序自行消歧。只有 gemini 是这样：它的 functionCall 与
+	// functionResponse 靠 name 配对，id 是后来补的可选字段。
+	//
+	// 为真时，本服务自己合成的 id（见 SynthIDPrefix）不写进请求体：
+	// 发一个上游从未见过的标识符回去，上游有权拒绝或错配。
+	ToolIDOptional bool
+
+	// MaxToolIDLen 是工具调用 id 的字节上限，0 表示不设限。
+	//
+	// 四协议当前全为 0：官方文档都没有明示上限，参考实现里也只有 Mistral
+	// 有硬校验（^[a-zA-Z0-9]{9}$），而本服务没有这个出站。留着这个位是为了
+	// 「某上游实测拒收长 id」时有地方落值，而不是现在就凭空猜一个——
+	// 猜出来的上限会把本来能过的请求改坏。
+	MaxToolIDLen int
+
+	// MaxPayloadBytes 是出站请求体的字节上限，0 表示不设限且跳过测量。
+	//
+	// 同样全为 0：有实测证据的只有 Kiro（~615KB 起回一个 reason 为 null 的
+	// 误导性 400），而 Kiro 的数据面归 Upstream 服务，不在本服务的出站协议里。
+	MaxPayloadBytes int
 }
 
 // AcceptsMedia 判断本协议能否原生承载该 media type。

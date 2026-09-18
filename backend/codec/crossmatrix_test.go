@@ -2600,7 +2600,34 @@ func protocolLimitations() []protocolLimitation {
 			reason: "functionCall 是整体对象、args 一帧到齐，不存在分片，也就无从跨 index 抵达",
 			absent: func() bool { _, ok := sameIDAcrossIndexStreams[codec.ProtocolGemini]; return !ok },
 		},
+		{
+			matrix: "synth-id-omission", protocol: codec.ProtocolAnthropic, feature: "omitted id",
+			reason: "tool_use.id 与 tool_result.tool_use_id 都是必填，省略后上游无从把结果" +
+				"回指到调用，整轮请求被拒——比发一个它没见过的 id 更糟",
+			absent: func() bool { return !toolIDOptional(codec.ProtocolAnthropic) },
+		},
+		{
+			matrix: "synth-id-omission", protocol: codec.ProtocolChatCompletions, feature: "omitted id",
+			reason: "tool_calls[].id 与 tool_call_id 都是必填，缺了上游无法配对",
+			absent: func() bool { return !toolIDOptional(codec.ProtocolChatCompletions) },
+		},
+		{
+			matrix: "synth-id-omission", protocol: codec.ProtocolResponses, feature: "omitted id",
+			reason: "call_id 是 function_call 与 function_call_output 之间唯一的配对键，" +
+				"省略等于把这次调用与它的结果彻底断开",
+			absent: func() bool { return !toolIDOptional(codec.ProtocolResponses) },
+		},
 	}
+}
+
+// toolIDOptional 取该出站协议的 id 可选性。
+// 从能力位读而非写死协议名：新协议进注册表即自动进这套判定。
+func toolIDOptional(protocol string) bool {
+	c, ok := codec.Outbound(protocol)
+	if !ok {
+		return false
+	}
+	return c.Caps().ToolIDOptional
 }
 
 // TestProtocolLimitationsAreStillTrue 守卫每条登记：格必须真的缺席。
@@ -2653,6 +2680,9 @@ func TestEveryMatrixGapIsDocumented(t *testing.T) {
 		}
 		if _, ok := sameIDAcrossIndexStreams[up]; !ok {
 			assert(t, "same-id-across-index", up, "duplicate index")
+		}
+		if !toolIDOptional(up) {
+			assert(t, "synth-id-omission", up, "omitted id")
 		}
 	}
 }

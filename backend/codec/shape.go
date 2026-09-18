@@ -35,6 +35,10 @@ func ShapeRequest(req *ir.Request, name string, caps Capabilities) []string {
 	shapeParams(req, caps, c)
 	shapeSystem(req, caps, c)
 	budgetCache(req, caps, c)
+	// 排在最后：shapeTools 会改工具名、也会丢掉整个工具声明，
+	// 而改名会同步改历史里的调用。放在它之前就是对着一批即将变形或
+	// 消失的调用算 id 长度。
+	shapeToolIDs(req, caps, c)
 	return c.notes()
 }
 
