@@ -41,12 +41,12 @@ func (l *RequestLog) Insert(ctx context.Context, rec pipeline.Record) error {
 	}
 	_, err = l.pool.Exec(ctx, `
 		INSERT INTO request_log (
-			request_id, at, inbound_protocol, user_model, outbound_protocol,
+			request_id, at, inbound_protocol, path, user_model, outbound_protocol,
 			model_id, account, outcome, status_code, attempts, tried_ids,
 			committed, stream, usage_estimated,
 			input_tokens, output_tokens, cache_read_tokens,
 			latency_ms, first_token_ms, error_code, error_message, sanitized, lossy)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
 		ON CONFLICT (request_id) DO UPDATE SET
 			at = EXCLUDED.at, outbound_protocol = EXCLUDED.outbound_protocol,
 			model_id = EXCLUDED.model_id, account = EXCLUDED.account,
@@ -58,7 +58,7 @@ func (l *RequestLog) Insert(ctx context.Context, rec pipeline.Record) error {
 			latency_ms = EXCLUDED.latency_ms, first_token_ms = EXCLUDED.first_token_ms,
 			error_code = EXCLUDED.error_code, error_message = EXCLUDED.error_message,
 			sanitized = EXCLUDED.sanitized, lossy = EXCLUDED.lossy`,
-		rec.RequestID, at, rec.InboundProtocol, rec.UserModel, rec.OutboundProtocol,
+		rec.RequestID, at, rec.InboundProtocol, rec.Path, rec.UserModel, rec.OutboundProtocol,
 		rec.ModelID, rec.Account, rec.Outcome, rec.StatusCode, rec.Attempts, tried,
 		rec.Committed, rec.Stream, rec.UsageEstimated,
 		rec.Usage.InputTokens, rec.Usage.OutputTokens, rec.Usage.CacheReadTokens,
@@ -181,7 +181,7 @@ func (l *RequestLog) Prune(ctx context.Context, before time.Time) (int64, error)
 	return tag.RowsAffected(), nil
 }
 
-const recordColumns = `request_id, at, inbound_protocol, user_model, outbound_protocol,
+const recordColumns = `request_id, at, inbound_protocol, path, user_model, outbound_protocol,
 	model_id, account, outcome, status_code, attempts, tried_ids,
 	committed, stream, usage_estimated,
 	input_tokens, output_tokens, cache_read_tokens,
@@ -194,7 +194,7 @@ func scanRecord(rows pgx.Rows) (pipeline.Record, error) {
 		sanitized []byte
 		lossy     []byte
 	)
-	if err := rows.Scan(&rec.RequestID, &rec.At, &rec.InboundProtocol, &rec.UserModel,
+	if err := rows.Scan(&rec.RequestID, &rec.At, &rec.InboundProtocol, &rec.Path, &rec.UserModel,
 		&rec.OutboundProtocol, &rec.ModelID, &rec.Account, &rec.Outcome, &rec.StatusCode,
 		&rec.Attempts, &tried, &rec.Committed, &rec.Stream, &rec.UsageEstimated,
 		&rec.Usage.InputTokens, &rec.Usage.OutputTokens, &rec.Usage.CacheReadTokens,

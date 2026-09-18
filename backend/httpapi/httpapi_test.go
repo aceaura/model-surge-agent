@@ -1,6 +1,7 @@
 package httpapi_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -64,12 +65,15 @@ func TestEveryPathAliasReachesTheRightInboundProtocol(t *testing.T) {
 		protocol string
 	}{
 		{"/v1/messages", codec.ProtocolAnthropic},
+		{"/v1/v1/messages", codec.ProtocolAnthropic},
 		{"/anthropic/v1/messages", codec.ProtocolAnthropic},
 		{"/messages", codec.ProtocolAnthropic},
 		{"/v1/chat/completions", codec.ProtocolChatCompletions},
+		{"/v1/v1/chat/completions", codec.ProtocolChatCompletions},
 		{"/openai/v1/chat/completions", codec.ProtocolChatCompletions},
 		{"/chat/completions", codec.ProtocolChatCompletions},
 		{"/v1/responses", codec.ProtocolResponses},
+		{"/v1/v1/responses", codec.ProtocolResponses},
 		{"/openai/v1/responses", codec.ProtocolResponses},
 		{"/responses", codec.ProtocolResponses},
 	}
@@ -303,17 +307,54 @@ func TestWrongMethodIsRejected(t *testing.T) {
 	}
 }
 
+// TestEveryDataPlanePathHasAVersionDoubledAlias 是源码级守卫。
+//
+// 加新端点时容易只加原有那几条别名，而漏了 /v1/v1——这种遗漏在真客户端
+// 把 base_url 配成 host/v1 之前不会暴露。断言用行为而非读源码：
+// 每条 /v1/ 别名都必须有一条 /v1/v1/ 的孪生路径同样可达。
+func TestEveryDataPlanePathHasAVersionDoubledAlias(t *testing.T) {
+	cases := []struct {
+		method string
+		v1     string
+		body   string
+	}{
+		{http.MethodPost, "/v1/messages", requestBodies[codec.ProtocolAnthropic]},
+		{http.MethodPost, "/v1/chat/completions", requestBodies[codec.ProtocolChatCompletions]},
+		{http.MethodPost, "/v1/responses", requestBodies[codec.ProtocolResponses]},
+		{http.MethodPost, "/v1/messages/count_tokens", requestBodies[codec.ProtocolAnthropic]},
+		{http.MethodGet, "/v1/models", ""},
+	}
+	for _, c := range cases {
+		doubled := strings.Replace(c.v1, "/v1/", "/v1/v1/", 1)
+		t.Run(doubled, func(t *testing.T) {
+			f := newFixture(t)
+			var resp *httptest.ResponseRecorder
+			if c.method == http.MethodGet {
+				resp = f.get(t, doubled)
+			} else {
+				resp = f.post(t, doubled, c.body, nil)
+			}
+			if resp.Code != http.StatusOK {
+				t.Fatalf("%s %s: status = %d, want 200 (every /v1/ path needs a /v1/v1/ twin): %s",
+					c.method, doubled, resp.Code, resp.Body.String())
+			}
+		})
+	}
+}
+
 // --- fixture ---
 
 type fixture struct {
 	handler http.Handler
 	relay   *relaymock.Mock
 	health  httpapi.Health
+	records *recorderSpy
 
 	upstream *upstreamSpy
 }
 
-func newFixture(t *testing.T) *fixture {
+// newFixture 装一台完整的服务。maxBody 传 0 表示用默认上限。
+func newFixture(t *testing.T, maxBody ...int64) *fixture {
 	t.Helper()
 
 	spy := &upstreamSpy{}
@@ -335,18 +376,26 @@ func newFixture(t *testing.T) *fixture {
 	relaySrv := relay.Start()
 	t.Cleanup(relaySrv.Close)
 
-	f := &fixture{relay: relay, upstream: spy, health: httpapi.Health{Status: "ok"}}
+	rec := &recorderSpy{}
+	f := &fixture{relay: relay, upstream: spy, records: rec, health: httpapi.Health{Status: "ok"}}
+	var limit int64
+	if len(maxBody) > 0 {
+		limit = maxBody[0]
+	}
 	srv := &httpapi.Server{
 		Pipeline: &pipeline.Pipeline{
 			Dispatch: relayclient.New(relaySrv.URL, ""),
+			Recorder: rec,
 			Opts: pipeline.Options{
 				MaxAttempts:       2,
 				FirstTokenTimeout: 2 * time.Second,
 				IdleTimeout:       2 * time.Second,
 			},
 		},
-		Models: modelLister{relay: relayclient.New(relaySrv.URL, "")},
-		Health: healthFunc(func() httpapi.Health { return f.health }),
+		Models:       modelLister{relay: relayclient.New(relaySrv.URL, "")},
+		Health:       healthFunc(func() httpapi.Health { return f.health }),
+		Recorder:     rec,
+		MaxBodyBytes: limit,
 	}
 	f.handler = srv.Handler()
 	return f
@@ -371,8 +420,50 @@ func (f *fixture) get(t *testing.T, path string) *httptest.ResponseRecorder {
 	return w
 }
 
+// postRaw 发一个原始字节体，可自定方法与头。受理面的用例要靠它构造
+// 压缩体、带 BOM 的体、超限体这些 post 表达不了的形态。
+func (f *fixture) postRaw(t *testing.T, method, path string, body []byte, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(method, path, bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		r.Header.Set(k, v)
+	}
+	w := httptest.NewRecorder()
+	f.handler.ServeHTTP(w, r)
+	return w
+}
+
 func (f *fixture) upstreamCalls() int      { return f.upstream.count() }
 func (f *fixture) upstreamSawStream() bool { return f.upstream.sawStream() }
+
+// recorderSpy 收下所有流水。加锁：pipeline 的记流水可能发生在别的协程。
+type recorderSpy struct {
+	mu   sync.Mutex
+	recs []pipeline.Record
+}
+
+func (r *recorderSpy) Record(rec pipeline.Record) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.recs = append(r.recs, rec)
+}
+
+func (r *recorderSpy) all() []pipeline.Record {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]pipeline.Record(nil), r.recs...)
+}
+
+// one 取唯一一条流水，条数不对就失败——「记了几条」本身是断言的一部分。
+func (r *recorderSpy) one(t *testing.T) pipeline.Record {
+	t.Helper()
+	got := r.all()
+	if len(got) != 1 {
+		t.Fatalf("records = %d, want exactly 1: %+v", len(got), got)
+	}
+	return got[0]
+}
 
 // upstreamSpy 是假上游：记下收到的请求体并回一段固定的流。
 // 字段加锁：处理函数跑在 httptest 的协程上，断言在测试协程读。

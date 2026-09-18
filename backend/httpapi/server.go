@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -30,7 +29,11 @@ type Server struct {
 	Health   HealthChecker
 	// Admin 为 nil 时不暴露管理面。
 	Admin *Admin
-	Log   *slog.Logger
+	// Recorder 记受理面拒绝的流水。与 Pipeline 内部那个是同一个实现，
+	// 但这里必须单独持有：pipeline 的记流水发生在选完目标之后，
+	// 整条路径都假定有目标，而受理面拒绝时还没选过。
+	Recorder pipeline.Recorder
+	Log      *slog.Logger
 	// AccessLog 关掉后仍会记 request_log，只是不打访问日志行。
 	AccessLog bool
 	// MaxBodyBytes 限制请求体大小，0 表示用默认值。
@@ -56,10 +59,6 @@ type Health struct {
 	OutboxDead    int    `json:"outbox_dead"`
 }
 
-// defaultMaxBody 是请求体上限。上下文塞满的请求确实很大，
-// 但没有上限意味着一个坏客户端就能把内存吃光。
-const defaultMaxBody = 64 << 20
-
 // Handler 装好全部路由。
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -80,7 +79,7 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/admin/", s.Admin.Handler())
 	}
 
-	return s.withAccessLog(mux)
+	return s.withAccessLog(s.withRejectEnvelope(mux))
 }
 
 // dataPlane 处理一个入站协议的对话请求。
@@ -96,23 +95,30 @@ func (s *Server) dataPlane(protocol string) http.HandlerFunc {
 
 		body, err := s.readBody(w, r)
 		if err != nil {
-			writeIRError(w, inbound, ir.NewError(ir.ErrInvalidRequest, 0, "", err.Error()))
+			s.reject(w, r, protocol, err)
 			return
 		}
 		req, decErr := inbound.DecodeRequest(body)
 		if decErr != nil {
-			writeIRError(w, inbound, asIRError(decErr))
+			s.reject(w, r, protocol, asIRError(decErr))
 			return
 		}
 		if req.Model == "" {
-			writeIRError(w, inbound, ir.NewError(ir.ErrInvalidRequest, 0, "model",
+			s.reject(w, r, protocol, ir.NewError(ir.ErrInvalidRequest, 0, "model",
 				"model is required"))
 			return
 		}
 
+		id := requestID(r)
+		// 在 Serve 之前设，而不是让 pipeline 去设：http.Header 在
+		// WriteHeader 之前的修改都会生效，无论谁设的。这样 SSE 与非流式
+		// 两条路径不必各改一遍，pipeline 也不必知道这件事。
+		w.Header().Set(headerRequestID, id)
+
 		s.Pipeline.Serve(r.Context(), w, pipeline.Call{
-			RequestID: requestID(r),
+			RequestID: id,
 			Protocol:  protocol,
+			Path:      r.URL.Path,
 			Inbound:   inbound,
 			Request:   req,
 			UserModel: req.Model,
@@ -132,14 +138,15 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 	inbound, _ := codec.Inbound(codec.ProtocolAnthropic)
 	body, err := s.readBody(w, r)
 	if err != nil {
-		writeIRError(w, inbound, ir.NewError(ir.ErrInvalidRequest, 0, "", err.Error()))
+		s.reject(w, r, codec.ProtocolAnthropic, err)
 		return
 	}
 	req, decErr := inbound.DecodeRequest(body)
 	if decErr != nil {
-		writeIRError(w, inbound, asIRError(decErr))
+		s.reject(w, r, codec.ProtocolAnthropic, asIRError(decErr))
 		return
 	}
+	w.Header().Set(headerRequestID, requestID(r))
 	writeJSON(w, http.StatusOK, map[string]int64{"input_tokens": ir.EstimateRequest(req)})
 }
 
@@ -167,19 +174,6 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, h)
 }
 
-func (s *Server) readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
-	limit := s.MaxBodyBytes
-	if limit <= 0 {
-		limit = defaultMaxBody
-	}
-	defer r.Body.Close()
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
-	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
-	}
-	return raw, nil
-}
-
 // clientKey 从两个头里取客户端凭据。
 //
 // 两个都要看：Anthropic 的 SDK 发 x-api-key，OpenAI 的发 Authorization。
@@ -193,6 +187,11 @@ func clientKey(r *http.Request) string {
 	}
 	return ""
 }
+
+// headerRequestID 是回显请求 ID 的响应头。
+//
+// 与读取时的第一优先头同名：客户端回显自己给的值时，看到的是同一个键。
+const headerRequestID = "X-Request-Id"
 
 // requestID 沿用客户端给的 id，没有才生成。
 //
@@ -218,15 +217,31 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 }
 
 // writeIRError 用客户端协议自己的错误形状回错，否则 SDK 会把它当成解码失败。
-func writeIRError(w http.ResponseWriter, inbound codec.InboundCodec, err *ir.Error) {
+// 返回实际写出的状态码，供流水记录。
+func writeIRError(w http.ResponseWriter, inbound codec.InboundCodec, err *ir.Error) int {
+	return writeIRErrorStatus(w, inbound, err, 0)
+}
+
+// writeIRErrorStatus 同上，但可指定状态码。
+//
+// status 传 0 表示让信封自己推导。只有路由层拒绝要指定：405 的 Allow 头
+// 已经随状态码发出，体里的码与头不一致会让客户端两边对不上。
+func writeIRErrorStatus(w http.ResponseWriter, inbound codec.InboundCodec, err *ir.Error, status int) int {
 	if inbound == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Message})
-		return
+		if status == 0 {
+			status = http.StatusInternalServerError
+		}
+		writeJSON(w, status, map[string]string{"error": err.Message})
+		return status
 	}
-	status, body := inbound.RenderError(err)
+	rendered, body := inbound.RenderError(err)
+	if status == 0 {
+		status = rendered
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
+	return status
 }
 
 func asIRError(err error) *ir.Error {

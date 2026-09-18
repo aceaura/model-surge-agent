@@ -35,27 +35,30 @@ type Health struct {
 
 // RequestSummary 是一条请求流水。绝不含凭据与对话内容。
 type RequestSummary struct {
-	RequestID        string    `json:"request_id"`
-	At               time.Time `json:"at"`
-	InboundProtocol  string    `json:"inbound_protocol"`
-	OutboundProtocol string    `json:"outbound_protocol,omitempty"`
-	UserModel        string    `json:"user_model"`
-	ModelID          string    `json:"model_id,omitempty"`
-	Account          string    `json:"account,omitempty"`
-	Outcome          string    `json:"outcome"`
-	StatusCode       int       `json:"status_code,omitempty"`
-	Attempts         int       `json:"attempts,omitempty"`
-	TriedIDs         []string  `json:"tried_ids,omitempty"`
-	Committed        bool      `json:"committed,omitempty"`
-	Stream           bool      `json:"stream,omitempty"`
-	UsageEstimated   bool      `json:"usage_estimated,omitempty"`
-	InputTokens      int64     `json:"input_tokens,omitempty"`
-	OutputTokens     int64     `json:"output_tokens,omitempty"`
-	CacheReadTokens  int64     `json:"cache_read_tokens,omitempty"`
-	LatencyMS        int       `json:"latency_ms,omitempty"`
-	FirstTokenMS     int       `json:"first_token_ms,omitempty"`
-	ErrorCode        string    `json:"error_code,omitempty"`
-	ErrorMessage     string    `json:"error_message,omitempty"`
+	RequestID       string    `json:"request_id"`
+	At              time.Time `json:"at"`
+	InboundProtocol string    `json:"inbound_protocol"`
+	// Path 是客户端打的请求路径，不含 query。同一协议有多条别名共用一个
+	// 处理函数，不看它就分不出客户端把 base_url 配成了哪一种。
+	Path             string   `json:"path,omitempty"`
+	OutboundProtocol string   `json:"outbound_protocol,omitempty"`
+	UserModel        string   `json:"user_model"`
+	ModelID          string   `json:"model_id,omitempty"`
+	Account          string   `json:"account,omitempty"`
+	Outcome          string   `json:"outcome"`
+	StatusCode       int      `json:"status_code,omitempty"`
+	Attempts         int      `json:"attempts,omitempty"`
+	TriedIDs         []string `json:"tried_ids,omitempty"`
+	Committed        bool     `json:"committed,omitempty"`
+	Stream           bool     `json:"stream,omitempty"`
+	UsageEstimated   bool     `json:"usage_estimated,omitempty"`
+	InputTokens      int64    `json:"input_tokens,omitempty"`
+	OutputTokens     int64    `json:"output_tokens,omitempty"`
+	CacheReadTokens  int64    `json:"cache_read_tokens,omitempty"`
+	LatencyMS        int      `json:"latency_ms,omitempty"`
+	FirstTokenMS     int      `json:"first_token_ms,omitempty"`
+	ErrorCode        string   `json:"error_code,omitempty"`
+	ErrorMessage     string   `json:"error_message,omitempty"`
 	// Sanitized 是对客户端请求所做的畸形修复说明；为空表示请求本身合法。
 	Sanitized []string `json:"sanitized,omitempty"`
 	// Lossy 是出站编码因目标协议表达不了而丢弃的字段说明；为空表示无损转换。

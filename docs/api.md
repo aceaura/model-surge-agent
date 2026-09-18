@@ -81,7 +81,8 @@
 
 ### 2.3 内容类型、编码与请求体上限
 
-- 请求体：`application/json`，UTF-8。
+- 请求体：`application/json`，UTF-8。请求侧的 `Content-Type` **不校验**——能否解码由 JSON 解析器给出确定答案，按此头提前拒收只会把能正常服务的请求拒掉。
+- 请求体允许带 UTF-8 BOM，服务会剥掉它再解码（`encoding/json` 不接受 BOM 前缀，一些 Windows 上的客户端会带）。
 - 非流式响应：`application/json`。
 - 流式响应：`text/event-stream`（SSE），并固定带以下响应头：
 
@@ -92,7 +93,37 @@
 | `Connection` | `keep-alive` | 长连接 |
 | `X-Accel-Buffering` | `no` | 防止反向代理缓冲 SSE 导致逐字输出失效 |
 
-- 请求体上限：**64 MiB**（代码常量）。超限按 `invalid_request` 回错。上限存在是因为上下文塞满的请求确实很大，但没有上限意味着一个坏客户端就能把内存吃光。
+#### 2.3.1 请求体传输编码
+
+服务受理压缩过的请求体，按 `Content-Encoding` 处理：
+
+| 值 | 行为 |
+|---|---|
+| 缺失、`identity` | 原样处理（大小写不敏感） |
+| `gzip` | 解压后再解码 |
+| `deflate` | 解压后再解码 |
+| 其他（`br`、`zstd` 等） | 回 400，消息里列出本服务接受的编码 |
+
+不支持的编码**不静默当未压缩处理**：那样客户端只会收到一条 JSON 语法错误，比明确说「不支持这个编码」难查得多。解压失败（流损坏、声明了 gzip 但发的是明文）回 **400** 而非 500——这是客户端发来的数据有问题。
+
+#### 2.3.2 请求体上限
+
+上限为 **64 MiB**（代码常量，可由部署配置覆盖）。上限存在是因为上下文塞满的请求确实很大，但没有上限意味着一个坏客户端就能把内存吃光。
+
+| 情形 | 状态码 | `error_code` |
+|---|---|---|
+| 请求体超过上限 | **413** | `context_exceeded` |
+| 解压**后**的字节数超过上限 | **413** | `context_exceeded` |
+| 请求体为空（或只有空白） | 400 | `invalid_request` |
+| 读请求体因其他原因失败 | 400 | `invalid_request` |
+
+回 413 而非 400 是为了与 §2.8 的错误分类自洽：上游回 413 时本服务归类为 `context_exceeded`，自己产生同类错误时走同一套语义，客户端据此知道该裁剪输入，而不是去逐个字段检查参数。错误消息里带上上限的字节数，客户端可据此自行分片。
+
+**压缩体不能绕过上限**：限制在解压前与解压后各判一次。只限压缩前等于没限——几百 KB 的 gzip 能解出几百 MB，而内存是按解压后的大小吃掉的。
+
+判定是严格大于：解压后长度**正好等于**上限的请求会被接受。
+
+空请求体单独回一句明确的话，而不是透出 `unexpected end of JSON input`——后者读的人分不清是自己没发 body 还是 body 被中间层吃了。
 
 ### 2.4 请求 ID
 
@@ -103,6 +134,8 @@ X-Request-Id → X-Request-ID → Request-Id → 自动生成
 ```
 
 同一客户端请求换目标重试时 `request_id` 保持不变，因此它能把一次请求的多次尝试在流水中串起来。该 ID 同时上报调度层，用于跨服务对账。
+
+**该 ID 一律回显在响应头 `X-Request-Id` 上**，覆盖全部响应形态：成功的非流式响应、SSE 流、count_tokens，以及受理面的每一种拒绝（404 / 405 / 413 / 400）。客户端自带 ID 时回显的是它自己给的那个值，不另生成——否则它日志里的 ID 与响应头里的对不上，两边都查不到。拒绝时同样带这个头，因为那正是客户端要报障的时刻。
 
 ### 2.5 类型词汇表
 
@@ -229,6 +262,7 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 | `request_id` | string | 请求 ID（沿用客户端的或自动生成，重试不变） |
 | `at` | time | 请求到达时间（UTC） |
 | `inbound_protocol` | string | 客户端使用的协议，见 [2.8](#28-枚举值索引) |
+| `path` | string | 客户端打的请求路径，**不含 query**。同一协议的多条别名（见 [5.1](#51-路径别名与协议识别)）共用一个处理函数，靠它才能看出客户端把 base_url 配成了哪一种。不记 query 是因为数据面不读任何 query 参数，而一些客户端会把凭据塞进去——不记就不需要脱敏 |
 | `outbound_protocol` | string | 发给上游用的协议；未发出时为空 |
 | `user_model` | string | 客户端请求的模型名 |
 | `model_id` | string | 最终选定的上游 model_id；调度层未给目标时为空 |
@@ -394,6 +428,26 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 
 判定为客户端取消时：上报 `normal` 不累计失败、按已收事件结算 usage（上游照样计费）、不换目标重试（客户端已经不要这个回答了）、不向客户端写任何字节。
 
+#### 3.2.9 受理面拒绝的流水形态
+
+请求在选目标之前就被拒（路径不存在、方法不允许、体超限、传输编码不支持、压缩体损坏、体为空、体无法解码、缺模型名）时同样入流水。不入的后果是这类接入问题在管理面完全不可见：客户端报 404，运维查 `GET /admin/requests` 一行都没有，无法判断请求究竟有没有到达本服务。
+
+字段取值与数据面请求不同：
+
+| 字段 | 取值 | 为什么 |
+| --- | --- | --- |
+| `outcome` | `abnormal` | 请求失败了。但**不向调度层上报** |
+| `attempts` | `0` | 与「打了一次上游但失败」（`1`）区分开 |
+| `model_id` / `account` / `outbound_protocol` | 空 | 还没选过目标 |
+| `user_model` | 能解出就填，否则空 | 缺模型名与解码失败这两条路径解不出 |
+| `status_code` | 实际回给客户端的码 | `404` / `405` / `413` / `400` |
+| `error_code` | 对应的 `ir.ErrorKind` | 与数据面同一套取值 |
+| `path` | 客户端打的路径 | 别名相关的接入问题只能靠它定位 |
+
+不上报调度层是刻意的：这一刻还没选过目标，硬编一个占位账号会让某个真实账号无端累计失败并被冷却，而它根本没参与过这次请求。
+
+`/admin/` 前缀下的 404/405 不走这套：管理面有自己的错误约定，也不该出现在数据面流水里。
+
 ### 3.3 LiveEntry
 
 实时环元素（`GET /admin/live`）。是 `RequestSummary` 的子集：为速度省略了 `tried_ids`、`error_message`、`usage_estimated`、`cache_read_tokens`、`sanitized`、`lossy`，其余同名字段含义一致：
@@ -520,27 +574,39 @@ curl -s $BASE/health
 
 ### 5.1 路径别名与协议识别
 
-三条对话端点，每条提供三个等价路径别名（裸路径、带 `/v1`、带厂商前缀）：
+三条对话端点，每条提供四个等价路径别名（裸路径、带 `/v1`、带重复 `/v1/v1`、带厂商前缀）：
 
 | 入站协议 | 方法 | 路径别名 |
 |---|---|---|
-| Anthropic Messages | POST | `/v1/messages`、`/anthropic/v1/messages`、`/messages` |
-| OpenAI Chat Completions | POST | `/v1/chat/completions`、`/openai/v1/chat/completions`、`/chat/completions` |
-| OpenAI Responses | POST | `/v1/responses`、`/openai/v1/responses`、`/responses` |
-| Count Tokens（Anthropic 形状） | POST | `/v1/messages/count_tokens`、`/anthropic/v1/messages/count_tokens`、`/messages/count_tokens` |
-| 模型清单（Anthropic 形状） | GET | `/v1/models`、`/anthropic/v1/models` |
+| Anthropic Messages | POST | `/v1/messages`、`/v1/v1/messages`、`/anthropic/v1/messages`、`/messages` |
+| OpenAI Chat Completions | POST | `/v1/chat/completions`、`/v1/v1/chat/completions`、`/openai/v1/chat/completions`、`/chat/completions` |
+| OpenAI Responses | POST | `/v1/responses`、`/v1/v1/responses`、`/openai/v1/responses`、`/responses` |
+| Count Tokens（Anthropic 形状） | POST | `/v1/messages/count_tokens`、`/v1/v1/messages/count_tokens`、`/anthropic/v1/messages/count_tokens`、`/messages/count_tokens` |
+| 模型清单（Anthropic 形状） | GET | `/v1/models`、`/v1/v1/models`、`/anthropic/v1/models` |
 | 模型清单（OpenAI 形状） | GET | `/openai/v1/models`、`/models` |
 
 别名不是冗余：客户端会把 base_url 配成 `host`、`host/v1`、`host/anthropic` 等各种形态，而多数客户端不允许改它拼在后面的固定路径。**协议按路径识别**，与 `Accept` 头无关。
+
+`/v1/v1` 那一条专为「用户把 base_url 配成 `host/v1`、而 SDK 仍在后面拼一个固定的 `/v1/...`」准备。裸路径别名接不住它：SDK 拼的那一段是它自己加的，用户改不掉。
+
+**路径或方法不被接受时**，服务不回 HTTP 层的纯文本，而是按路径推断出的入站协议渲染错误信封（推断不出时用 Anthropic 形状）。这样客户端 SDK 得到的是一条业务错误，而不是一个 JSON 解码异常：
+
+| 情形 | 状态码 | 响应头 | 响应体 |
+|---|---|---|---|
+| 路径未注册 | 404 | `X-Request-Id` | `no such endpoint: <方法> <路径>`，协议信封，`error_code` 为 `not_found` |
+| 方法不被允许 | 405 | `Allow`、`X-Request-Id` | `method <方法> is not allowed on <路径>`，协议信封，`error_code` 为 `invalid_request` |
+
+`Allow` 头列出该路径接受的方法，客户端据此能直接改对而不必翻文档。`/admin/` 前缀下的拒绝不做此改写——管理面有自己的错误形状（见 §2.7）。
 
 **公共请求头**（三条对话端点与 count_tokens 相同）：
 
 | 头 | 类型 | 必填 | 约束 / 允许值 | 含义 |
 |---|---|---|---|---|
-| `Content-Type` | string | 是 | `application/json` | 请求体格式 |
+| `Content-Type` | string | 否 | 建议 `application/json` | **不校验**。请求体能否解码由 JSON 解析器给出确定答案，按此头提前拒收只会把能正常服务的请求拒掉 |
+| `Content-Encoding` | string | 否 | `gzip`、`deflate`、`identity` | 请求体传输编码。缺失或 `identity` 按未压缩处理；其他值回 400 并列出本服务接受的编码。详见 §2.3 |
 | `x-api-key` | string | 二选一 | 非空 | 客户端凭据（Anthropic SDK 发这个），转发调度层比对 |
 | `Authorization` | string | 二选一 | `Bearer <key>` | 客户端凭据（OpenAI SDK 发这个）。两者同给时 `x-api-key` 优先 |
-| `X-Request-Id` / `X-Request-ID` / `Request-Id` | string | 否 | 非空 | 请求 ID，按顺序取第一个非空；都无则自动生成 |
+| `X-Request-Id` / `X-Request-ID` / `Request-Id` | string | 否 | 非空 | 请求 ID，按顺序取第一个非空；都无则自动生成。**会原样回显在响应头**，见 §2.4 |
 | `anthropic-version` | string | 否 | 任意 | **不校验、不转发**；出站请求由本服务固定带 `2023-06-01` |
 
 > **`model` 字段填用户模型名**（调度层配置的 user model，如 `demo-pool`），不是上游 model_id。映射关系由调度层决定。

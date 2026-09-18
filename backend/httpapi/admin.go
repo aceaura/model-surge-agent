@@ -285,6 +285,7 @@ func summaryOf(rec pipeline.Record) agentv1.RequestSummary {
 		RequestID:        rec.RequestID,
 		At:               rec.At,
 		InboundProtocol:  rec.InboundProtocol,
+		Path:             rec.Path,
 		OutboundProtocol: rec.OutboundProtocol,
 		UserModel:        rec.UserModel,
 		ModelID:          rec.ModelID,

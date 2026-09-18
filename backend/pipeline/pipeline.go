@@ -36,9 +36,16 @@ type Recorder interface {
 
 // Record 是一次客户端请求的完整流水。绝不含凭据。
 type Record struct {
-	RequestID        string
-	At               time.Time
-	InboundProtocol  string
+	RequestID       string
+	At              time.Time
+	InboundProtocol string
+	// Path 是客户端打的请求路径，不含 query。
+	//
+	// 记它是因为同一入站协议有多条路径别名共用一个处理函数：不记就看不出
+	// 客户端把 base_url 配成了哪一种，别名相关的接入问题无从定位。
+	// 不记 query：数据面不读任何 query 参数，而一些客户端会把凭据塞进去，
+	// 不记就不需要脱敏。
+	Path             string
 	UserModel        string
 	OutboundProtocol string
 	ModelID          string
@@ -123,8 +130,10 @@ type Call struct {
 	RequestID string
 	// Protocol 是入站协议名，转发给调度层供策略脚本参考。
 	Protocol string
-	Inbound  codec.InboundCodec
-	Request  *ir.Request
+	// Path 是客户端打的请求路径，只进流水，不参与任何判定。
+	Path    string
+	Inbound codec.InboundCodec
+	Request *ir.Request
 	// UserModel 是客户端请求里的模型名（user model，不是上游 model_id）。
 	UserModel string
 	// ClientKey 原样转发给调度层比对，本服务不做客户端鉴权。
@@ -145,6 +154,7 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 		RequestID:       call.RequestID,
 		At:              start,
 		InboundProtocol: call.Protocol,
+		Path:            call.Path,
 		UserModel:       call.UserModel,
 		Stream:          call.Stream,
 		Sanitized:       sanitized,

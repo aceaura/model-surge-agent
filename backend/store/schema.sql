@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS request_log (
   request_id        TEXT PRIMARY KEY,
   at                TIMESTAMPTZ NOT NULL DEFAULT now(),
   inbound_protocol  TEXT NOT NULL,
+  path              TEXT NOT NULL DEFAULT '',
   user_model        TEXT NOT NULL,
   outbound_protocol TEXT NOT NULL DEFAULT '',
   model_id          TEXT NOT NULL DEFAULT '',
@@ -27,9 +28,10 @@ CREATE TABLE IF NOT EXISTS request_log (
   lossy             JSONB NOT NULL DEFAULT '[]'
 );
 
--- 给先于这两列建起的旧表补列。
+-- 给先于这几列建起的旧表补列。
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS sanitized JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS lossy JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS path TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS request_log_at_idx ON request_log(at DESC);
 CREATE INDEX IF NOT EXISTS request_log_model_idx ON request_log(model_id, at DESC);
