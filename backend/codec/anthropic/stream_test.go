@@ -284,7 +284,7 @@ func TestDecodeErrorSplitsContextOverflowFrom400(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := DecodeError(c.status, []byte(c.body))
+			got := DecodeError(c.status, nil, []byte(c.body))
 			if got.Kind != c.want {
 				t.Errorf("kind = %q, want %q", got.Kind, c.want)
 			}
@@ -300,7 +300,7 @@ func TestDecodeErrorSplitsContextOverflowFrom400(t *testing.T) {
 
 // 非 JSON 响应体（网关 HTML 页）要保留片段供排查，但不能无界。
 func TestDecodeErrorKeepsBoundedRawBody(t *testing.T) {
-	got := DecodeError(502, []byte(strings.Repeat("x", 4096)))
+	got := DecodeError(502, nil, []byte(strings.Repeat("x", 4096)))
 	if len(got.Message) > 600 {
 		t.Fatalf("message must be truncated, got %d bytes", len(got.Message))
 	}

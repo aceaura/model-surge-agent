@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // 这些类型镜像 model-surge-relay 的 contract/relayv1，字段名必须逐字一致。
@@ -135,6 +136,14 @@ type ResultReport struct {
 	ModelID   string `json:"model_id"`
 	Outcome   string `json:"outcome"`
 	Usage     Usage  `json:"usage,omitempty"`
+	// RetryAfter 是上游明示的「这个目标最早什么时候能再用」。
+	//
+	// 零值（键不出现）表示上游没说，调度层回落到自己的失败计数启发式。
+	// 非零时调度层应当直接冷却到该时刻：上游的明示比启发式可靠，
+	// 按默认时长猜会让我们在整个限流窗口里反复空转。
+	//
+	// 传时刻而非时长：跨进程的排队与网络往返会让时长失真。
+	RetryAfter time.Time `json:"retry_after,omitzero"`
 }
 
 type ReportResponse struct {

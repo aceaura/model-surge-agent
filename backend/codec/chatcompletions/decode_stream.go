@@ -3,6 +3,7 @@ package chatcompletions
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -418,14 +419,14 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	return out, notes, nil
 }
 
-func DecodeError(status int, body []byte) *ir.Error {
+func DecodeError(status int, header http.Header, body []byte) *ir.Error {
 	var env wireErrorEnvelope
 	if err := json.Unmarshal(body, &env); err != nil || env.Error.Message == "" {
 		// 本协议的兼容实现最多，错误体形状五花八门：先尽力挖消息，
 		// 挖不到才回落状态码描述。
-		return codec.WithParam(codec.FallbackError(status, body), body)
+		return codec.WithRetryAfter(codec.WithParam(codec.FallbackError(status, body), body), header)
 	}
-	return codec.WithParam(convertError(status, &env.Error), body)
+	return codec.WithRetryAfter(codec.WithParam(convertError(status, &env.Error), body), header)
 }
 
 func convertError(status int, e *wireError) *ir.Error {

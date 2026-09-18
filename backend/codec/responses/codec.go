@@ -8,6 +8,7 @@
 package responses
 
 import (
+	"net/http"
 	"strings"
 
 	"github.com/aceaura/model-surge-agent/backend/codec"
@@ -122,8 +123,8 @@ func (outboundCodec) NewStreamDecoder() codec.StreamDecoder { return newStreamDe
 
 func (outboundCodec) DecodeResponse(body []byte) (*ir.Response, error) { return DecodeResponse(body) }
 
-func (outboundCodec) DecodeError(status int, body []byte) *ir.Error {
-	return DecodeError(status, body)
+func (outboundCodec) DecodeError(status int, header http.Header, body []byte) *ir.Error {
+	return DecodeError(status, header, body)
 }
 
 func init() {

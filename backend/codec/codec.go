@@ -5,6 +5,7 @@
 package codec
 
 import (
+	"net/http"
 	"strings"
 
 	"github.com/aceaura/model-surge-agent/backend/codec/schemadialect"
@@ -227,5 +228,9 @@ type OutboundCodec interface {
 	NewStreamDecoder() StreamDecoder
 	DecodeResponse(body []byte) (*ir.Response, error)
 	// DecodeError 把上游错误响应归一成 ir.Error。
-	DecodeError(status int, body []byte) *ir.Error
+	//
+	// header 是上游的响应头，限流到期时刻只在头里（Retry-After、
+	// anthropic-ratelimit-*、x-ratelimit-reset-* 等）。收进签名而不做成
+	// 可选接口：限流头是 HTTP 层的，四个协议全都可能收到，漏一个就是缺口。
+	DecodeError(status int, header http.Header, body []byte) *ir.Error
 }

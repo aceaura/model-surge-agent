@@ -1488,6 +1488,34 @@ Gemini 的 `finishMessage`（上游随 `finishReason` 附的人类可读原因�
 - **写 deadline 逐次推进，不是总时限**。语义是「单次写不得阻塞超过 30s」，读得正常的客户端永远不会触发。不推的后果是慢客户端（比如收了一半就不读的）能无限占住一条上游连接：`Write` 是同步调用、不在任何 `select` 里，空闲超时与客户端取消都观察不到它阻塞。
 - **两个超时的负值表示显式不设限**，零值（即不配）取上表默认。零值不表示不设限：那会让忘配环境变量的部署静默回到无限等待。
 
+### 6.8 上游限流的到期时刻
+
+上游被限流时通常会告诉我们**什么时候能再来**。本服务把这句话解析出来，随结果上报交给调度层，由它精确冷却到那一刻，而不是按一个配置的默认时长猜。
+
+**认哪些来源**：
+
+| 来源 | 取值形态 |
+|---|---|
+| `Retry-After` 响应头 | 十进制秒（**允许小数**，实测有上游回 `1.5`）或 HTTP-date，两种都解 |
+| `anthropic-ratelimit-unified-reset` | Unix 时间戳 |
+| `anthropic-ratelimit-unified-5h-reset` / `-7d-reset` | 同上，分窗 |
+| `x-ratelimit-reset-requests` / `-tokens` | 毫秒 epoch / 秒 epoch / 相对秒数三种形态都出现过 |
+| `x-codex-primary-reset-after-seconds` / `x-codex-secondary-...` | **相对秒数**，不是时间戳 |
+| Gemini 错误体 `error.details[]` 中 `@type` 为 `type.googleapis.com/google.rpc.RetryInfo` 的那一项 | `retryDelay`，Go duration 串，如 `"0.201506475s"` |
+
+几点定死的语义：
+
+- **量级消歧而非按头名分派。** 同一个头名在不同上游上出现过不同量级（同一个 `x-ratelimit-reset-*` 有的回 epoch、有的回相对秒数），按头名钉死会解错。数值 ≥ 1e11 当毫秒 epoch，≥ 1e9 当秒 epoch，其余当相对秒数——两个边界都远离真实的相对秒数（限流窗口不会有 31 年）与真实的秒级 epoch。
+- **多个来源同时给了就取最早的那个。** 取最早只是多一次探测；取最晚会在那个长窗口其实没被拒时白锁数小时。`7d` 窗口真被拒时，那一次探测会带回 `7d` 的头，冷却随之推到正确的时刻。
+- **可信性闸门**：不晚于当下、或晚于当下 24 小时的时刻都按坏数据丢弃。上游时钟不一定与本机同步，采信一个半年后的时刻会把可用目标锁到下个季度。`7d` 窗口的真实到期因此不会被采信——那一档靠启发式压制。
+- **上游没说就是没有，绝不编造。** 编造一个到期时刻会把其实可用的目标锁住，比不知道更坏。
+- **限流头不限于 429。** `503` 带 `Retry-After` 是 RFC 9110 的标准做法，而过载恰恰最需要按上游节奏退避。
+- **本服务不在数据面睡等。** 到期时刻再近也只是换下一个目标：数据面睡等会占住入站连接与并发额度，等待是调度层的事。
+- **Gemini 只认 `RetryInfo`**，不从错误文案里抠 `"per day"` 之类的说法。前者是 Google 的官方 RPC 结构、稳定；后者一改文案就静默失效，而失效方向是「又开始按默认值瞎猜」，运行时看不出来。`details[]` 里的 `@type` 做全串比对——数组里还有 `ErrorInfo`、`QuotaFailure` 等成员，宽松匹配会把别人的字段读成到期时刻。
+- **该时刻落进请求流水**（`retry_after` 列），事后能回答「那次为什么换了目标」。上游没说时该列为 `NULL` 而非一个过去的时刻。
+
+调度层拿到它之后如何改变冷却判定（明示优先、失败计数仍递增、只向后推进、不可信则回落启发式），见 model-surge-relay 的 `POST /v1/results` 一节。
+
 ---
 
 ## 7. 管理面
@@ -1912,6 +1940,7 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| 2.8 | 2026-09-19 | 上游限流到期时刻首次成文（[6.8](#68-上游限流的到期时刻)）：从六类限流响应头与 Gemini 的 `google.rpc.RetryInfo` 解出「最早可以再来」的绝对时刻，随结果上报交给调度层精确冷却，并落进请求流水的 `retry_after` 列。**行为变更**：此前 `resp.Header` 在错误路径上被整体丢弃（全仓唯一读过上游响应头的地方是判 SSE 的 `Content-Type`），限流与普通上游错、超时同为 `retrying` 一档，调度层只能按失败计数累积后冷却一个固定时长——上游说「5 小时后再来」时我们一分钟后就又去撞，在整个限流窗口里反复空转，而每次空转都是一次真实的失败上报。`DecodeError` 签名因此从 `(status, body)` 改为 `(status, header, body)`（改签名而非加可选接口：限流头是 HTTP 层的，四个协议全都可能收到，漏一个就是缺口）。**明确不做**：不在数据面为同一目标睡等退避（数据面睡等会占住入站连接）；不做账号级或 (账号,模型) 级限流（账号身份在 upstream 侧，数据面看不到）；不做 `x-ratelimit-remaining-*` 的预测性避让（需要跨请求窗口状态，那是调度层的职责）；不从错误文案里抠 `"try again in 1.5s"` 这类说法（文案一改就静默失效，而失效方向是又开始瞎猜） |
 | 2.7 | 2026-09-19 | 响应侧调参保真：`service_tier` 首次原样回显（Chat Completions 顶层、Responses 的 `response` 对象；`created` 与 `completed` 两帧任一带上都认），Anthropic 出站无此位时报 `dropped service_tier from the response`；上游回多路候选而中立表示只装得下一路时报出**实际丢弃路数**（`dropped N extra response candidate(s)`，一个流恒一条），该数字可与 `usage.output_tokens` 对账；Gemini 的 `finishMessage` 原文作为说明保留（截断 200 字节，**不改写 `stop_reason`**，枚举仍只由 `finishReason` 决定）。新增第三类说明措辞 `forwarded X but the result is not returned`——与 `dropped`（换个目标就有）、`filled in`（本服务补的值）区分开，它表示换谁都拿不到。`n` 与 `logprobs` 的请求侧/响应侧分工成文（[6.4](#64-跨协议能力差异)「调参的请求侧与响应侧分工」）。**绝不拿请求里的 `service_tier` 兜底**：点 `flex` 拿到 `default` 是被降档，兜底会把降档伪装成按要求执行，而这一维决定计费。**明确不做**（五项理由成文，见 [6.4](#64-跨协议能力差异)「响应侧明确不做的维度」）：响应 `logprobs`、`system_fingerprint`、Gemini 的 grounding/citation、`safetyRatings`、`text.format` 与 `truncation` 回显 |
 | 2.6 | 2026-09-19 | 调参字段保真：13 个采样/候选/输出格式字段（penalties、`seed`、`n`、logprobs、`logit_bias`、`service_tier`、`parallel_tool_calls`、`response_format`、`verbosity`、`include`、`truncation`、客户端 `metadata`）首次进入中立表示，承载矩阵成文（[6.4](#64-跨协议能力差异)「调参字段的承载矩阵」）；Chat Completions 与 Responses 请求字段表补齐这些字段。**行为变更**：这些字段此前在解码阶段就被丢掉，**连同协议往返也丢**（本服务无透传快路径，`chat_completions → chat_completions` 一样经中立表示重建）；`max_tokens` 缺失时 Anthropic 出站的 4096 兜底现在会报有损 `filled in max_tokens`（此前无痕）。**明确不做**：不因目标不支持某字段而拒绝请求；不对小 `max_tokens` 设下限抬高；不做 `logit_bias` 的跨协议 token id 重映射；不在本地为 `n` 做扇出 |
 | 2.5 | 2026-09-19 | 推理开关区分三态（没提 / 明确关闭 / 明确开启），首次成文（[6.4](#64-跨协议能力差异)「推理开关的三态」）：四个协议各自的关闭写法在入站被识别、在出站被写出；明确关闭不再被参数层的 `defaults` 翻转成开启；目标协议不支持推理时明确关闭不报有损。**行为变更**：此前客户端的明确关闭在出站一律被省略，上游按自身默认执行，对默认开启推理的模型等于把关闭请求改成了开启；`reasoning_effort:"none"` / `reasoning.effort:"none"` 此前会被当成强度档位折算成某个真实档位。**文档更正**：Anthropic `thinking` 字段曾写「`type` 非 `enabled` 视为关闭」，措辞上把「没提」也读成了关闭——省略该字段与 `disabled` 并不等价 |

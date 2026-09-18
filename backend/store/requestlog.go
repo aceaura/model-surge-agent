@@ -45,8 +45,9 @@ func (l *RequestLog) Insert(ctx context.Context, rec pipeline.Record) error {
 			model_id, account, outcome, status_code, attempts, tried_ids,
 			committed, stream, usage_estimated,
 			input_tokens, output_tokens, cache_read_tokens,
-			latency_ms, first_token_ms, error_code, error_message, sanitized, lossy)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+			latency_ms, first_token_ms, error_code, error_message, sanitized, lossy,
+			retry_after)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
 		ON CONFLICT (request_id) DO UPDATE SET
 			at = EXCLUDED.at, outbound_protocol = EXCLUDED.outbound_protocol,
 			model_id = EXCLUDED.model_id, account = EXCLUDED.account,
@@ -57,13 +58,26 @@ func (l *RequestLog) Insert(ctx context.Context, rec pipeline.Record) error {
 			cache_read_tokens = EXCLUDED.cache_read_tokens,
 			latency_ms = EXCLUDED.latency_ms, first_token_ms = EXCLUDED.first_token_ms,
 			error_code = EXCLUDED.error_code, error_message = EXCLUDED.error_message,
-			sanitized = EXCLUDED.sanitized, lossy = EXCLUDED.lossy`,
+			sanitized = EXCLUDED.sanitized, lossy = EXCLUDED.lossy,
+			retry_after = EXCLUDED.retry_after`,
 		rec.RequestID, at, rec.InboundProtocol, rec.Path, rec.UserModel, rec.OutboundProtocol,
 		rec.ModelID, rec.Account, rec.Outcome, rec.StatusCode, rec.Attempts, tried,
 		rec.Committed, rec.Stream, rec.UsageEstimated,
 		rec.Usage.InputTokens, rec.Usage.OutputTokens, rec.Usage.CacheReadTokens,
-		rec.LatencyMS, rec.FirstTokenMS, rec.ErrorCode, rec.ErrorMessage, sanitized, lossy)
+		rec.LatencyMS, rec.FirstTokenMS, rec.ErrorCode, rec.ErrorMessage, sanitized, lossy,
+		zeroTimeAsNull(rec.RetryAfter))
 	return err
+}
+
+// zeroTimeAsNull 把零值时刻写成 NULL。
+//
+// 不写成 Go 的零值时刻（公元 1 年）：那会让「上游没说」在库里变成一个
+// 具体的过去时刻，事后按 retry_after IS NULL 筛不出来。
+func zeroTimeAsNull(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }
 
 // Filter 是流水查询条件。空字段表示不筛。
@@ -185,7 +199,7 @@ const recordColumns = `request_id, at, inbound_protocol, path, user_model, outbo
 	model_id, account, outcome, status_code, attempts, tried_ids,
 	committed, stream, usage_estimated,
 	input_tokens, output_tokens, cache_read_tokens,
-	latency_ms, first_token_ms, error_code, error_message, sanitized, lossy`
+	latency_ms, first_token_ms, error_code, error_message, sanitized, lossy, retry_after`
 
 func scanRecord(rows pgx.Rows) (pipeline.Record, error) {
 	var (
@@ -193,14 +207,20 @@ func scanRecord(rows pgx.Rows) (pipeline.Record, error) {
 		tried     []byte
 		sanitized []byte
 		lossy     []byte
+		// 指针接 NULL：上游没说到期时刻时这一列为 NULL，
+		// 直接扫进 time.Time 会失败。
+		retryAfter *time.Time
 	)
 	if err := rows.Scan(&rec.RequestID, &rec.At, &rec.InboundProtocol, &rec.Path, &rec.UserModel,
 		&rec.OutboundProtocol, &rec.ModelID, &rec.Account, &rec.Outcome, &rec.StatusCode,
 		&rec.Attempts, &tried, &rec.Committed, &rec.Stream, &rec.UsageEstimated,
 		&rec.Usage.InputTokens, &rec.Usage.OutputTokens, &rec.Usage.CacheReadTokens,
 		&rec.LatencyMS, &rec.FirstTokenMS, &rec.ErrorCode, &rec.ErrorMessage,
-		&sanitized, &lossy); err != nil {
+		&sanitized, &lossy, &retryAfter); err != nil {
 		return rec, err
+	}
+	if retryAfter != nil {
+		rec.RetryAfter = *retryAfter
 	}
 	if len(tried) > 0 {
 		if err := json.Unmarshal(tried, &rec.TriedIDs); err != nil {

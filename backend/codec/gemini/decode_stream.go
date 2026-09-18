@@ -3,9 +3,12 @@ package gemini
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/aceaura/model-surge-agent/backend/codec"
+	"github.com/aceaura/model-surge-agent/backend/codec/ratelimit"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
@@ -328,13 +331,40 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	return out, codec.DedupeNotes(notes), nil
 }
 
-func DecodeError(status int, body []byte) *ir.Error {
+func DecodeError(status int, header http.Header, body []byte) *ir.Error {
 	var env wireErrorEnvelope
 	if err := json.Unmarshal(body, &env); err == nil && env.Error.Message != "" {
-		return codec.WithParam(convertError(status, &env.Error), body)
+		out := codec.WithParam(convertError(status, &env.Error), body)
+		// 本协议是四个里唯一把到期时刻放在体内的：google.rpc.RetryInfo。
+		// 先填体内的，再让 WithRetryAfter 与头里的取更早者。
+		out.RetryAfter = retryInfoAt(env.Error.Details, time.Now())
+		return codec.WithRetryAfter(out, header)
 	}
 	// 不是本协议的错误结构：尽力从任意形状里挖消息，挖不到才回落状态码描述。
-	return codec.WithParam(codec.FallbackError(status, body), body)
+	return codec.WithRetryAfter(codec.WithParam(codec.FallbackError(status, body), body), header)
+}
+
+// retryInfoAt 从 details 数组里取 RetryInfo.retryDelay 并换成绝对时刻。
+//
+// 只认 RetryInfo，不认 quotaResetDelay 与 message 里的 "per day" 文本：
+// 前者是 Google 的官方 RPC 结构、稳定；后者是文本，上游改文案就静默失效，
+// 而失效的方向是「又开始按默认值瞎猜」，无从察觉。
+func retryInfoAt(details []wireErrorDetail, now time.Time) time.Time {
+	for _, d := range details {
+		if d.Type != retryInfoType || d.RetryDelay == "" {
+			continue
+		}
+		delay, err := time.ParseDuration(d.RetryDelay)
+		if err != nil || delay <= 0 {
+			continue
+		}
+		at := now.Add(delay)
+		// 与头解析走同一个可信性判据：体内的时长同样可能是坏数据。
+		if ratelimit.Trustworthy(at, now) {
+			return at
+		}
+	}
+	return time.Time{}
 }
 
 func convertError(status int, e *wireError) *ir.Error {

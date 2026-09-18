@@ -79,7 +79,7 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		_ = resp.Body.Close()
 		cancel()
-		return nil, outbound.DecodeError(resp.StatusCode, raw)
+		return nil, outbound.DecodeError(resp.StatusCode, resp.Header, raw)
 	}
 
 	// 上游是否真的在发流，与客户端要不要流无关：兼容层网关忽略

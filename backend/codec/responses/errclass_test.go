@@ -48,8 +48,7 @@ func TestStreamErrorMatchesTheHTTPPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
-	viaHTTP := DecodeError(429,
-		[]byte(`{"error":{"code":"rate_limit_exceeded","message":"slow down"}}`))
+	viaHTTP := DecodeError(429, nil, []byte(`{"error":{"code":"rate_limit_exceeded","message":"slow down"}}`))
 	if events[0].Err.Kind != viaHTTP.Kind {
 		t.Errorf("stream kind = %q, http kind = %q", events[0].Err.Kind, viaHTTP.Kind)
 	}
@@ -57,7 +56,7 @@ func TestStreamErrorMatchesTheHTTPPath(t *testing.T) {
 
 // 上游没按本协议的两种规范形状回：仍要挖出消息，不能只丢一段原始 body。
 func TestDecodeErrorExtractsFromForeignShapes(t *testing.T) {
-	got := DecodeError(503, []byte(`{"err":"gateway exploded"}`))
+	got := DecodeError(503, nil, []byte(`{"err":"gateway exploded"}`))
 	if got.Message != "gateway exploded" {
 		t.Errorf("message = %q, want the message dug out of the foreign shape", got.Message)
 	}
@@ -67,7 +66,7 @@ func TestDecodeErrorExtractsFromForeignShapes(t *testing.T) {
 func TestDecodeErrorUnwrapsJSONStuffedIntoMessage(t *testing.T) {
 	body := `{"error":{"code":"invalid_request_error",` +
 		`"message":"{\"error\":{\"message\":\"prompt is too long\"}}"}}`
-	got := DecodeError(400, []byte(body))
+	got := DecodeError(400, nil, []byte(body))
 	if got.Message != "prompt is too long" {
 		t.Errorf("message = %q, the real message is nested inside", got.Message)
 	}
@@ -80,14 +79,14 @@ func TestDecodeErrorUnwrapsJSONStuffedIntoMessage(t *testing.T) {
 // 兼容层代理常在本协议的端点上回 openai 形状的错误体，所以即便本协议
 // 自家的错误结构没有 param 位，也要能从原始字节里挖出来。
 func TestDecodeErrorCarriesParam(t *testing.T) {
-	got := DecodeError(400, []byte(`{"error":{"message":"bad value","param":"max_tokens"}}`))
+	got := DecodeError(400, nil, []byte(`{"error":{"message":"bad value","param":"max_tokens"}}`))
 	if got.Param != "max_tokens" {
 		t.Errorf("param = %q, want max_tokens", got.Param)
 	}
 }
 
 func TestDecodeErrorLeavesParamEmptyWhenAbsent(t *testing.T) {
-	got := DecodeError(400, []byte(`{"error":{"message":"bad value"}}`))
+	got := DecodeError(400, nil, []byte(`{"error":{"message":"bad value"}}`))
 	if got.Param != "" {
 		t.Errorf("param = %q, 上游没给就该缺席而不是空串以外的值", got.Param)
 	}

@@ -157,7 +157,27 @@ type wireError struct {
 	Code    int    `json:"code,omitempty"`
 	Message string `json:"message"`
 	Status  string `json:"status,omitempty"`
+	// Details 是 google.rpc 的错误明细数组，按 @type 区分成员类型。
+	// 唯一被采信的是 RetryInfo——它是本协议里唯一结构化的到期信息。
+	Details []wireErrorDetail `json:"details,omitempty"`
 }
+
+// wireErrorDetail 只解出 RetryInfo 需要的两个键。
+//
+// 不解 ErrorInfo.reason（RATE_LIMIT_EXCEEDED vs MODEL_CAPACITY_EXHAUSTED）：
+// 两者对本服务的处置相同——都是换目标 + 按到期时刻冷却，分开只会多一条
+// 没有行为差异的分支。
+type wireErrorDetail struct {
+	Type string `json:"@type,omitempty"`
+	// RetryDelay 是 Go duration 串，形如 "0.201506475s"。
+	RetryDelay string `json:"retryDelay,omitempty"`
+}
+
+// retryInfoType 是 google.rpc.RetryInfo 的完整类型 URL。
+//
+// 全串比对而不是后缀匹配：details 数组里还有 ErrorInfo、QuotaFailure、
+// BadRequest 等成员，宽松匹配会把别人的字段读成到期时刻。
+const retryInfoType = "type.googleapis.com/google.rpc.RetryInfo"
 
 type wireErrorEnvelope struct {
 	Error wireError `json:"error"`

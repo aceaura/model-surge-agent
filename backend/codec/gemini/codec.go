@@ -10,6 +10,7 @@
 package gemini
 
 import (
+	"net/http"
 	"strings"
 
 	"github.com/aceaura/model-surge-agent/backend/codec"
@@ -123,8 +124,8 @@ func (outboundCodec) DecodeResponseLossy(body []byte) (*ir.Response, []string, e
 	return DecodeResponseLossy(body)
 }
 
-func (outboundCodec) DecodeError(status int, body []byte) *ir.Error {
-	return DecodeError(status, body)
+func (outboundCodec) DecodeError(status int, header http.Header, body []byte) *ir.Error {
+	return DecodeError(status, header, body)
 }
 
 func init() {

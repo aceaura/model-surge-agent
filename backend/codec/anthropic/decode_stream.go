@@ -3,6 +3,7 @@ package anthropic
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/aceaura/model-surge-agent/backend/codec"
@@ -195,14 +196,14 @@ func isRedactedThinking(b ir.Block) bool {
 }
 
 // DecodeError 把上游错误响应归一成 ir.Error。
-func DecodeError(status int, body []byte) *ir.Error {
+func DecodeError(status int, header http.Header, body []byte) *ir.Error {
 	var env wireErrorEnvelope
 	if err := json.Unmarshal(body, &env); err != nil || env.Error.Message == "" {
 		// 上游没按本协议的错误结构回（网关 HTML、兼容层自创字段名之类）：
 		// 尽力从任意形状里挖消息，挖不到才回落状态码描述。
-		return codec.WithParam(codec.FallbackError(status, body), body)
+		return codec.WithRetryAfter(codec.WithParam(codec.FallbackError(status, body), body), header)
 	}
-	return codec.WithParam(convertError(status, &env.Error), body)
+	return codec.WithRetryAfter(codec.WithParam(convertError(status, &env.Error), body), header)
 }
 
 func convertError(status int, e *wireError) *ir.Error {

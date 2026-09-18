@@ -2,8 +2,11 @@ package codec
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
+	"time"
 
+	"github.com/aceaura/model-surge-agent/backend/codec/ratelimit"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
@@ -70,6 +73,30 @@ func WithParam(err *ir.Error, body []byte) *ir.Error {
 		return err
 	}
 	err.Param = ExtractParam(body)
+	return err
+}
+
+// WithRetryAfter 给已归一的错误补上响应头里的最早可重试时刻。
+//
+// 与 WithParam 一样放在 DecodeError 的出口统一调用：限流头是 HTTP 层的，
+// 每个协议都可能收到，让各协议自己解会解出四套判据。
+//
+// 错误上已有值（来自体内的结构化到期信息，如 Gemini 的 RetryInfo）时**取更早的
+// 那个**，与 ratelimit.ResetAt 跨多个头取最早同口径：两处都在回答同一个问题
+// 「下一次最早什么时候」，不该因为来源不同换一套规则。
+//
+// 头里没有可信值时保持原状——绝不编造，编造会把可用目标锁住。
+func WithRetryAfter(err *ir.Error, h http.Header) *ir.Error {
+	if err == nil || h == nil {
+		return err
+	}
+	fromHeader := ratelimit.ResetAt(h, time.Now())
+	if fromHeader.IsZero() {
+		return err
+	}
+	if err.RetryAfter.IsZero() || fromHeader.Before(err.RetryAfter) {
+		err.RetryAfter = fromHeader
+	}
 	return err
 }
 

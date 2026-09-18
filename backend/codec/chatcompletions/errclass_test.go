@@ -49,7 +49,7 @@ func TestStreamErrorMatchesTheHTTPPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
-	viaHTTP := DecodeError(429, []byte(body))
+	viaHTTP := DecodeError(429, nil, []byte(body))
 	if events[0].Err.Kind != viaHTTP.Kind {
 		t.Errorf("stream kind = %q, http kind = %q", events[0].Err.Kind, viaHTTP.Kind)
 	}
@@ -58,7 +58,7 @@ func TestStreamErrorMatchesTheHTTPPath(t *testing.T) {
 // 本协议的兼容实现最多，错误体形状五花八门：仍要挖出消息，
 // 不能只丢一段原始 body 给运维。
 func TestDecodeErrorExtractsFromForeignShapes(t *testing.T) {
-	got := DecodeError(503, []byte(`{"detail":"gateway exploded"}`))
+	got := DecodeError(503, nil, []byte(`{"detail":"gateway exploded"}`))
 	if got.Message != "gateway exploded" {
 		t.Errorf("message = %q, want the message dug out of the foreign shape", got.Message)
 	}
@@ -68,7 +68,7 @@ func TestDecodeErrorExtractsFromForeignShapes(t *testing.T) {
 func TestDecodeErrorUnwrapsJSONStuffedIntoMessage(t *testing.T) {
 	body := `{"error":{"type":"invalid_request_error",` +
 		`"message":"{\"error\":{\"message\":\"prompt is too long\"}}"}}`
-	got := DecodeError(400, []byte(body))
+	got := DecodeError(400, nil, []byte(body))
 	if got.Message != "prompt is too long" {
 		t.Errorf("message = %q, the real message is nested inside", got.Message)
 	}
@@ -81,14 +81,14 @@ func TestDecodeErrorUnwrapsJSONStuffedIntoMessage(t *testing.T) {
 // 兼容层代理常在本协议的端点上回 openai 形状的错误体，所以即便本协议
 // 自家的错误结构没有 param 位，也要能从原始字节里挖出来。
 func TestDecodeErrorCarriesParam(t *testing.T) {
-	got := DecodeError(400, []byte(`{"error":{"message":"bad value","param":"max_tokens"}}`))
+	got := DecodeError(400, nil, []byte(`{"error":{"message":"bad value","param":"max_tokens"}}`))
 	if got.Param != "max_tokens" {
 		t.Errorf("param = %q, want max_tokens", got.Param)
 	}
 }
 
 func TestDecodeErrorLeavesParamEmptyWhenAbsent(t *testing.T) {
-	got := DecodeError(400, []byte(`{"error":{"message":"bad value"}}`))
+	got := DecodeError(400, nil, []byte(`{"error":{"message":"bad value"}}`))
 	if got.Param != "" {
 		t.Errorf("param = %q, 上游没给就该缺席而不是空串以外的值", got.Param)
 	}

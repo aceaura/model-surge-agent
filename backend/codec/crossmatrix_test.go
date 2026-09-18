@@ -595,7 +595,7 @@ func TestErrorMatrixKeepsContextExceededOutOfRetries(t *testing.T) {
 			t.Fatalf("outbound %q has no context-overflow fixture", name)
 		}
 		c, _ := codec.Outbound(name)
-		err := c.DecodeError(400, []byte(body))
+		err := c.DecodeError(400, nil, []byte(body))
 		if err.Kind != ir.ErrContextExceeded {
 			t.Errorf("%s: kind = %q, want context_exceeded", name, err.Kind)
 		}
@@ -610,7 +610,7 @@ func TestErrorMatrixKeepsContextExceededOutOfRetries(t *testing.T) {
 func TestErrorMatrixMapsRateLimitToRetryable(t *testing.T) {
 	for _, name := range outboundNames() {
 		c, _ := codec.Outbound(name)
-		err := c.DecodeError(429, []byte(`{"error":{"message":"slow down"}}`))
+		err := c.DecodeError(429, nil, []byte(`{"error":{"message":"slow down"}}`))
 		if err.Kind != ir.ErrRateLimit {
 			t.Errorf("%s: kind = %q, want rate_limit", name, err.Kind)
 		}

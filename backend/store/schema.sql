@@ -25,13 +25,16 @@ CREATE TABLE IF NOT EXISTS request_log (
   error_code        TEXT NOT NULL DEFAULT '',
   error_message     TEXT NOT NULL DEFAULT '',
   sanitized         JSONB NOT NULL DEFAULT '[]',
-  lossy             JSONB NOT NULL DEFAULT '[]'
+  lossy             JSONB NOT NULL DEFAULT '[]',
+  -- 上游明示的该目标最早可重试时刻。NULL 表示上游没说。
+  retry_after       TIMESTAMPTZ
 );
 
 -- 给先于这几列建起的旧表补列。
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS sanitized JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS lossy JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS path TEXT NOT NULL DEFAULT '';
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS retry_after TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS request_log_at_idx ON request_log(at DESC);
 CREATE INDEX IF NOT EXISTS request_log_model_idx ON request_log(model_id, at DESC);

@@ -1,6 +1,9 @@
 package ir
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // ErrorKind 是跨协议归一后的错误类别，决定重试与上报 outcome。
 type ErrorKind string
@@ -44,6 +47,13 @@ type Error struct {
 	Param string `json:"param,omitempty"`
 	// Retryable 由 Kind 决定，构造时统一填充。
 	Retryable bool `json:"retryable"`
+	// RetryAfter 是上游明示的「最早可以再来」的绝对时刻，零值表示上游没说。
+	//
+	// 存时刻而不是时长：这个值要跨进程传到调度层，时长会在排队与网络往返里
+	// 失真，时刻不会。同样不进 NewError 的参数表——只有上游错误有这一维度。
+	//
+	// 绝不编造：没给就是零值。编造一个时刻会把其实可用的目标锁住。
+	RetryAfter time.Time `json:"retry_after,omitzero"`
 }
 
 func (e *Error) Error() string {

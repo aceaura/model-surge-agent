@@ -62,6 +62,9 @@ type Record struct {
 	FirstTokenMS     int
 	ErrorCode        string
 	ErrorMessage     string
+	// RetryAfter 是上游明示的该目标最早可重试时刻，零值表示上游没说。
+	// 落库供事后回答「那次为什么换了目标」。
+	RetryAfter time.Time
 	// Sanitized 是 ir.Sanitize 对本次请求做出的修复说明；
 	// 为空表示请求本身合法，未被改动。
 	Sanitized []string
@@ -196,24 +199,27 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 
 		outcome, res := p.attempt(ctx, w, call, target, attempt, start, &rec)
 		if res.err == nil {
-			p.report(call, target, attempt, relayclient.OutcomeNormal, res.usage)
+			p.report(call, target, attempt, relayclient.OutcomeNormal, res.usage, nil)
 			rec.Outcome = relayclient.OutcomeNormal
 			rec.Usage = res.usage
 			return
 		}
 		lastErr = res.err
+		// 在这里统一记：所有失败路径都汇到这一行，
+		// 分散到各个分支填会有人忘。
+		rec.RetryAfter = res.err.RetryAfter
 
 		// committed 之后目标已锁定：响应已经开始写出，
 		// 换目标会让客户端看到两段拼接的回答。
 		if res.committed {
-			p.report(call, target, attempt, outcome, res.usage)
+			p.report(call, target, attempt, outcome, res.usage, res.err)
 			rec.Outcome = outcome
 			rec.Usage = res.usage
 			return
 		}
 		// 换目标也不会好（参数错、上下文超限），直接回错。
 		if !res.err.Retryable {
-			p.report(call, target, attempt, outcome, res.usage)
+			p.report(call, target, attempt, outcome, res.usage, res.err)
 			rec.Outcome = outcome
 			rec.Usage = res.usage
 			p.fail(w, call, &rec, res.err)
@@ -224,12 +230,12 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 		last := attempt == max(p.Opts.MaxAttempts, 1)-1
 		if last {
 			// 不再重试，所以是 abnormal 而非 retrying：后者表示还会换目标。
-			p.report(call, target, attempt, downgrade(outcome), res.usage)
+			p.report(call, target, attempt, downgrade(outcome), res.usage, res.err)
 			rec.Outcome = downgrade(outcome)
 			rec.TriedIDs = tried
 			break
 		}
-		p.report(call, target, attempt, outcome, res.usage)
+		p.report(call, target, attempt, outcome, res.usage, res.err)
 		rec.TriedIDs = tried
 	}
 
@@ -313,10 +319,18 @@ func (p *Pipeline) fail(w http.ResponseWriter, call Call, rec *Record, err *ir.E
 	_, _ = w.Write(body)
 }
 
+// report 上报一次尝试的结果。err 为 nil 表示成功。
+//
+// 收 err 而不是单收一个 retryAfter 参数：到期时刻是错误的属性，
+// 让五处调用点各自从 res.err 里取会有人忘。
 func (p *Pipeline) report(call Call, target relayclient.Target, attempt int,
-	outcome string, usage relayclient.Usage) {
+	outcome string, usage relayclient.Usage, err *ir.Error) {
 	if p.Reporter == nil {
 		return
+	}
+	var retryAfter time.Time
+	if err != nil {
+		retryAfter = err.RetryAfter
 	}
 	p.Reporter.Report(relayclient.ResultReport{
 		// attempt 入键：同一客户端请求的多次尝试各自上报，
@@ -326,6 +340,8 @@ func (p *Pipeline) report(call Call, target relayclient.Target, attempt int,
 		ModelID:   target.ModelID,
 		Outcome:   outcome,
 		Usage:     usage,
+		// 零值时 omitzero 让它不出现在 JSON 里，调度层据此回落启发式。
+		RetryAfter: retryAfter,
 	})
 }
 

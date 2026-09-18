@@ -3,6 +3,7 @@ package responses
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/aceaura/model-surge-agent/backend/codec"
@@ -355,7 +356,11 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 	return out, nil
 }
 
-func DecodeError(status int, body []byte) *ir.Error {
+func DecodeError(status int, header http.Header, body []byte) *ir.Error {
+	return codec.WithRetryAfter(decodeErrorBody(status, body), header)
+}
+
+func decodeErrorBody(status int, body []byte) *ir.Error {
 	var env wireErrorEnvelope
 	if err := json.Unmarshal(body, &env); err == nil && env.Error.Message != "" {
 		return codec.WithParam(convertError(status, &env.Error), body)
