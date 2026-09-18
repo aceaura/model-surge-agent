@@ -112,6 +112,39 @@ func TestUnknownFieldsDoNotBreakFraming(t *testing.T) {
 	}
 }
 
+// 一行裸 JSON 不能被当成帧的开始。上游忽略流式请求回一整份响应时就是
+// 这个形态，若它看起来像一个合法的空 data 帧，「上游一帧都没发」的
+// 截断保护就会失效，客户端最终拿到一个静默的空答案。
+func TestBareJSONLineIsNotAFrame(t *testing.T) {
+	for _, body := range []string{
+		`{"type":"message","content":[]}`,
+		"{\n  \"type\": \"message\"\n}",
+		`[{"a":1}]`,
+		"upstream is unavailable",
+	} {
+		if got := scanAll(t, body); len(got) != 0 {
+			t.Errorf("body %q: frames = %#v", body, got)
+		}
+	}
+}
+
+// 带空行结尾也一样：空行只在已经见过字段行时才收帧。
+func TestBareJSONFollowedByBlankLineIsNotAFrame(t *testing.T) {
+	if got := scanAll(t, "{\"type\":\"message\"}\n\n"); len(got) != 0 {
+		t.Errorf("frames = %#v", got)
+	}
+}
+
+// 规范定义的四个字段名仍然算帧已开始，即使本服务不用它们的值。
+func TestSpecFieldsStillStartAFrame(t *testing.T) {
+	for _, body := range []string{"id: 42\n\n", "retry: 1000\n\n"} {
+		got := scanAll(t, body)
+		if len(got) != 1 || got[0].Data != "" || got[0].Event != "" {
+			t.Errorf("body %q: frames = %#v", body, got)
+		}
+	}
+}
+
 func TestEncodeFrameRoundTrips(t *testing.T) {
 	raw := EncodeFrame("message_delta", []byte(`{"a":1}`))
 	if string(raw) != "event: message_delta\ndata: {\"a\":1}\n\n" {

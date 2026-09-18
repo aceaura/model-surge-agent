@@ -377,6 +377,7 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 | `merged tool call fragments that arrived under different indexes (matched by call id)` | `chat_completions` 上游同一次调用的分片带着不同 `index`，按 `id` 并回一个块。不并的后果是客户端收到两个 `tool_use`、拿着两份半截入参各执行一次，而 HTTP 状态码是 200 |
 | `split a stream line that carried several JSON documents` | 一行 SSE `data:` 里首尾相接挤了多个 JSON 文档。只在整帧解码失败后才拆，拆后任一份不合法即整行失败，不接受部分解码 |
 | `dropped error param %s (anthropic error envelope has no param field)` | 上游错误体给了 `error.param` 而客户端用的是 anthropic 协议，该信封没有这个位。详见 §3.2.6 |
+| `upstream ignored the streaming request and returned a whole response` | 本服务对上游一律请求流式，但上游回的是 `Content-Type` 非 `text/event-stream` 的一整份响应（兼容层网关的常见形态）。内容照原样交付，丢的是逐字输出这一项。详见 §3.2.10 |
 
 签名剥离只丢签名，不丢推理文本：文本对客户端仍然有用，只有签名是它验不了、下一轮会被上游拒收的那部分。
 
@@ -488,6 +489,26 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 不上报调度层是刻意的：这一刻还没选过目标，硬编一个占位账号会让某个真实账号无端累计失败并被冷却，而它根本没参与过这次请求。
 
 `/admin/` 前缀下的 404/405 不走这套：管理面有自己的错误约定，也不该出现在数据面流水里。
+
+#### 3.2.10 上游忽略流式请求
+
+本服务对上游**一律**请求流式（`Accept: text/event-stream`、请求体 `stream: true` 写死），客户端要不要流是另一件事，两者互不改写。但上游不保证照办：兼容层网关忽略 `stream: true` 回一整份 JSON 是常见形态。
+
+判定只看上游响应的 `Content-Type`：
+
+| 上游响应头 | 处理 |
+| --- | --- |
+| media type 为 `text/event-stream`（忽略 `charset` 等参数，大小写不敏感） | 按 SSE 逐帧读 |
+| 头缺失，或解不出 media type | 按 SSE 处理。绝大多数缺头的上游发的是正常 SSE，而错判成整份响应会把真流缓冲成一整份、毁掉逐字输出 |
+| 其余任何 media type（含没听说过的） | 整体读入，用出站协议的非流式解码器解，再投影成事件序列送进与真流完全相同的下游路径 |
+
+采纳整份响应时的行为：
+
+- 内容、`stop_reason`、用量、工具调用的 id 与入参**照原样交付**，流式客户端拿到的是一份内容完整、一次到齐的 SSE，非流式客户端拿到的是等价的整份响应
+- 记一条 `lossy`：`upstream ignored the streaming request and returned a whole response`。内容没损失，丢的是逐字输出这一项，客户端有权知道
+- 响应体为空或只有空白：按「上游一帧都没发」处理，判为截断，**可换目标重试**
+- 响应体解不动：报 `ir.ErrUpstream`，可换目标重试。**不伪造一个内容为空的成功响应**——那样客户端拿到的是 `stop_reason: end_turn` 加零内容、目标被记为健康、用量为零、另外的目标一次都不试
+- 响应体超过 32 MiB：报 `ir.ErrUpstream`，不无界读进内存
 
 ### 3.3 LiveEntry
 

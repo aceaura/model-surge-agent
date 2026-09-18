@@ -60,8 +60,10 @@ func TestStreamingClientCancelIsNotTheTargetsFault(t *testing.T) {
 	// 等首帧写出（已 committed）再取消，否则测到的是「提交前失败换目标」。
 	waitFor(t, func() bool { return w.Body.Len() > 0 })
 	cancel()
-	close(canceled)
+	// 放走上游 handler 必须等 Serve 返回之后：同时放走会让「上游干净读完」
+	// 与「客户端取消」竞争，上游赢时这轮被记成正常收尾，测的就不是取消了。
 	<-done
+	close(canceled)
 
 	assertCanceled(t, f, up)
 }
@@ -90,8 +92,9 @@ func TestNonStreamingClientCancelIsNotTheTargetsFault(t *testing.T) {
 	waitFor(t, func() bool { return up.calls() == 1 })
 	time.Sleep(100 * time.Millisecond)
 	cancel()
-	close(canceled)
+	// 理由同流式那例：放走 handler 要等 Serve 返回，否则两条收尾路径竞争。
 	<-done
+	close(canceled)
 
 	assertCanceled(t, f, up)
 }

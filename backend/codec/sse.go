@@ -85,8 +85,11 @@ func (s *FrameScanner) Scan() bool {
 			s.data.WriteString(value)
 			sawField = true
 		default:
-			// id / retry 等字段本服务不用，但它们的出现说明帧已开始。
-			sawField = true
+			// id / retry 本服务不用，但它们的出现说明帧已开始。
+			// 名字不在这几个之内的行不算帧的开始，理由见 knownSSEField。
+			if knownSSEField(field) {
+				sawField = true
+			}
 		}
 
 		if s.data.Len() > maxFrameBytes {
@@ -129,6 +132,25 @@ func splitField(line string) (string, string) {
 	return name, strings.TrimPrefix(value, " ")
 }
 
+// knownSSEField 判断字段名是否是 SSE 规范定义的四个之一。
+//
+// 需要这个白名单是因为「未知字段也算帧已开始」那条宽容会被一行裸 JSON
+// 骗过去：`{"type":"message"}` 含冒号，切出来的字段名是 `{"type"`，于是
+// 上游忽略流式请求回的一整份 JSON 看起来像一个合法的空 data 帧，
+// 「上游一帧都没发」的截断保护因此失效，解码器还会给它补一个终止事件，
+// 客户端最终拿到一个静默的空答案。
+//
+// 规范说未知字段应被忽略——白名单正是在忽略它们，只是不再让它们
+// 充当「帧已开始」的证据。
+func knownSSEField(name string) bool {
+	switch name {
+	case "event", "data", "id", "retry":
+		return true
+	default:
+		return false
+	}
+}
+
 // maxJSONDocsPerLine 是单行允许拆出的文档份数上限。
 //
 // 16 取自实际见过的形态：兼容层攒帧时最多把一个 HTTP 读缓冲里的几帧粘在
@@ -142,6 +164,12 @@ const maxJSONLineBytes = 16 << 20
 
 // MultipleJSONDocsNote 是一行里多个 JSON 文档被拆开处理的说明。
 const MultipleJSONDocsNote = "split a stream line that carried several JSON documents"
+
+// UpstreamIgnoredStreamNote 是上游忽略流式请求、回了一整份响应的说明。
+//
+// 记它是因为逐字输出这一项确实丢了：客户端要的是流，拿到的是一次性到齐的
+// 全部内容。内容本身没损失，所以不是错误，但客户端有权知道。
+const UpstreamIgnoredStreamNote = "upstream ignored the streaming request and returned a whole response"
 
 // SplitJSONDocuments 把一行里首尾相接的多个 JSON 文档拆成若干份。
 //

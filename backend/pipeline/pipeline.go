@@ -288,6 +288,9 @@ func (p *Pipeline) attempt(ctx context.Context, w http.ResponseWriter, call Call
 		return outcomeFor(irErr), attemptResult{err: irErr}
 	}
 	defer stream.Close()
+	// 建流阶段的说明并进 rec.Lossy 而不是响应侧那一列：后者是累加的，
+	// 换目标重试时会留下一个没被采用的目标的说明。
+	rec.Lossy = codec.MergeNotes(rec.Lossy, stream.notes)
 
 	return p.bridge(ctx, w, call, stream, start, rec)
 }

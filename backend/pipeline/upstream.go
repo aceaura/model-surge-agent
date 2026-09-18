@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/aceaura/model-surge-agent/backend/codec"
@@ -17,8 +19,13 @@ import (
 type upstream struct {
 	scanner *codec.FrameScanner
 	decoder codec.StreamDecoder
-	body    io.Closer
-	cancel  context.CancelFunc
+	// replay 非空表示上游回的不是 SSE，而是一份完整响应，
+	// 已投影成事件序列，read 直接回放它。
+	replay []ir.Event
+	// notes 是建流阶段产生的有损说明，由调用方并进流水。
+	notes  []string
+	body   io.Closer
+	cancel context.CancelFunc
 }
 
 func (u *upstream) Close() {
@@ -75,11 +82,70 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 		return nil, outbound.DecodeError(resp.StatusCode, raw)
 	}
 
+	// 上游是否真的在发流，与客户端要不要流无关：兼容层网关忽略
+	// stream:true 回一整份 JSON 是常见形态，按 SSE 去切它会一帧都读不出。
+	if !isEventStream(resp.Header.Get("Content-Type")) {
+		return adoptWholeResponse(resp, outbound, cancel)
+	}
+
 	return &upstream{
 		scanner: codec.NewFrameScanner(resp.Body),
 		decoder: outbound.NewStreamDecoder(),
 		body:    resp.Body,
 		cancel:  cancel,
+	}, nil
+}
+
+// isEventStream 判断上游是否真的在发 SSE。
+//
+// 只看 media type，忽略 charset 等参数。头缺失或解不动时按 SSE 处理：
+// 绝大多数缺头的上游发的是正常 SSE，而错判成整份响应会把真流缓冲成
+// 一整份、毁掉逐字输出。
+func isEventStream(ct string) bool {
+	if ct == "" {
+		return true
+	}
+	mt, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		return true
+	}
+	return strings.EqualFold(mt, "text/event-stream")
+}
+
+// maxWholeResponseBytes 是整份响应的读取上限。
+// 与 SSE 单帧上限同量级：一份完整响应的合理上界不该比单帧宽松。
+const maxWholeResponseBytes = 32 << 20
+
+// adoptWholeResponse 把上游的整份响应读进来，投影成事件序列。
+func adoptWholeResponse(resp *http.Response, outbound codec.OutboundCodec,
+	cancel context.CancelFunc) (*upstream, *ir.Error) {
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxWholeResponseBytes+1))
+	_ = resp.Body.Close()
+	if err != nil {
+		cancel()
+		return nil, ir.NewError(ir.ErrUpstream, 0, "",
+			fmt.Sprintf("read upstream response: %v", err))
+	}
+	if len(raw) > maxWholeResponseBytes {
+		cancel()
+		return nil, ir.NewError(ir.ErrUpstream, 0, "", "upstream response exceeds the size limit")
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		// 空体与「一帧都没发」同口径：都是上游在写内容之前就结束了，
+		// 可以换个目标重来。留 replay 为 nil 让 read 走那条既有路径。
+		return &upstream{cancel: cancel}, nil
+	}
+	decoded, err := outbound.DecodeResponse(raw)
+	if err != nil {
+		cancel()
+		return nil, ir.NewError(ir.ErrUpstream, 0, "",
+			fmt.Sprintf("decode upstream response: %v", err))
+	}
+	return &upstream{
+		replay: ir.ResponseEvents(decoded),
+		notes:  []string{codec.UpstreamIgnoredStreamNote},
+		cancel: cancel,
 	}, nil
 }
 
@@ -107,6 +173,18 @@ func (u *upstream) read(ctx context.Context) <-chan frame {
 	out := make(chan frame, 8)
 	go func() {
 		defer close(out)
+		if u.replay != nil {
+			// 上游回的是整份响应。一次送出全部事件而不逐条：这不是真流，
+			// 假装逐字到达只会让客户端以为有过增量。投影里已带终止事件，
+			// 不能再调 decoder.Finish() 补一个。
+			send(ctx, out, frame{events: u.replay, done: true})
+			return
+		}
+		if u.scanner == nil {
+			// 上游 200 但整份响应体是空的：与「一帧都没发」同口径。
+			send(ctx, out, frame{done: true})
+			return
+		}
 		sawFrame := false
 		for u.scanner.Scan() {
 			sawFrame = true
