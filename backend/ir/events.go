@@ -34,10 +34,16 @@ type Event struct {
 	// Block 仅在 EvBlockStart 出现，描述块类型与初始内容。
 	Block *Block `json:"block,omitempty"`
 	// Text 承载各类 delta 的片段内容。
-	Text       string     `json:"text,omitempty"`
-	StopReason StopReason `json:"stop_reason,omitempty"`
-	Usage      *Usage     `json:"usage,omitempty"`
-	MessageID  string     `json:"message_id,omitempty"`
-	Model      string     `json:"model,omitempty"`
-	Err        *Error     `json:"error,omitempty"`
+	Text string `json:"text,omitempty"`
+	// SignatureFrom 只在 EvSigDelta 上有意义，记录签名的来源协议。
+	//
+	// 块上的 Thinking.SignatureFrom 不够用：流式编码器逐帧处理，块开始与
+	// 签名增量之间可能隔任意多帧，编码器手里只有当前这一帧，没有块的全貌，
+	// 判不出同族就会把异族签名照原样写给客户端。
+	SignatureFrom string     `json:"signature_from,omitempty"`
+	StopReason    StopReason `json:"stop_reason,omitempty"`
+	Usage         *Usage     `json:"usage,omitempty"`
+	MessageID     string     `json:"message_id,omitempty"`
+	Model         string     `json:"model,omitempty"`
+	Err           *Error     `json:"error,omitempty"`
 }

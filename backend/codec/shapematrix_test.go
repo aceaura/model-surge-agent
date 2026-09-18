@@ -554,4 +554,3 @@ func countStopSequences(t *testing.T, out string, body []byte) int {
 	}
 	return 0
 }
-

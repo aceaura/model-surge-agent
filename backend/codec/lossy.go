@@ -13,9 +13,23 @@ import (
 // 命中即剥离，即使 SignatureFrom 声称同族：声明可能来自伪造，也可能来自
 // 本服务早期版本写下的历史数据。把别家的密文发给上游会拿到不可重试的 400，
 // 而不可重试意味着换目标也救不回来。
-var foreignSigPrefixes = []string{
-	// OpenAI/Codex 系的加密推理载荷。
-	"gAAAA",
+var foreignSigPrefixes = map[string]string{
+	// OpenAI/Codex 系的加密推理载荷，归属 responses 协议。
+	"gAAAA": ProtocolResponses,
+}
+
+// prefixSaysForeign 按密文特征前缀判断签名是否属于别家。
+//
+// 归属协议必须参与判定：早先这里只看前缀不看协议名，于是 responses 自己的
+// gAAAA 密文发回 responses 上游时也被当异族剥掉，该协议上的多轮推理
+// 永远拿不到签名，而上游又要求带签名才接受带思考的续写。
+func prefixSaysForeign(signature, name string) bool {
+	for p, owner := range foreignSigPrefixes {
+		if strings.HasPrefix(signature, p) {
+			return owner != name
+		}
+	}
+	return false
 }
 
 // DescribeLossy 按出站能力位推导本次编码会丢弃哪些 IR 字段。
@@ -112,15 +126,92 @@ func sigDropReason(t *ir.Thinking, name string, caps Capabilities) (string, bool
 	if !caps.ThinkingSig {
 		return "no signed reasoning", true
 	}
-	for _, p := range foreignSigPrefixes {
-		if strings.HasPrefix(t.Signature, p) {
-			return "signature carries another vendor's ciphertext", true
-		}
+	if prefixSaysForeign(t.Signature, name) {
+		return "signature carries another vendor's ciphertext", true
 	}
 	if t.SignatureFrom != name {
 		return "signature is only valid within its own protocol family", true
 	}
 	return "", false
+}
+
+// ForeignEventSignature 判断一条流式签名增量是否要剥离，并给出说明。
+//
+// 与请求侧共用 foreignSigPrefixes 与同族判定：两侧结论不一致时，
+// 同一份推理内容在流式与非流式两条路上会得到不同处置，客户端把流式
+// 存下来的历史回放成非流式请求就会被上游拒收。
+//
+// 来源为空按异族处理：签名无从验证时放行的代价是客户端把一段它验不了的
+// 密文存进历史，下一轮整个请求被拒；丢掉的代价只是这轮少一段签名。
+func ForeignEventSignature(signature, from, name string) (string, bool) {
+	if signature == "" {
+		return "", false
+	}
+	if prefixSaysForeign(signature, name) {
+		return responseSigNote(name, "signature carries another vendor's ciphertext"), true
+	}
+	if from != name {
+		return responseSigNote(name, "signature is only valid within its own protocol family"), true
+	}
+	return "", false
+}
+
+func responseSigNote(name, why string) string {
+	return fmt.Sprintf("dropped thinking signature from the response (%s cannot express it: %s)", name, why)
+}
+
+// ResponseSignatureUnsupported 给没有签名字段的协议用，措辞与其它响应侧说明一致。
+func ResponseSignatureUnsupported(name string) string {
+	return responseSigNote(name, "no signed reasoning")
+}
+
+// DescribeResponseSignatureLoss 推导非流式响应编码会丢弃哪些推理签名。
+//
+// sigSupported 为假表示本协议根本没有签名字段（如 chat_completions），
+// 此时所有签名都表达不了，与来源无关。
+//
+// 与流式路径共用 responseSigNote：同一件事在两条路径上措辞不同，
+// 按说明检索流水的人会以为是两种故障。
+func DescribeResponseSignatureLoss(resp *ir.Response, name string, sigSupported bool) []string {
+	if resp == nil {
+		return nil
+	}
+	var notes []string
+	for _, b := range resp.Content {
+		if b.Type != ir.BlockThinking || b.Thinking == nil || b.Thinking.Signature == "" {
+			continue
+		}
+		if !sigSupported {
+			notes = append(notes, responseSigNote(name, "no signed reasoning"))
+			continue
+		}
+		if note, drop := ForeignEventSignature(b.Thinking.Signature, b.Thinking.SignatureFrom, name); drop {
+			notes = append(notes, note)
+		}
+	}
+	return DedupeNotes(notes)
+}
+
+// DedupeNotes 把累加的说明去重并排序，供响应侧编码器的 Notes 出口使用。
+// 空输入返回 nil，保持「无丢弃则字段不出现」的语义。
+func DedupeNotes(notes []string) []string {
+	if len(notes) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(notes))
+	out := make([]string, 0, len(notes))
+	for _, n := range notes {
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ForeignSignature 判断签名是否属于别家协议，出站 codec 编码前用它决定是否剥离。
@@ -131,10 +222,8 @@ func ForeignSignature(t *ir.Thinking, name string) bool {
 	if t == nil || t.Signature == "" {
 		return false
 	}
-	for _, p := range foreignSigPrefixes {
-		if strings.HasPrefix(t.Signature, p) {
-			return true
-		}
+	if prefixSaysForeign(t.Signature, name) {
+		return true
 	}
 	return t.SignatureFrom != name
 }

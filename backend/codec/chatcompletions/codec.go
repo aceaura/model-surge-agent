@@ -25,8 +25,20 @@ func (inboundCodec) DecodeRequest(body []byte) (*ir.Request, error) {
 
 func (inboundCodec) NewStreamEncoder() codec.StreamEncoder { return newStreamEncoder() }
 
-func (inboundCodec) EncodeResponse(resp *ir.Response) ([]byte, error) {
-	return EncodeResponse(resp)
+// EncodeResponse 是 EncodeResponseLossy 的包装：两条路径共用同一编码，
+// 响应体逐字节相同，否则客户端看到的内容会因诊断开关而漂移。
+func (c inboundCodec) EncodeResponse(resp *ir.Response) ([]byte, error) {
+	body, _, err := c.EncodeResponseLossy(resp)
+	return body, err
+}
+
+func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, error) {
+	body, err := EncodeResponse(resp)
+	if err != nil {
+		return nil, nil, err
+	}
+	// 本协议无签名字段，一律丢弃，与来源无关。
+	return body, codec.DescribeResponseSignatureLoss(resp, Name, false), nil
 }
 
 func (inboundCodec) RenderError(err *ir.Error) (int, []byte) { return RenderError(err) }
@@ -48,6 +60,10 @@ func (outboundCodec) Caps() codec.Capabilities {
 		StopSequences: true,
 		// 官方 stop 数组至多 4 项，超出即 400。
 		MaxStopSequences: 4,
+		// 显式写出 false：实测本协议允许推理与强制工具共存（deepseek 上
+		// tool_choice 具名 + 思考开启回 200，同时给出文本与 tool_use）。
+		// 留空会让后来者以为只是没填，照 anthropic 抄成 true 就白丢推理。
+		ThinkingExcludesForcedTools: false,
 		// 图片走 image_url，wav/mp3 走 input_audio，其余走 file。
 		// input_audio 只认这两种格式名，别的音频只能降级。
 		MediaTypes: []string{

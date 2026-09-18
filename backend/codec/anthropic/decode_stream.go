@@ -12,9 +12,22 @@ import (
 type streamDecoder struct {
 	// stopped 记录是否已见 message_stop，避免 Finish 重复补发。
 	stopped bool
+	// notes 记录改写说明，走响应侧诊断通道。
+	notes []string
 }
 
 func newStreamDecoder() *streamDecoder { return &streamDecoder{} }
+
+// Notes 实现 codec.StreamNotes。
+func (d *streamDecoder) Notes() []string { return codec.DedupeNotes(d.notes) }
+
+func (d *streamDecoder) Feed(event, data string) ([]ir.Event, error) {
+	out, split, err := codec.FeedWithSplit(event, data, d.feedOne)
+	if split {
+		d.notes = append(d.notes, codec.MultipleJSONDocsNote)
+	}
+	return out, err
+}
 
 // isPlaceholderInput 判断开启帧上的 input 是否不含信息。
 func isPlaceholderInput(input string) bool {
@@ -26,7 +39,7 @@ func isPlaceholderInput(input string) bool {
 	}
 }
 
-func (d *streamDecoder) Feed(event, data string) ([]ir.Event, error) {
+func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 	// ping 帧的 data 可能是空对象，解析它没有意义。
 	if event == evPing {
 		return []ir.Event{{Type: ir.EvPing}}, nil
@@ -100,7 +113,12 @@ func (d *streamDecoder) Feed(event, data string) ([]ir.Event, error) {
 		case deltaThinking:
 			return []ir.Event{{Type: ir.EvThinkingDelta, Index: ev.Index, Text: ev.Delta.Thinking}}, nil
 		case deltaSignature:
-			return []ir.Event{{Type: ir.EvSigDelta, Index: ev.Index, Text: ev.Delta.Signature}}, nil
+			return []ir.Event{{
+				Type:          ir.EvSigDelta,
+				Index:         ev.Index,
+				Text:          ev.Delta.Signature,
+				SignatureFrom: Name,
+			}}, nil
 		default:
 			// 未知 delta 类型：跳过而非报错，上游新增字段不该让整个流失败。
 			return nil, nil

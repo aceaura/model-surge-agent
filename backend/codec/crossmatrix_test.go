@@ -2583,6 +2583,23 @@ func protocolLimitations() []protocolLimitation {
 			reason: "usageMetadata 只有 cachedContentTokenCount，无缓存写入计量",
 			absent: func() bool { _, ok := cacheWriteUsageFixture[codec.ProtocolGemini]; return !ok },
 		},
+		{
+			matrix: "same-id-across-index", protocol: codec.ProtocolAnthropic, feature: "duplicate index",
+			reason: "块身份只由 index 表达，id 在 content_block_start 出现一次且不随增量重复，" +
+				"同一调用的分片不可能带不同 index",
+			absent: func() bool { _, ok := sameIDAcrossIndexStreams[codec.ProtocolAnthropic]; return !ok },
+		},
+		{
+			matrix: "same-id-across-index", protocol: codec.ProtocolResponses, feature: "duplicate index",
+			reason: "定位靠 output_index，call_id 只在 output_item.added 出现，增量帧不带 id，" +
+				"两套标识不并行",
+			absent: func() bool { _, ok := sameIDAcrossIndexStreams[codec.ProtocolResponses]; return !ok },
+		},
+		{
+			matrix: "same-id-across-index", protocol: codec.ProtocolGemini, feature: "duplicate index",
+			reason: "functionCall 是整体对象、args 一帧到齐，不存在分片，也就无从跨 index 抵达",
+			absent: func() bool { _, ok := sameIDAcrossIndexStreams[codec.ProtocolGemini]; return !ok },
+		},
 	}
 }
 
@@ -2633,6 +2650,9 @@ func TestEveryMatrixGapIsDocumented(t *testing.T) {
 		}
 		if _, ok := cacheWriteUsageFixture[up]; !ok {
 			assert(t, "usage-cache-write", up, "cache write tokens")
+		}
+		if _, ok := sameIDAcrossIndexStreams[up]; !ok {
+			assert(t, "same-id-across-index", up, "duplicate index")
 		}
 	}
 }

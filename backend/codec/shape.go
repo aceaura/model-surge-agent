@@ -195,6 +195,17 @@ func shapeToolChoice(req *ir.Request, c *noteCollector) {
 	req.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceAuto}
 }
 
+// forcedToolChoice 判断 tool_choice 是否强制模型调工具。
+//
+// 只有 any 与具名算强制：auto 是「模型自己决定」，none 是「不要调」，
+// 两者都不与推理冲突，把它们算进来会无端关掉推理。
+func forcedToolChoice(tc *ir.ToolChoice) bool {
+	if tc == nil {
+		return false
+	}
+	return tc.Mode == ir.ToolChoiceAny || tc.Mode == ir.ToolChoiceTool
+}
+
 // shapeParams 解开参数互斥并套上数量上限。
 func shapeParams(req *ir.Request, caps Capabilities, c *noteCollector) {
 	thinkingOn := req.Thinking != nil && req.Thinking.Enabled && caps.Thinking
@@ -205,6 +216,18 @@ func shapeParams(req *ir.Request, caps Capabilities, c *noteCollector) {
 		// max_tokens 过小时无解。关掉 thinking 保住这一轮，
 		// 而不是发一个注定被拒的请求。
 		c.drop("thinking", "max_tokens leaves no room for this protocol's minimum reasoning budget")
+		req.Thinking = nil
+		thinkingOn = false
+	}
+
+	if thinkingOn && caps.ThinkingExcludesForcedTools && forcedToolChoice(req.ToolChoice) {
+		// 关推理而不是降级工具约束：降级约束的故障不可见，上游会正常回一段
+		// 文本，调用方以为模型自己决定不调工具。
+		//
+		// 这一步必须排在采样参数互斥之前：关了推理，temperature / top_p 就不
+		// 再需要剥离。顺序反了会先白丢采样参数，再把推理也关掉——两样都没了，
+		// 而实际上只该丢一样。
+		c.drop("thinking", "reasoning cannot be combined with a forced tool choice")
 		req.Thinking = nil
 		thinkingOn = false
 	}

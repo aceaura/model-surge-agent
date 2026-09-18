@@ -232,6 +232,71 @@ func countCacheMarks(t *testing.T, obj map[string]any) int {
 	return count
 }
 
+// 实测：thinking 开启时具名 tool_choice 会被拒（上游原文
+// tool_choice 'specified' is incompatible with thinking enabled）。
+// 冲突时关推理保工具约束。
+func TestForcedToolChoiceDisablesThinking(t *testing.T) {
+	temp := 0.7
+	req := baseRequest()
+	req.Temperature = &temp
+	req.Tools = []ir.Tool{{Name: "read", Schema: `{"type":"object","properties":{}}`}}
+	req.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: "read"}
+	req.Thinking = &ir.ThinkingConfig{Enabled: true, BudgetTokens: 4096}
+
+	obj, notes := shapedBody(t, req)
+	if _, ok := obj["thinking"]; ok {
+		t.Errorf("强制工具时推理该被关掉：%v", obj["thinking"])
+	}
+	if obj["tool_choice"] == nil {
+		t.Errorf("工具约束不该被降级")
+	}
+	// 关了推理就不必再剥采样参数，这是两阶段顺序不可交换的可观测后果。
+	if _, ok := obj["temperature"]; !ok {
+		t.Errorf("推理已关，temperature 不该被剥离：%v", obj)
+	}
+	if !hasNote(notes, "forced tool choice") {
+		t.Errorf("未报推理因强制工具被关：%v", notes)
+	}
+	if hasNote(notes, "temperature/top_p") {
+		t.Errorf("采样参数未被丢弃却报了说明：%v", notes)
+	}
+}
+
+func TestAnyToolChoiceDisablesThinking(t *testing.T) {
+	req := baseRequest()
+	req.Tools = []ir.Tool{{Name: "read", Schema: `{"type":"object","properties":{}}`}}
+	req.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceAny}
+	req.Thinking = &ir.ThinkingConfig{Enabled: true, BudgetTokens: 4096}
+
+	obj, notes := shapedBody(t, req)
+	if _, ok := obj["thinking"]; ok {
+		t.Errorf("any 也是强制，推理该被关掉：%v", obj["thinking"])
+	}
+	if !hasNote(notes, "forced tool choice") {
+		t.Errorf("未报推理因强制工具被关：%v", notes)
+	}
+}
+
+// auto 与 none 都不强制模型调工具，不与推理冲突。
+func TestUnforcedToolChoiceKeepsThinking(t *testing.T) {
+	for _, mode := range []ir.ToolChoiceMode{ir.ToolChoiceAuto, ir.ToolChoiceNone} {
+		t.Run(string(mode), func(t *testing.T) {
+			req := baseRequest()
+			req.Tools = []ir.Tool{{Name: "read", Schema: `{"type":"object","properties":{}}`}}
+			req.ToolChoice = &ir.ToolChoice{Mode: mode}
+			req.Thinking = &ir.ThinkingConfig{Enabled: true, BudgetTokens: 4096}
+
+			obj, notes := shapedBody(t, req)
+			if obj["thinking"] == nil {
+				t.Errorf("%s 不是强制，推理不该被关：%v", mode, obj)
+			}
+			if hasNote(notes, "forced tool choice") {
+				t.Errorf("%s 不该触发强制工具阶段：%v", mode, notes)
+			}
+		})
+	}
+}
+
 func hasNote(notes []string, want string) bool {
 	for _, n := range notes {
 		if strings.Contains(n, want) {

@@ -23,7 +23,12 @@ type streamEncoder struct {
 	// 导致同样的输入产出不同的帧序。
 	blockOrder []int
 	sentDelta  bool
+	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
+	notes []string
 }
+
+// Notes 实现 codec.StreamNotes。
+func (e *streamEncoder) Notes() []string { return codec.DedupeNotes(e.notes) }
 
 func newStreamEncoder() *streamEncoder {
 	return &streamEncoder{openBlocks: map[int]bool{}}
@@ -71,6 +76,12 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 	case ir.EvThinkingDelta:
 		return e.encodeDelta(ev, &streamDelta{Type: deltaThinking, Thinking: ev.Text})
 	case ir.EvSigDelta:
+		if note, drop := codec.ForeignEventSignature(ev.Text, ev.SignatureFrom, Name); drop {
+			// 丢增量而不是丢整个推理块：文本部分对客户端仍然有用，
+			// 只有签名是它验不了、下一轮会被上游拒收的那部分。
+			e.notes = append(e.notes, note)
+			return nil, nil
+		}
 		return e.encodeDelta(ev, &streamDelta{Type: deltaSignature, Signature: ev.Text})
 	case ir.EvToolInput:
 		return e.encodeDelta(ev, &streamDelta{Type: deltaInputJSON, PartialJSON: ev.Text})

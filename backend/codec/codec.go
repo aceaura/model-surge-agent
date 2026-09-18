@@ -73,6 +73,13 @@ type Capabilities struct {
 	// ThinkingExcludesSampling 为真表示开启推理时不得同时发
 	// temperature / top_p，同发会拿到不可重试的 400。
 	ThinkingExcludesSampling bool
+	// ThinkingExcludesForcedTools 为真表示开启推理时不得同时强制工具
+	// （tool_choice 为 any / 具名），同发会拿到不可重试的 400。
+	//
+	// 冲突时关推理而不是降级工具约束：降级工具约束的故障不可见——上游会
+	// 正常回一段文本，调用方以为模型选择了不调工具，而真相是约束被我们
+	// 悄悄改掉了。关推理的损失是可见的，说明里写着，回答质量下降也能对上。
+	ThinkingExcludesForcedTools bool
 	// MinThinkingBudget 是推理预算的下限。0 表示无下限。
 	// 预算还必须低于 max_tokens，两个约束在 max_tokens 过小时无解，
 	// 此时只能关掉推理。
@@ -106,6 +113,30 @@ type LossyEncoder interface {
 	// EncodeRequestLossy 除请求体外返回去重、已排序的有损说明。
 	// 无丢弃时说明为 nil，且返回的请求体必须与 EncodeRequest 逐字节相同。
 	EncodeRequestLossy(req *ir.Request) ([]byte, []string, error)
+}
+
+// StreamNotes 是流式编解码器的可选出口，报告处理过程中改写或丢弃了什么。
+//
+// 编码器与解码器共用一个接口：两侧报的都是「客户端看到的内容与上游原样
+// 有出入」，分两个同形接口只会让 pipeline 写两遍同样的收集代码。
+//
+// 做成可选接口而不是并入 StreamEncoder / StreamDecoder：后者是四个协议都要
+// 实现的必经之路，加一个多数实现无话可说的方法只会逼出四个空壳。
+//
+// 说明累加而非覆盖：一个流里同一类丢弃会发生多次，且流式路径已 committed，
+// 不存在「换目标重试」把前一次的说明作废的情形。返回值须去重排序。
+type StreamNotes interface {
+	Notes() []string
+}
+
+// LossyResponseEncoder 是非流式响应编码的可选出口，与 LossyEncoder 对称。
+//
+// 两条路径各要一个出口：非流式走 EncodeResponse 而不经流式编码器，
+// 只给流式留出口会让非流式的丢弃继续无声。
+type LossyResponseEncoder interface {
+	// EncodeResponseLossy 除响应体外返回去重、已排序的有损说明。
+	// 无丢弃时说明为 nil，且返回的响应体必须与 EncodeResponse 逐字节相同。
+	EncodeResponseLossy(resp *ir.Response) ([]byte, []string, error)
 }
 
 // OutboundCodec 面向上游：编请求、解响应。

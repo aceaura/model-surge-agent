@@ -281,7 +281,27 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 | `stop_sequences` | `dropped` | 条数超过协议上限，截断至上限 |
 | `cache_control` | `dropped` | 缓存断点数超过协议上限，丢弃最靠前的若干个（靠后的断点覆盖更长前缀，命中时省得更多） |
 
+此外还有一条请求侧取舍：
+
+| 字段 | 形态 | 触发条件 |
+| --- | --- | --- |
+| `thinking` | `dropped` | 目标协议拒收「推理开启 + 强制工具选择」的组合（`reasoning cannot be combined with a forced tool choice`）。关推理而不是把 `tool_choice` 降级为 `auto`：降级约束的故障不可见，上游会正常回一段文本，调用方以为模型自己决定不调工具 |
+
 只有真的丢掉约束才记进 `lossy`。把同一约束换个写法不记——`type` 大写化、联合类型折叠成 `nullable` 都属于此类。原因是这个字段的用途是指向路由选型：若每个带工具的 gemini 请求都恒定带一条说明，它就再也指不出哪条路由真的削弱了请求。
+
+#### 3.2.3 响应侧的说明形态
+
+响应侧（上游 → 客户端）的说明并入同一列 `lossy`，不另开字段：调用方要回答的问题是「这一轮转换有没有削弱内容」，与削弱发生在哪个方向无关。流式与非流式两条路径共用同一套措辞，否则同一份内容在两条路上会得到不同结论。
+
+| 形态 | 触发条件 |
+| --- | --- |
+| `dropped thinking signature from the response (%s cannot express it: signature is only valid within its own protocol family)` | 上游给的推理签名来源与客户端协议不同族。跨族透传的密文客户端验不了，还会被它存进历史，下一轮带回来令整个请求被上游拒收 |
+| `dropped thinking signature from the response (%s cannot express it: signature carries another vendor's ciphertext)` | 签名的前缀就表明它出自别家（如 `gAAAA` 属 responses），来源字段缺失时靠这一层兜住 |
+| `dropped thinking signature from the response (%s cannot express it: no signed reasoning)` | 客户端协议根本没有承载签名的字段（如 `chat_completions`） |
+| `merged tool call fragments that arrived under different indexes (matched by call id)` | `chat_completions` 上游同一次调用的分片带着不同 `index`，按 `id` 并回一个块。不并的后果是客户端收到两个 `tool_use`、拿着两份半截入参各执行一次，而 HTTP 状态码是 200 |
+| `split a stream line that carried several JSON documents` | 一行 SSE `data:` 里首尾相接挤了多个 JSON 文档。只在整帧解码失败后才拆，拆后任一份不合法即整行失败，不接受部分解码 |
+
+签名剥离只丢签名，不丢推理文本：文本对客户端仍然有用，只有签名是它验不了、下一轮会被上游拒收的那部分。
 
 ### 3.3 LiveEntry
 

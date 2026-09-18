@@ -27,8 +27,20 @@ func (inboundCodec) DecodeRequest(body []byte) (*ir.Request, error) {
 
 func (inboundCodec) NewStreamEncoder() codec.StreamEncoder { return newStreamEncoder() }
 
-func (inboundCodec) EncodeResponse(resp *ir.Response) ([]byte, error) {
-	return EncodeResponse(resp)
+// EncodeResponse 是 EncodeResponseLossy 的包装：两条路径共用同一编码，
+// 响应体逐字节相同，否则客户端看到的内容会因诊断开关而漂移。
+func (c inboundCodec) EncodeResponse(resp *ir.Response) ([]byte, error) {
+	body, _, err := c.EncodeResponseLossy(resp)
+	return body, err
+}
+
+func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, error) {
+	body, err := EncodeResponse(resp)
+	if err != nil {
+		return nil, nil, err
+	}
+	// 本协议有 signature 字段，异族来源才丢。
+	return body, codec.DescribeResponseSignatureLoss(resp, Name, true), nil
 }
 
 func (inboundCodec) RenderError(err *ir.Error) (int, []byte) { return RenderError(err) }
@@ -52,6 +64,9 @@ func (outboundCodec) Caps() codec.Capabilities {
 		CacheBreakpoints: 4,
 		// 开启 thinking 时 temperature / top_p 必须缺席。
 		ThinkingExcludesSampling: true,
+		// 实测：thinking 开启时 tool_choice 为 any / 具名会被拒，上游原文是
+		// tool_choice 'specified' is incompatible with thinking enabled。
+		ThinkingExcludesForcedTools: true,
 		// 预算低于 1024 会被拒；预算还必须小于 max_tokens。
 		MinThinkingBudget: 1024,
 		// SchemaDialect 留零值：本协议接受完整 JSON Schema。

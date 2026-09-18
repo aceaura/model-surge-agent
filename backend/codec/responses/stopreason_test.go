@@ -31,7 +31,7 @@ func TestStopReasonForCoversEveryShape(t *testing.T) {
 			wireResponse{Status: "incomplete", IncompleteDetails: &wireIncomplete{}},
 			ir.StopMaxTokens},
 		{"function_call in output wins over a completed status",
-			wireResponse{Status: "completed", Output: []wireItem{{Type: itemFunctionCall}}},
+			wireResponse{Status: "completed", Output: []wireRespItem{{Type: itemFunctionCall}}},
 			ir.StopToolUse},
 	}
 	for _, tc := range cases {

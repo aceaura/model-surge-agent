@@ -78,6 +78,68 @@ type wireSummary struct {
 	Text string `json:"text,omitempty"`
 }
 
+// wireRespItem 是响应侧专用的条目结构，零值有意义的字段不带 omitempty。
+//
+// 不能直接改 wireItem：那个结构同时服务 encode_request.go 的出站请求编码，
+// 去掉 omitempty 会让请求体多出一批空字段，上游的 prompt cache 是按前缀
+// 逐字节比对的，字节一变缓存就全部失效。
+//
+// Content 是 json.RawMessage，值为 nil 时即使没有 omitempty 也会写出
+// "content":null，比字段缺席更糟——严格客户端把 null 当类型错误。
+// 因此构造时必须显式赋 []，不能只靠去掉 tag。
+type wireRespItem struct {
+	Type   string `json:"type,omitempty"`
+	ID     string `json:"id,omitempty"`
+	Role   string `json:"role,omitempty"`
+	Status string `json:"status,omitempty"`
+
+	// message：客户端按下标往 content 里填 part，字段缺席时无处可填。
+	Content json.RawMessage `json:"content,omitempty"`
+
+	// function_call：三个字段客户端都要，arguments 为空字符串表示
+	// 「还没有入参」而不是「没有这个字段」，缺席会让客户端跳过该调用。
+	// 必填只对 function_call 条目生效，见 MarshalJSON。
+	CallID    string `json:"call_id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+
+	// reasoning
+	Summary          []wireSummary `json:"summary,omitempty"`
+	EncryptedContent string        `json:"encrypted_content,omitempty"`
+}
+
+// MarshalJSON 在 function_call 条目上补出三个必填键。
+//
+// 按条目类型而非无条件必填：reasoning 与 message 条目带一个空 call_id
+// 是本协议里不存在的形状，客户端 SDK 按 type 分派后读到不该有的字段会报错。
+func (i wireRespItem) MarshalJSON() ([]byte, error) {
+	type plain wireRespItem
+	data, err := json.Marshal(plain(i))
+	if err != nil {
+		return nil, err
+	}
+	if i.Type != itemFunctionCall {
+		return data, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return nil, err
+	}
+	for key, val := range map[string]string{
+		"call_id": i.CallID, "name": i.Name, "arguments": i.Arguments,
+	} {
+		if _, ok := obj[key]; ok {
+			continue
+		}
+		enc, err := json.Marshal(val)
+		if err != nil {
+			return nil, err
+		}
+		obj[key] = enc
+	}
+	return json.Marshal(obj)
+}
+
 type wirePart struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
@@ -100,12 +162,12 @@ type wireInputAudio struct {
 
 // wireResponse 是 response 对象，出现在非流式响应与流式的 response.* 帧里。
 type wireResponse struct {
-	ID     string     `json:"id,omitempty"`
-	Object string     `json:"object,omitempty"`
-	Model  string     `json:"model,omitempty"`
-	Status string     `json:"status,omitempty"`
-	Output []wireItem `json:"output,omitempty"`
-	Usage  *wireUsage `json:"usage,omitempty"`
+	ID     string         `json:"id,omitempty"`
+	Object string         `json:"object,omitempty"`
+	Model  string         `json:"model,omitempty"`
+	Status string         `json:"status,omitempty"`
+	Output []wireRespItem `json:"output,omitempty"`
+	Usage  *wireUsage     `json:"usage,omitempty"`
 	// IncompleteDetails 的 reason 是本协议表达「因长度截断」的位置。
 	IncompleteDetails *wireIncomplete `json:"incomplete_details,omitempty"`
 	Error             *wireError      `json:"error,omitempty"`
@@ -150,10 +212,10 @@ type wireStreamEvent struct {
 	// OutputIndex 是条目序号，充当 IR 的块索引来源。不保证连续。
 	OutputIndex int `json:"output_index,omitempty"`
 	// ContentIndex 是条目内 part 的序号；一个 message 条目可以有多个 part。
-	ContentIndex int       `json:"content_index,omitempty"`
-	Item         *wireItem `json:"item,omitempty"`
-	Part         *wirePart `json:"part,omitempty"`
-	Delta        string    `json:"delta,omitempty"`
+	ContentIndex int           `json:"content_index,omitempty"`
+	Item         *wireRespItem `json:"item,omitempty"`
+	Part         *wirePart     `json:"part,omitempty"`
+	Delta        string        `json:"delta,omitempty"`
 	// SummaryIndex 是推理摘要分段的序号。
 	SummaryIndex int           `json:"summary_index,omitempty"`
 	Response     *wireResponse `json:"response,omitempty"`
@@ -209,3 +271,25 @@ const (
 	roleUser      = "user"
 	roleAssistant = "assistant"
 )
+
+// requiredIndexFields 声明每个事件类型上「值为 0 也必须写出」的序号字段。
+//
+// 表驱动而非在各分支里逐个特判：新增事件类型时只改这一处，
+// 漏填会被守卫测试发现，而散在分支里的补齐漏一处就无人察觉。
+//
+// error 与 response.created / in_progress / completed 一类生命周期帧
+// 刻意不在表里：它们不属于任何条目，带上 output_index 会让客户端
+// 把这些帧归到第一个条目上。
+var requiredIndexFields = map[string][]string{
+	evOutputItemAdded:      {"output_index"},
+	evOutputItemDone:       {"output_index"},
+	evContentPartAdded:     {"output_index", "content_index"},
+	evContentPartDone:      {"output_index", "content_index"},
+	evOutputTextDelta:      {"output_index", "content_index"},
+	evOutputTextDone:       {"output_index", "content_index"},
+	evRefusalDelta:         {"output_index", "content_index"},
+	evFunctionArgsDelta:    {"output_index"},
+	evFunctionArgsDone:     {"output_index"},
+	evReasoningSummaryText: {"output_index", "summary_index"},
+	evReasoningTextDelta:   {"output_index"},
+}

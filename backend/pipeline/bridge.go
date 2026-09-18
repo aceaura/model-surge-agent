@@ -101,6 +101,11 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 		}
 
 		if f.done {
+			// 只在 done 上取解码器说明：读协程此时已送完最后一帧，不会再碰
+			// 解码器。超时与断流路径上协程可能正在 Feed，那时读 notes 是数据竞争。
+			if n, ok := up.decoder.(codec.StreamNotes); ok {
+				rec.addResponseLossy(n.Notes()...)
+			}
 			return p.finish(w, call, encoder, &agg, committed, tail, streamErr, rec)
 		}
 	}
@@ -194,15 +199,20 @@ func (p *Pipeline) writeSuccess(w http.ResponseWriter, call Call, encoder codec.
 		}
 		writeFrames(w, encoder.Finish())
 		flush(w)
+		// Notes 在 Finish 之后取：收尾阶段本身也可能丢弃内容。
+		if n, ok := encoder.(codec.StreamNotes); ok {
+			rec.addResponseLossy(n.Notes()...)
+		}
 		return
 	}
 	// 非流式：把聚合结果编成一次性响应。对上游一律流式，
 	// 所以这条路径复用同一套解码逻辑，不必单独实现非流式解码。
-	body, err := call.Inbound.EncodeResponse(agg.Response())
+	body, notes, err := encodeResponseWithLossy(call.Inbound, agg.Response())
 	if err != nil {
 		p.fail(w, call, rec, asIRError(err, ir.ErrInternal))
 		return
 	}
+	rec.addResponseLossy(notes...)
 	rec.StatusCode = http.StatusOK
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

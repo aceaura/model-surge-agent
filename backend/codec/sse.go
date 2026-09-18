@@ -3,8 +3,11 @@ package codec
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"io"
 	"strings"
+
+	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
 // Frame 是一个 SSE 事件。Event 为空表示上游没发 event 行
@@ -124,6 +127,85 @@ func splitField(line string) (string, string) {
 		return name, ""
 	}
 	return name, strings.TrimPrefix(value, " ")
+}
+
+// maxJSONDocsPerLine 是单行允许拆出的文档份数上限。
+//
+// 16 取自实际见过的形态：兼容层攒帧时最多把一个 HTTP 读缓冲里的几帧粘在
+// 一起，远不到两位数。设上限是为了让畸形输入（比如一行里几万个 {}）
+// 在这里就止住，而不是解出几万个事件送进下游。
+const maxJSONDocsPerLine = 16
+
+// maxJSONLineBytes 是参与拆分的单行总长上限，与 maxFrameBytes 同量级但更紧：
+// 需要拆分的行本身就是异常形态，没有理由允许它比正常帧更大。
+const maxJSONLineBytes = 16 << 20
+
+// MultipleJSONDocsNote 是一行里多个 JSON 文档被拆开处理的说明。
+const MultipleJSONDocsNote = "split a stream line that carried several JSON documents"
+
+// SplitJSONDocuments 把一行里首尾相接的多个 JSON 文档拆成若干份。
+//
+// 只在整帧解码失败后调用，不做无条件前置拆分：正常帧一行一个文档，
+// 无条件先拆会给每一帧加一次解析，而流式路径上每帧都要过这里。
+//
+// ok 为假表示这行不是「多个合法文档相接」的形态——可能只有一份、
+// 也可能真的坏了。调用方据此走原有错误路径，不要吞掉错误。
+func SplitJSONDocuments(data string) ([]string, bool) {
+	if len(data) > maxJSONLineBytes {
+		return nil, false
+	}
+	dec := json.NewDecoder(strings.NewReader(data))
+	var out []string
+	for {
+		var raw json.RawMessage
+		err := dec.Decode(&raw)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, false
+		}
+		out = append(out, string(raw))
+		if len(out) > maxJSONDocsPerLine {
+			return nil, false
+		}
+	}
+	// 一份或零份都不算「多文档行」：一份说明原始解码失败另有原因，
+	// 报成拆分成功会把真正的错误藏起来。
+	if len(out) < 2 {
+		return nil, false
+	}
+	return out, true
+}
+
+// FeedWithSplit 是四个解码器共用的「先按单文档解，失败再试拆分」流程。
+//
+// 抽到这里而不是各自写一遍：四份同样的回退逻辑会各自漂移，而其中任何
+// 一份漏掉上报说明，客户端就在不知情的情况下收到被我们重组过的内容。
+//
+// split 为真表示确实拆了，调用方据此记说明。
+func FeedWithSplit(event, data string, feed func(event, data string) ([]ir.Event, error),
+) (events []ir.Event, split bool, err error) {
+
+	out, err := feed(event, data)
+	if err == nil {
+		return out, false, nil
+	}
+	docs, ok := SplitJSONDocuments(strings.TrimSpace(data))
+	if !ok {
+		return nil, false, err
+	}
+	var all []ir.Event
+	for _, doc := range docs {
+		// 拆出的某一份解不动仍算整行失败：部分解码会让客户端收到半截内容，
+		// 却看不出后面丢了东西。
+		part, docErr := feed(event, doc)
+		if docErr != nil {
+			return nil, false, docErr
+		}
+		all = append(all, part...)
+	}
+	return all, true, nil
 }
 
 // EncodeFrame 编码一帧 SSE。event 为空则不写 event 行。

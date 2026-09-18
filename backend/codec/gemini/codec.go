@@ -36,6 +36,9 @@ func (outboundCodec) Caps() codec.Capabilities {
 		StopSequences: true,
 		// systemInstruction 是单一 Content，system 里的非文本块必须先降级成文本。
 		SystemAsText: true,
+		// ThinkingExcludesForcedTools 留零值：无账号、无官方文档，
+		// 推理与强制工具是否互斥**未核实**。零值不等于已确认允许，
+		// 拿到能发请求的账号后要补实测，别把它当成已有结论。
 		// 本协议的 schema 是 OpenAPI 3.0 子集，不是完整 JSON Schema：
 		// 表外关键字会被当成未知字段拒收（400 Invalid JSON payload），
 		// type 取值必须大写，也不接受联合 type 数组。

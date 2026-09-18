@@ -27,6 +27,8 @@ type streamDecoder struct {
 	// 到那时一并发出一帧 message_delta。
 	stopReason ir.StopReason
 	usage      *ir.Usage
+	// notes 记录改写说明，走响应侧诊断通道。
+	notes []string
 }
 
 // slot 把「两级序号构成的键」绑到分配给它的 IR 块索引。
@@ -37,7 +39,18 @@ type slot struct {
 
 func newStreamDecoder() *streamDecoder { return &streamDecoder{} }
 
+// Notes 实现 codec.StreamNotes。
+func (d *streamDecoder) Notes() []string { return codec.DedupeNotes(d.notes) }
+
 func (d *streamDecoder) Feed(event, data string) ([]ir.Event, error) {
+	out, split, err := codec.FeedWithSplit(event, data, d.feedOne)
+	if split {
+		d.notes = append(d.notes, codec.MultipleJSONDocsNote)
+	}
+	return out, err
+}
+
+func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 	if strings.TrimSpace(data) == "" {
 		return nil, nil
 	}

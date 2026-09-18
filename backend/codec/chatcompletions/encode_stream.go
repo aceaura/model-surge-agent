@@ -33,7 +33,12 @@ type streamEncoder struct {
 	stopReason     ir.StopReason
 	// usage 跨帧累积：input 与 output 可能来自不同的 IR 事件。
 	usage ir.Usage
+	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
+	notes []string
 }
+
+// Notes 实现 codec.StreamNotes。
+func (e *streamEncoder) Notes() []string { return codec.DedupeNotes(e.notes) }
 
 func newStreamEncoder() *streamEncoder {
 	return &streamEncoder{
@@ -91,7 +96,12 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		return e.chunk(wireMessage{ReasoningContent: ev.Text}, "")
 
 	case ir.EvSigDelta:
-		// 本协议没有承载推理签名的字段，丢弃。签名只对同族协议有意义。
+		// 本协议没有承载推理签名的字段，一律丢弃，因此天然同族安全——
+		// 不做同族判定不是遗漏：判出同族也无处可放，异族与同族的处置相同。
+		// 但丢弃要上报，否则客户端看不到签名时无从知道是协议限制还是上游没给。
+		if ev.Text != "" {
+			e.notes = append(e.notes, codec.ResponseSignatureUnsupported(Name))
+		}
 		return nil, nil
 
 	case ir.EvToolInput:

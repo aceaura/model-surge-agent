@@ -27,8 +27,20 @@ func (inboundCodec) DecodeRequest(body []byte) (*ir.Request, error) {
 
 func (inboundCodec) NewStreamEncoder() codec.StreamEncoder { return newStreamEncoder() }
 
-func (inboundCodec) EncodeResponse(resp *ir.Response) ([]byte, error) {
-	return EncodeResponse(resp)
+// EncodeResponse 是 EncodeResponseLossy 的包装：两条路径共用同一编码，
+// 响应体逐字节相同，否则客户端看到的内容会因诊断开关而漂移。
+func (c inboundCodec) EncodeResponse(resp *ir.Response) ([]byte, error) {
+	body, _, err := c.EncodeResponseLossy(resp)
+	return body, err
+}
+
+func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, error) {
+	body, err := EncodeResponse(resp)
+	if err != nil {
+		return nil, nil, err
+	}
+	// 本协议用 encrypted_content 承载签名，异族来源才丢。
+	return body, codec.DescribeResponseSignatureLoss(resp, Name, true), nil
 }
 
 func (inboundCodec) RenderError(err *ir.Error) (int, []byte) { return RenderError(err) }
@@ -49,6 +61,9 @@ func (outboundCodec) Caps() codec.Capabilities {
 		Images:      true,
 		// instructions 是单一字符串，system 里的非文本块必须先降级成文本。
 		SystemAsText: true,
+		// ThinkingExcludesForcedTools 留零值：无账号、无官方文档，
+		// 推理与强制工具是否互斥**未核实**。零值不等于已确认允许，
+		// 拿到能发请求的账号后要补实测，别把它当成已有结论。
 		// 图片走 input_image，wav/mp3 走 input_audio，其余走 input_file。
 		MediaTypes: []string{
 			"image/png", "image/jpeg", "image/gif", "image/webp",

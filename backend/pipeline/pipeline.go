@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/aceaura/model-surge-agent/backend/codec"
@@ -63,6 +64,40 @@ type Record struct {
 	// 指向客户端 bug；后者说「请求本身合法，是这个目标承不住」，指向路由选型。
 	// 合成一列就无法据此判断该改客户端还是该换目标。
 	Lossy []string
+	// responseLossy 是响应侧编码丢弃的说明，落库前并入 Lossy 对外暴露。
+	//
+	// 与请求侧刻意用两种写法：请求侧每次尝试整体覆盖（换目标重试时，
+	// 上一个目标的丢弃项描述的是一条没被采用的路径，混进来会把排查引错），
+	// 响应侧则累加——响应侧发生在已 committed 之后，不存在换目标重试，
+	// 一个流里同类丢弃出现多次都属于同一次实际响应。
+	responseLossy []string
+}
+
+// addResponseLossy 累加响应侧说明。合并与去重推迟到落库前统一做。
+func (r *Record) addResponseLossy(notes ...string) {
+	r.responseLossy = append(r.responseLossy, notes...)
+}
+
+// mergedLossy 把请求侧与响应侧说明合成对外的一列，去重并排序。
+// 两侧都为空时返回 nil，保持「无丢弃则字段不出现」的既有语义。
+func (r *Record) mergedLossy() []string {
+	if len(r.Lossy) == 0 && len(r.responseLossy) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(r.Lossy)+len(r.responseLossy))
+	out := make([]string, 0, len(r.Lossy)+len(r.responseLossy))
+	for _, n := range append(append([]string{}, r.Lossy...), r.responseLossy...) {
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Strings(out)
+	return out
 }
 
 type Options struct {
@@ -276,9 +311,13 @@ func (p *Pipeline) report(call Call, target relayclient.Target, attempt int,
 }
 
 func (p *Pipeline) record(rec Record) {
-	if p.Recorder != nil {
-		p.Recorder.Record(rec)
+	if p.Recorder == nil {
+		return
 	}
+	// 合并推迟到此处而非各上报点：对外只有 lossy 一个字段，
+	// 在这里合一次就不必让每个上报点都关心两侧的拼接。
+	rec.Lossy = rec.mergedLossy()
+	p.Recorder.Record(rec)
 }
 
 func (p *Pipeline) now() time.Time {
@@ -344,6 +383,15 @@ func encodeWithLossy(outbound codec.OutboundCodec, req *ir.Request) ([]byte, []s
 		return le.EncodeRequestLossy(req)
 	}
 	body, err := outbound.EncodeRequest(req)
+	return body, nil, err
+}
+
+// encodeResponseWithLossy 与 encodeWithLossy 对称，处理非流式响应侧。
+func encodeResponseWithLossy(inbound codec.InboundCodec, resp *ir.Response) ([]byte, []string, error) {
+	if le, ok := inbound.(codec.LossyResponseEncoder); ok {
+		return le.EncodeResponseLossy(resp)
+	}
+	body, err := inbound.EncodeResponse(resp)
 	return body, nil, err
 }
 

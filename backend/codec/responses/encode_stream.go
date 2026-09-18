@@ -31,7 +31,12 @@ type streamEncoder struct {
 
 	stopReason ir.StopReason
 	usage      ir.Usage
+	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
+	notes []string
 }
+
+// Notes 实现 codec.StreamNotes。
+func (e *streamEncoder) Notes() []string { return codec.DedupeNotes(e.notes) }
 
 // openItem 记录一个已开启条目的状态，用于闭合时补齐 done 帧并累积最终 response。
 type openItem struct {
@@ -108,6 +113,12 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		return append(out, frames...), nil
 
 	case ir.EvSigDelta:
+		// 在攒之前判而不是闭合时再判：闭合处已经有一处 encrypted_content
+		// 赋值，那里再判一次就有两处判定，一旦漂移会出现「报了丢弃却发了出去」。
+		if note, drop := codec.ForeignEventSignature(ev.Text, ev.SignatureFrom, Name); drop {
+			e.notes = append(e.notes, note)
+			return nil, nil
+		}
 		// 本协议的 encrypted_content 只能整体给出，没有增量帧，
 		// 所以攒进条目，等闭合时随 item 一起发出。
 		if item, ok := e.items[ev.Index]; ok {
@@ -312,12 +323,42 @@ func (e *streamEncoder) frame(kind string, payload wireStreamEvent) ([][]byte, e
 	if err != nil {
 		return nil, err
 	}
+	// 补齐放在这个单一漏斗处：所有流帧都经过 frame，补一次即全覆盖。
+	// 不去掉 wireStreamEvent 的 omitempty：同一结构体也用于入站解码，
+	// 且序号字段并非每个事件类型都有，无条件写出会造出本协议里不存在的形状。
+	data, err = backfillIndexFields(kind, data)
+	if err != nil {
+		return nil, err
+	}
 	return [][]byte{codec.EncodeFrame(kind, data)}, nil
 }
 
+// backfillIndexFields 给该事件类型声明的序号字段补上缺失的零值。
+func backfillIndexFields(kind string, data []byte) ([]byte, error) {
+	required := requiredIndexFields[kind]
+	if len(required) == 0 {
+		return data, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return nil, err
+	}
+	missing := false
+	for _, f := range required {
+		if _, ok := obj[f]; !ok {
+			obj[f] = json.RawMessage("0")
+			missing = true
+		}
+	}
+	if !missing {
+		return data, nil
+	}
+	return json.Marshal(obj)
+}
+
 // wire 把条目状态转成 wire 形态。status 为空表示条目刚开启。
-func (i *openItem) wire(status string) *wireItem {
-	out := &wireItem{Status: status}
+func (i *openItem) wire(status string) *wireRespItem {
+	out := &wireRespItem{Status: status}
 	switch i.kind {
 	case ir.BlockToolUse:
 		out.Type = itemFunctionCall
@@ -373,7 +414,7 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 		if err != nil {
 			return err
 		}
-		out.Output = append(out.Output, wireItem{
+		out.Output = append(out.Output, wireRespItem{
 			Type: itemMessage, Role: roleAssistant, Status: "completed", Content: content,
 		})
 		parts = nil
@@ -392,7 +433,7 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			if b.Thinking == nil {
 				continue
 			}
-			item := wireItem{Type: itemReasoning, Status: "completed"}
+			item := wireRespItem{Type: itemReasoning, Status: "completed"}
 			if b.Thinking.Text != "" {
 				item.Summary = []wireSummary{{Type: partSummaryText, Text: b.Thinking.Text}}
 			}
@@ -411,7 +452,7 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			if !json.Valid([]byte(args)) {
 				args = "{}"
 			}
-			out.Output = append(out.Output, wireItem{
+			out.Output = append(out.Output, wireRespItem{
 				Type: itemFunctionCall, Status: "completed",
 				CallID: b.ToolUse.ID, Name: b.ToolUse.Name, Arguments: args,
 			})

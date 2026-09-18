@@ -26,8 +26,15 @@ type streamDecoder struct {
 
 	// toolSlots 按上游给的 index 索引工具调用槽位。
 	toolSlots map[int]*toolSlot
+	// byID 按调用 id 索引槽位。有些兼容实现同一次调用的分片带着不同的
+	// index（每帧重新从 0 编号，或按 choice 内序号而非调用序号给），
+	// 只看 index 会把一次调用拆成两个块，客户端就会重复执行同一个工具。
+	// 空 id 不入索引：多个空 id 会互相误合并，把不同调用的入参串成一份非法 JSON。
+	byID map[string]*toolSlot
 	// callCounter 用于给没带 id 的调用合成一个。
 	callCounter int
+	// notes 记录改写说明，走响应侧诊断通道。
+	notes []string
 
 	// stopReason 与 usage 先攒着，到 [DONE] 才发一帧 message_delta。
 	// 本协议把它们分散在不同 chunk（finish_reason 一帧、usage 另一帧），
@@ -52,10 +59,22 @@ type toolSlot struct {
 }
 
 func newStreamDecoder() *streamDecoder {
-	return &streamDecoder{slots: map[string]int{}, toolSlots: map[int]*toolSlot{}}
+	return &streamDecoder{
+		slots:     map[string]int{},
+		toolSlots: map[int]*toolSlot{},
+		byID:      map[string]*toolSlot{},
+	}
 }
 
-func (d *streamDecoder) Feed(_, data string) ([]ir.Event, error) {
+func (d *streamDecoder) Feed(event, data string) ([]ir.Event, error) {
+	out, split, err := codec.FeedWithSplit(event, data, d.feedOne)
+	if split {
+		d.notes = append(d.notes, codec.MultipleJSONDocsNote)
+	}
+	return out, err
+}
+
+func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 	data = strings.TrimSpace(data)
 	if data == "" {
 		return nil, nil
@@ -152,10 +171,27 @@ func (d *streamDecoder) decodeToolCalls(calls []wireToolCall) []ir.Event {
 		}
 
 		slot := d.toolSlots[n]
-		// 已宣告的槽位收到另一个非空 id：上游复用了 index 表示新调用，
-		// 并进原槽位会把两次调用的入参串成一份非法 JSON。
-		if slot != nil && slot.announced && tc.ID != "" && tc.ID != slot.id {
-			slot = nil
+		// id 优先于 index：同一 id 跨 index 到达时并回原槽位，
+		// 否则一次调用会被拆成两个块，客户端重复执行同一个工具。
+		if tc.ID != "" {
+			if byID := d.byID[tc.ID]; byID != nil {
+				if slot != byID {
+					// 本分片带的 index 与该 id 首次出现时的不同：
+					// 归到 id 对应的槽位，并把说明报给客户端——
+					// 合并是我们的判断，客户端有权知道上游原样并非如此。
+					d.notes = append(d.notes, mergedToolNote)
+					if slot == nil {
+						// 该 index 还空着：指向同一槽位，后续不带 id 的
+						// 分片沿着 index 也能找回来。已被别的调用占着则不动。
+						d.toolSlots[n] = byID
+					}
+					slot = byID
+				}
+			} else if slot != nil && slot.announced && tc.ID != slot.id {
+				// 已宣告的槽位收到另一个非空 id：上游复用了 index 表示新调用，
+				// 并进原槽位会把两次调用的入参串成一份非法 JSON。
+				slot = nil
+			}
 		}
 		if slot == nil {
 			slot = &toolSlot{index: d.allocIndex()}
@@ -164,6 +200,7 @@ func (d *streamDecoder) decodeToolCalls(calls []wireToolCall) []ir.Event {
 		// 只有非空值才回填：后续分片的这两个字段通常是空串，覆盖会抹掉首片给的值。
 		if tc.ID != "" {
 			slot.id = tc.ID
+			d.byID[tc.ID] = slot
 		}
 		if tc.Function.Name != "" {
 			slot.name = tc.Function.Name
@@ -274,6 +311,13 @@ func (d *streamDecoder) announcePending() []ir.Event {
 
 // unknownToolName 是 name 始终未到达时的占位名。
 const unknownToolName = "unknown_tool"
+
+// mergedToolNote 是同 id 跨 index 合并的说明。
+const mergedToolNote = "merged tool call fragments that arrived under different indexes " +
+	"(matched by call id)"
+
+// Notes 实现 codec.StreamNotes。
+func (d *streamDecoder) Notes() []string { return codec.DedupeNotes(d.notes) }
 
 // finish 收尾：闭合残留块，补一帧带 stop_reason 与 usage 的 message_delta，
 // 再发 message_stop。

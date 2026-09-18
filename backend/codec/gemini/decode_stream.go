@@ -31,6 +31,8 @@ type streamDecoder struct {
 
 	stopReason ir.StopReason
 	usage      *ir.Usage
+	// notes 记录改写说明，走响应侧诊断通道。
+	notes []string
 }
 
 type openBlock struct {
@@ -40,7 +42,18 @@ type openBlock struct {
 
 func newStreamDecoder() *streamDecoder { return &streamDecoder{} }
 
-func (d *streamDecoder) Feed(_, data string) ([]ir.Event, error) {
+// Notes 实现 codec.StreamNotes。
+func (d *streamDecoder) Notes() []string { return codec.DedupeNotes(d.notes) }
+
+func (d *streamDecoder) Feed(event, data string) ([]ir.Event, error) {
+	out, split, err := codec.FeedWithSplit(event, data, d.feedOne)
+	if split {
+		d.notes = append(d.notes, codec.MultipleJSONDocsNote)
+	}
+	return out, err
+}
+
+func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 	data = strings.TrimSpace(data)
 	if data == "" {
 		return nil, nil
@@ -124,7 +137,12 @@ func (d *streamDecoder) decodeParts(parts []wirePart) ([]ir.Event, error) {
 				out = append(out, ir.Event{Type: ir.EvThinkingDelta, Index: d.current.index, Text: p.Text})
 			}
 			if p.ThoughtSignature != "" {
-				out = append(out, ir.Event{Type: ir.EvSigDelta, Index: d.current.index, Text: p.ThoughtSignature})
+				out = append(out, ir.Event{
+					Type:          ir.EvSigDelta,
+					Index:         d.current.index,
+					Text:          p.ThoughtSignature,
+					SignatureFrom: Name,
+				})
 			}
 
 		case p.Text != "":

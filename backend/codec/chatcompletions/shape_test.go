@@ -134,6 +134,26 @@ func TestFullJSONSchemaPassesThrough(t *testing.T) {
 	}
 }
 
+// 实测本协议允许推理与强制工具共存（deepseek 上具名 tool_choice + 思考
+// 开启回 200）。能力位为假，这一阶段不该触发。
+func TestForcedToolChoiceKeepsThinking(t *testing.T) {
+	req := shapeBaseRequest()
+	req.Tools = []ir.Tool{{Name: "read", Schema: `{"type":"object","properties":{}}`}}
+	req.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: "read"}
+	req.Thinking = &ir.ThinkingConfig{Enabled: true, BudgetTokens: 4096}
+
+	obj, notes := shapedBody(t, req)
+	if obj["reasoning_effort"] == nil {
+		t.Errorf("本协议允许推理与强制工具共存，推理不该被关：%v", obj)
+	}
+	if obj["tool_choice"] == nil {
+		t.Errorf("工具约束不该被降级")
+	}
+	if hasShapeNote(notes, "forced tool choice") {
+		t.Errorf("本协议不该触发强制工具阶段：%v", notes)
+	}
+}
+
 func hasShapeNote(notes []string, want string) bool {
 	for _, n := range notes {
 		if strings.Contains(n, want) {

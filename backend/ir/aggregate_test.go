@@ -99,6 +99,43 @@ func TestAggregateThinkingWithSignature(t *testing.T) {
 	}
 }
 
+// 签名来源必须随事件落到块上：流式编码器靠它判同族，聚合路径判定依据
+// 若与流式不一致，同一份上游数据在流式与非流式两条路上会得到不同结论。
+func TestSignatureSourceLandsOnBlock(t *testing.T) {
+	a := &Aggregator{}
+	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{Type: BlockThinking}})
+	a.Add(Event{Type: EvSigDelta, Index: 0, Text: "sig", SignatureFrom: "anthropic"})
+	a.Add(Event{Type: EvBlockStop, Index: 0})
+
+	got := a.Response()
+	if len(got.Content) != 1 || got.Content[0].Thinking == nil {
+		t.Fatalf("content = %#v", got.Content)
+	}
+	if from := got.Content[0].Thinking.SignatureFrom; from != "anthropic" {
+		t.Errorf("signature source = %q, want anthropic", from)
+	}
+}
+
+// 空来源不得抹掉块上已有的值：responses 在块开始就带了来源，
+// 后续签名增量若不带来源而直接覆盖，同族签名会被误判成异族丢弃。
+func TestEmptySignatureSourceDoesNotOverwrite(t *testing.T) {
+	a := &Aggregator{}
+	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{
+		Type:     BlockThinking,
+		Thinking: &Thinking{SignatureFrom: "responses"},
+	}})
+	a.Add(Event{Type: EvSigDelta, Index: 0, Text: "enc"})
+	a.Add(Event{Type: EvBlockStop, Index: 0})
+
+	got := a.Response()
+	if len(got.Content) != 1 || got.Content[0].Thinking == nil {
+		t.Fatalf("content = %#v", got.Content)
+	}
+	if from := got.Content[0].Thinking.SignatureFrom; from != "responses" {
+		t.Errorf("signature source = %q, want responses", from)
+	}
+}
+
 // 上游的块索引不保证连续（responses 的 output_index 会跳号），
 // 输出顺序必须按首次出现顺序而非索引大小。
 func TestBlockOrderFollowsFirstAppearance(t *testing.T) {

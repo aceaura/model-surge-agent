@@ -66,6 +66,11 @@ func (a *Aggregator) Add(ev Event) {
 				b.Thinking = &Thinking{}
 			}
 			b.Thinking.Signature += ev.Text
+			// 空来源不覆盖：块开始事件可能已经带了来源，用空值抹掉它会让
+			// 聚合路径判不出同族，把异族签名放行。
+			if ev.SignatureFrom != "" {
+				b.Thinking.SignatureFrom = ev.SignatureFrom
+			}
 		}
 	case EvToolInput:
 		if b := a.block(ev.Index, BlockToolUse); b != nil {
