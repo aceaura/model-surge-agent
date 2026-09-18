@@ -46,10 +46,30 @@ func (outboundCodec) Caps() codec.Capabilities {
 		Tools:         true,
 		Images:        true,
 		StopSequences: true,
+		// 图片走 image_url，wav/mp3 走 input_audio，其余走 file。
+		// input_audio 只认这两种格式名，别的音频只能降级。
+		MediaTypes: []string{
+			"image/png", "image/jpeg", "image/gif", "image/webp",
+			"audio/wav", "audio/mpeg",
+			"application/pdf", "text/plain", "text/csv", "application/json",
+		},
 	}
 }
 
-func (outboundCodec) EncodeRequest(req *ir.Request) ([]byte, error) { return EncodeRequest(req) }
+// EncodeRequest 是 EncodeRequestLossy 丢弃诊断的包装：两条路径共用同一编码，
+// 请求体逐字节相同，否则提示缓存前缀会因诊断开关而漂移。
+func (c outboundCodec) EncodeRequest(req *ir.Request) ([]byte, error) {
+	body, _, err := c.EncodeRequestLossy(req)
+	return body, err
+}
+
+func (outboundCodec) EncodeRequestLossy(req *ir.Request) ([]byte, []string, error) {
+	body, err := EncodeRequest(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	return body, codec.DescribeLossy(req, Name, outboundCodec{}.Caps()), nil
+}
 
 // Endpoint 的 stream 参数不影响路径：流式由请求体的 stream 字段决定。
 func (outboundCodec) Endpoint(baseURL, _ string, _ bool) (string, map[string]string) {

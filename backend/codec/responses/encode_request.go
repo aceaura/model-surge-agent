@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aceaura/model-surge-agent/backend/codec"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
@@ -109,11 +110,15 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 		switch b.Type {
 		case ir.BlockText:
 			parts = append(parts, wirePart{Type: textPartType(m.Role), Text: b.Text})
-		case ir.BlockImage:
-			if b.Image == nil {
-				return nil, fmt.Errorf("image block without payload")
+		case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
+			if b.Media == nil {
+				return nil, fmt.Errorf("%s block without payload", b.Type)
 			}
-			parts = append(parts, wirePart{Type: partInputImage, ImageURL: renderImageURL(b.Image)})
+			part, ok := encodeMediaPart(b)
+			if !ok {
+				part = wirePart{Type: textPartType(m.Role), Text: codec.DowngradeMedia(b).Text}
+			}
+			parts = append(parts, part)
 		case ir.BlockToolUse:
 			if b.ToolUse == nil {
 				return nil, fmt.Errorf("tool_use block without payload")
@@ -141,7 +146,8 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 				Output: joinText(b.ToolResult.Content),
 			})
 		case ir.BlockThinking:
-			if b.Thinking == nil {
+			// Redacted 块的载荷在解码期就已舍弃，编出空 reasoning item 会被上游拒收。
+			if b.Thinking == nil || b.Thinking.Redacted {
 				continue
 			}
 			item := wireItem{Type: itemReasoning}
@@ -149,7 +155,8 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 				item.Summary = []wireSummary{{Type: partSummaryText, Text: b.Thinking.Text}}
 			}
 			// 加密的推理内容只在同族协议间有效，别家的签名发过来会被拒。
-			if b.Thinking.SignatureFrom == Name {
+			// 判定与有损诊断共用一处出处。
+			if !codec.ForeignSignature(b.Thinking, Name) {
 				item.EncryptedContent = b.Thinking.Signature
 			}
 			reasoningItems = append(reasoningItems, item)
@@ -189,16 +196,59 @@ func joinText(blocks []ir.Block) string {
 	return b.String()
 }
 
+// encodeMediaPart 把媒体块编成本协议的原生 part。
+// 返回 ok=false 表示本协议表达不了，交由调用方降级为文本。
+func encodeMediaPart(b ir.Block) (wirePart, bool) {
+	media := codec.SniffMediaType(b.Media)
+	// 白名单判定与有损诊断共用 Caps，避免两处漂移。
+	if !(outboundCodec{}.Caps().AcceptsMedia(media)) {
+		return wirePart{}, false
+	}
+	switch {
+	case strings.HasPrefix(media, "image/"):
+		return wirePart{Type: partInputImage, ImageURL: renderImageURL(b.Media)}, true
+
+	case strings.HasPrefix(media, "audio/"):
+		// input_audio 只接受内联 base64 与它认得的格式名。
+		format := audioFormat(media)
+		if b.Media.Data == "" || format == "" {
+			return wirePart{}, false
+		}
+		return wirePart{Type: partInputAudio, InputAudio: &wireInputAudio{
+			Data: b.Media.Data, Format: format,
+		}}, true
+
+	case b.Media.Data != "" && media != "":
+		return wirePart{Type: partInputFile, Filename: b.Media.Name,
+			FileData: "data:" + media + ";base64," + b.Media.Data}, true
+
+	default:
+		return wirePart{}, false
+	}
+}
+
+// audioFormat 把 media type 折成本协议要的裸格式名，不认得返回空串。
+func audioFormat(media string) string {
+	switch media {
+	case "audio/wav", "audio/x-wav":
+		return "wav"
+	case "audio/mpeg", "audio/mp3":
+		return "mp3"
+	default:
+		return ""
+	}
+}
+
 // renderImageURL 把 IR 的分离字段拼回本协议的单一字符串。
-func renderImageURL(img *ir.Image) string {
+func renderImageURL(img *ir.Media) string {
 	if img.URL != "" {
 		return img.URL
 	}
-	media := img.MediaType
-	if media == "" {
-		media = "image/png"
+	// 类型嗅不出时不编造一个：谎报的类型会让上游拒收整个请求。
+	if media := codec.SniffMediaType(img); media != "" {
+		return "data:" + media + ";base64," + img.Data
 	}
-	return "data:" + media + ";base64," + img.Data
+	return "data:;base64," + img.Data
 }
 
 func encodeToolChoice(tc *ir.ToolChoice) (json.RawMessage, error) {

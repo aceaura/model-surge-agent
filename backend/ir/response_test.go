@@ -21,6 +21,29 @@ func TestMergeUsageIgnoresZeroes(t *testing.T) {
 	}
 }
 
+// 推理维度与输出同口径：后到的非零值覆盖，零值不覆盖。
+func TestMergeUsageTracksReasoningTokens(t *testing.T) {
+	got := Usage{OutputTokens: 45, ReasoningTokens: 12}
+	MergeUsage(&got, Usage{OutputTokens: 60, ReasoningTokens: 30})
+	if got.ReasoningTokens != 30 {
+		t.Errorf("reasoning = %d, the later frame must win", got.ReasoningTokens)
+	}
+	MergeUsage(&got, Usage{OutputTokens: 60})
+	if got.ReasoningTokens != 30 {
+		t.Errorf("reasoning = %d, a frame without the field must not erase it", got.ReasoningTokens)
+	}
+}
+
+// 推理大于输出时保留上游原值：部分上游把两者作为独立计量而非包含关系，
+// 钳制会把上游的真实数字改掉。
+func TestMergeUsageDoesNotClampReasoningToOutput(t *testing.T) {
+	got := Usage{}
+	MergeUsage(&got, Usage{OutputTokens: 10, ReasoningTokens: 99})
+	if got.ReasoningTokens != 99 {
+		t.Errorf("reasoning = %d, want the upstream value untouched", got.ReasoningTokens)
+	}
+}
+
 // 缓存字段取较大值：它在流中通常只出现一次，取 max 能容忍缺帧。
 func TestMergeUsageKeepsLargestCacheCounts(t *testing.T) {
 	got := Usage{CacheReadTokens: 30, CacheWriteTokens: 12}

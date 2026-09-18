@@ -11,8 +11,9 @@ import (
 	"github.com/aceaura/model-surge-agent/backend/relayclient"
 )
 
-// truncatedToolInput 是工具入参被截断时记入流水的错误码。
-const truncatedToolInput = "truncated_tool_input"
+// incompleteStream 是流没说完就断掉时记入流水的错误码。
+// 覆盖残缺工具入参与缺签名的未闭合推理块：两者都不能补个闭合帧当成功。
+const incompleteStream = "incomplete_stream"
 
 // bridge 把上游流转成客户端响应。
 //
@@ -30,6 +31,10 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 		agg       ir.Aggregator
 		committed bool
 		streamErr *ir.Error
+		// tail 暂存上游的终止事件，等 finish 判完整性后再决定要不要发。
+		// 一发出去客户端就认为这轮正常结束了，而「工具入参截断」这类残缺
+		// 只有收完全流才能判出来，此时补救已经来不及。
+		tail []ir.Event
 	)
 	if call.Stream {
 		encoder = call.Inbound.NewStreamEncoder()
@@ -43,7 +48,7 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 		case f, ok = <-frames:
 			if !ok {
 				// channel 关了却没收到 done：读协程被 ctx 掐断了。
-				return p.finish(w, call, encoder, &agg, committed,
+				return p.finish(w, call, encoder, &agg, committed, tail,
 					ir.NewError(ir.ErrUpstream, 0, "", "upstream stream ended without a terminator"), rec)
 			}
 		case <-time.After(timeout):
@@ -51,12 +56,12 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 			if committed {
 				kind = "idle"
 			}
-			return p.finish(w, call, encoder, &agg, committed,
+			return p.finish(w, call, encoder, &agg, committed, tail,
 				ir.NewError(ir.ErrTimeout, 0, "", kind+" timeout"), rec)
 		}
 
 		if f.err != nil {
-			return p.finish(w, call, encoder, &agg, committed, f.err, rec)
+			return p.finish(w, call, encoder, &agg, committed, tail, f.err, rec)
 		}
 
 		for _, ev := range f.events {
@@ -78,10 +83,16 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 					writeStreamHeaders(w)
 				}
 			}
+			if ev.Type == ir.EvMessageDelta || ev.Type == ir.EvMessageStop {
+				tail = append(tail, ev)
+				continue
+			}
 			if encoder != nil {
 				if err := writeEvents(w, encoder, ev); err != nil {
-					// 客户端断开：无需上报为上游失败，但这次调用确实没送达。
-					return relayclient.OutcomeAbnormal, attemptResult{
+					// 客户端自己断开，上游一直在正常出内容。记成 abnormal 会
+					// 累计失败计数、把好目标推向冷却——客户端多按几次停止就能
+					// 拖垮账号。按已收 usage 正常记账（上游照样计费）。
+					return relayclient.OutcomeNormal, attemptResult{
 						err:       ir.NewError(ir.ErrInternal, 0, "", "client went away: "+err.Error()),
 						committed: true, usage: usageOf(&agg),
 					}
@@ -90,7 +101,7 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 		}
 
 		if f.done {
-			return p.finish(w, call, encoder, &agg, committed, streamErr, rec)
+			return p.finish(w, call, encoder, &agg, committed, tail, streamErr, rec)
 		}
 	}
 }
@@ -98,7 +109,7 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 // finish 收尾：err 为 nil 是成功路径，否则按是否 committed 决定
 // 错误落在流内还是当作可换目标的失败回给上层。
 func (p *Pipeline) finish(w http.ResponseWriter, call Call, encoder codec.StreamEncoder,
-	agg *ir.Aggregator, committed bool, err *ir.Error, rec *Record) (string, attemptResult) {
+	agg *ir.Aggregator, committed bool, tail []ir.Event, err *ir.Error, rec *Record) (string, attemptResult) {
 
 	usage := usageOf(agg)
 	if p.Opts.EstimateUsage && usage.OutputTokens == 0 {
@@ -110,30 +121,47 @@ func (p *Pipeline) finish(w http.ResponseWriter, call Call, encoder codec.Stream
 
 	if err == nil {
 		if !committed {
-			// 流一帧没出就结束了：目标没真正响应，可以换。
+			// HTTP 200 却一个事件都没解出来：上游在写 body 之前就断了，
+			// 或返回了本协议解不动的东西。这是截断而非空回答，一个字节都
+			// 还没写给客户端，换目标重来。
 			return relayclient.OutcomeRetrying, attemptResult{
-				err:   ir.NewError(ir.ErrUpstream, 0, "", "upstream produced no events"),
+				err: ir.NewError(ir.ErrUpstream, 0, incompleteStream,
+					"upstream produced no events"),
 				usage: usage,
 			}
 		}
-		// 工具入参发到一半断流：残缺调用会被客户端存进历史，
-		// 下一轮重放时整个请求都会被上游拒收，不能当成功。
-		if truncated := agg.IncompleteTools(); len(truncated) > 0 {
-			msg := "truncated tool input: " + strings.Join(truncated, ", ")
+		// 断流留下了不能补闭合的块：残缺工具入参或缺签名的推理块。
+		// 客户端会把它们存进历史，下一轮重放时整个请求都会被上游拒收。
+		if unsafe := agg.UnsafeToClose(); len(unsafe) > 0 {
+			msg := "incomplete stream: " + strings.Join(unsafe, ", ")
 			if !call.Stream {
 				// 非流式：一个字节都还没写出，可以换目标重来。
 				// 这里不写 rec：重试成功后没有代码会把错误字段清掉。
 				return relayclient.OutcomeRetrying, attemptResult{
-					err:   ir.NewError(ir.ErrUpstream, 0, truncatedToolInput, msg),
+					err:   ir.NewError(ir.ErrUpstream, 0, incompleteStream, msg),
 					usage: usage,
 				}
 			}
-			// 流式：内容已发出、状态码已定，收不回来了，
-			// 只能记下事实并照常终止，至少让客户端拿到一个完整的流。
-			rec.ErrorCode = truncatedToolInput
+			// 流式：内容已发出、状态码已定，收不回来了。补一个正常终止帧
+			// 会把残缺内容伪装成完整回答，改为流内错误收尾——客户端据此
+			// 知道这轮不可用，不会把毒历史存下来。
+			err := ir.NewError(ir.ErrUpstream, 0, incompleteStream, msg)
+			rec.ErrorCode = incompleteStream
 			rec.ErrorMessage = msg
+			writeStreamErrorEnd(w, encoder, err)
+			return relayclient.OutcomeAbnormal, attemptResult{
+				err: err, committed: true, usage: usage,
+			}
 		}
-		p.writeSuccess(w, call, encoder, agg, rec)
+		// 未闭合的块全是文本：半句话是可接受的截断，补齐闭合帧照常终止，
+		// 但终止原因要说成 max_tokens——报 end_turn 等于告诉客户端这段话
+		// 说完了，它就不会去续写。
+		if agg.HasOpenBlocks() && agg.Response().StopReason == "" {
+			trunc := ir.Event{Type: ir.EvMessageDelta, StopReason: ir.StopMaxTokens}
+			agg.Add(trunc)
+			tail = append(tail, trunc)
+		}
+		p.writeSuccess(w, call, encoder, agg, tail, rec)
 		return relayclient.OutcomeNormal, attemptResult{usage: usage}
 	}
 
@@ -146,9 +174,7 @@ func (p *Pipeline) finish(w http.ResponseWriter, call Call, encoder codec.Stream
 	rec.ErrorCode = string(err.Kind)
 	rec.ErrorMessage = err.Message
 	if encoder != nil {
-		writeFrames(w, call.Inbound.RenderStreamError(err))
-		writeFrames(w, encoder.Finish())
-		flush(w)
+		writeStreamErrorEnd(w, encoder, err)
 	} else {
 		// 非流式客户端：聚合到一半断了，没有半个响应可交，只能回错。
 		// 状态码还没写出，所以这里仍能给出正确的 HTTP 错误。
@@ -158,8 +184,14 @@ func (p *Pipeline) finish(w http.ResponseWriter, call Call, encoder codec.Stream
 }
 
 func (p *Pipeline) writeSuccess(w http.ResponseWriter, call Call, encoder codec.StreamEncoder,
-	agg *ir.Aggregator, rec *Record) {
+	agg *ir.Aggregator, tail []ir.Event, rec *Record) {
 	if encoder != nil {
+		// tail 是暂存的上游终止事件，确认这轮完整之后才放行。
+		for _, ev := range tail {
+			if err := writeEvents(w, encoder, ev); err != nil {
+				return
+			}
+		}
 		writeFrames(w, encoder.Finish())
 		flush(w)
 		return
@@ -175,6 +207,19 @@ func (p *Pipeline) writeSuccess(w http.ResponseWriter, call Call, encoder codec.
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+}
+
+// writeStreamErrorEnd 用流内错误收尾。
+//
+// 走 encoder 而不是直接调 RenderStreamError：编码器要据此把自己标成
+// 已错误终止，Finish 才不会再补一个正常终止帧，把残缺内容伪装成完整回答。
+func writeStreamErrorEnd(w http.ResponseWriter, encoder codec.StreamEncoder, err *ir.Error) {
+	frames, encErr := encoder.Encode(ir.Event{Type: ir.EvError, Err: err})
+	if encErr == nil {
+		writeFrames(w, frames)
+	}
+	writeFrames(w, encoder.Finish())
+	flush(w)
 }
 
 func writeEvents(w http.ResponseWriter, encoder codec.StreamEncoder, ev ir.Event) error {

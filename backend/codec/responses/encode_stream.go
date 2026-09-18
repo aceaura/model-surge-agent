@@ -18,6 +18,9 @@ type streamEncoder struct {
 	id      string
 	model   string
 	stopped bool
+	// errored 表示流已用 error 帧收尾。此后不再发 completed/incomplete，
+	// 也丢弃迟到的增量：那个终止帧会带上残缺内容并标成 completed。
+	errored bool
 
 	// items 是已开启的条目，按 IR 块索引定位。
 	items map[int]*openItem
@@ -49,6 +52,9 @@ func newStreamEncoder() *streamEncoder {
 }
 
 func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
+	if e.errored {
+		return nil, nil
+	}
 	switch ev.Type {
 	case ir.EvMessageStart:
 		e.id = ev.MessageID
@@ -146,6 +152,7 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		return nil, nil
 
 	case ir.EvError:
+		e.errored = true
 		return RenderStreamError(ev.Err), nil
 
 	default:
@@ -235,8 +242,9 @@ func (e *streamEncoder) closeBlock(index int) ([][]byte, error) {
 }
 
 // finish 闭合残留条目，再发带完整 response 对象的终止帧。
+// 已用 error 帧收尾时不再补：那一帧就是本协议的终止形态。
 func (e *streamEncoder) finish() ([][]byte, error) {
-	if e.stopped {
+	if e.stopped || e.errored {
 		return nil, nil
 	}
 	e.stopped = true

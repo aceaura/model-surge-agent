@@ -1,6 +1,8 @@
 package codec_test
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -209,6 +211,87 @@ func TestRequestMatrixCarriesNoForeignSignature(t *testing.T) {
 	}
 }
 
+// TestOutboundLossyEncodingIsByteStable 钉住有损诊断的零副作用性质。
+//
+// 两条路径必须产出同一份字节：请求体只要因为「是否收集诊断」而漂移，
+// 提示缓存前缀就跟着变，命中率会无声地掉下去。
+func TestOutboundLossyEncodingIsByteStable(t *testing.T) {
+	for _, in := range inboundNames() {
+		for _, out := range outboundNames() {
+			t.Run(in+"->"+out, func(t *testing.T) {
+				req := decodeRequest(t, in, requestFixture[in])
+				oc, ok := codec.Outbound(out)
+				if !ok {
+					t.Fatalf("outbound %q not registered", out)
+				}
+				le, ok := oc.(codec.LossyEncoder)
+				if !ok {
+					t.Fatalf("outbound %q must implement LossyEncoder", out)
+				}
+				plain, err := oc.EncodeRequest(req.Clone())
+				if err != nil {
+					t.Fatalf("EncodeRequest: %v", err)
+				}
+				lossyBody, _, err := le.EncodeRequestLossy(req.Clone())
+				if err != nil {
+					t.Fatalf("EncodeRequestLossy: %v", err)
+				}
+				if string(plain) != string(lossyBody) {
+					t.Errorf("bodies drifted between the two paths:\n%s\n%s", plain, lossyBody)
+				}
+			})
+		}
+	}
+}
+
+// TestRequestMatrixReportsCrossFamilySignatureAsLossy 要求剥离与诊断一致：
+// 编码器悄悄丢了签名而诊断不报，排查的人就无从知道请求被改过。
+func TestRequestMatrixReportsCrossFamilySignatureAsLossy(t *testing.T) {
+	for _, out := range []string{codec.ProtocolChatCompletions, codec.ProtocolResponses, codec.ProtocolGemini} {
+		notes := lossyAcross(t, codec.ProtocolAnthropic, out)
+		if !strings.Contains(strings.Join(notes, "\n"), "thinking signature") {
+			t.Errorf("%s dropped the anthropic signature without reporting it: %v", out, notes)
+		}
+	}
+	notes := lossyAcross(t, codec.ProtocolAnthropic, codec.ProtocolAnthropic)
+	if strings.Contains(strings.Join(notes, "\n"), "thinking signature") {
+		t.Errorf("same-family signature must not be reported as dropped: %v", notes)
+	}
+}
+
+// decodeRequest 解出 IR 并替换 native model，与 encodeAcross 的前半段同构。
+func decodeRequest(t *testing.T, in, body string) *ir.Request {
+	t.Helper()
+	ic, ok := codec.Inbound(in)
+	if !ok {
+		t.Fatalf("inbound %q not registered", in)
+	}
+	req, err := ic.DecodeRequest([]byte(body))
+	if err != nil {
+		t.Fatalf("%s decode: %v", in, err)
+	}
+	req.Model = "native"
+	return req
+}
+
+func lossyAcross(t *testing.T, in, out string) []string {
+	t.Helper()
+	req := decodeRequest(t, in, requestFixture[in])
+	oc, ok := codec.Outbound(out)
+	if !ok {
+		t.Fatalf("outbound %q not registered", out)
+	}
+	le, ok := oc.(codec.LossyEncoder)
+	if !ok {
+		t.Fatalf("outbound %q must implement LossyEncoder", out)
+	}
+	_, notes, err := le.EncodeRequestLossy(req)
+	if err != nil {
+		t.Fatalf("EncodeRequestLossy: %v", err)
+	}
+	return notes
+}
+
 // streamFixture 是各出站协议的一段流，四类语义齐全：
 // 文本、推理、工具调用（分片入参）、用量、终止原因。
 //
@@ -352,9 +435,12 @@ func TestUpstreamStreamsAgreeOnSemantics(t *testing.T) {
 			t.Errorf("%s: stop_reason = %q, want tool_use", name, resp.StopReason)
 		}
 		// IR 口径：InputTokens 是不含缓存的新鲜输入，总量仍为 90+30=120。
+		// 推理维度不在此断言：只有部分上游的 fixture 带这个字段。
 		want := ir.Usage{InputTokens: 90, OutputTokens: 45, CacheReadTokens: 30}
-		if resp.Usage != want {
-			t.Errorf("%s: usage = %+v, want %+v", name, resp.Usage, want)
+		got := resp.Usage
+		got.ReasoningTokens = 0
+		if got != want {
+			t.Errorf("%s: usage = %+v, want %+v", name, got, want)
 		}
 
 		var (
@@ -412,10 +498,13 @@ func TestStreamMatrixPreservesFourSemantics(t *testing.T) {
 				if resp.StopReason != ir.StopToolUse {
 					t.Errorf("stop_reason = %q, want tool_use\n%s", resp.StopReason, rendered)
 				}
-				// IR 口径：InputTokens 不含缓存命中。
+				// IR 口径：InputTokens 不含缓存命中。推理维度另有专门测试，
+				// 因为它能否穿过取决于客户端协议表达得了没有。
 				want := ir.Usage{InputTokens: 90, OutputTokens: 45, CacheReadTokens: 30}
-				if resp.Usage != want {
-					t.Errorf("usage = %+v, want %+v\n%s", resp.Usage, want, rendered)
+				got := resp.Usage
+				got.ReasoningTokens = 0
+				if got != want {
+					t.Errorf("usage = %+v, want %+v\n%s", got, want, rendered)
 				}
 				// 守恒：无论走哪一格，客户端可见的输入总量都得是 120。
 				if total := resp.Usage.InputTokens + resp.Usage.CacheReadTokens; total != 120 {
@@ -1365,4 +1454,1229 @@ func TestUsageConservationAcrossMatrix(t *testing.T) {
 			})
 		}
 	}
+}
+
+// reasoningUsageFixture 是带推理用量的一段流。三家的写法不同：
+// chat_completions 与 responses 的输出总量已含推理（20 含 8），
+// gemini 的 thoughtsTokenCount 不含在 candidatesTokenCount 里（12+8=20）。
+// 三份都描述同一次调用：输出 20，其中推理 8。
+//
+// anthropic 不在此表：它没有推理用量字段，作为上游给不出这一维。
+var reasoningUsageFixture = map[string]string{
+	codec.ProtocolChatCompletions: strings.Join([]string{
+		`data: {"id":"msg_u","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`,
+		``,
+		`data: {"id":"msg_u","object":"chat.completion.chunk","model":"native","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"completion_tokens_details":{"reasoning_tokens":8}}}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n"),
+
+	codec.ProtocolResponses: strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"msg_u","model":"native","status":"in_progress"}}`,
+		``,
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"ok"}`,
+		``,
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"id":"msg_u","model":"native","status":"completed","usage":{"input_tokens":100,"output_tokens":20,"output_tokens_details":{"reasoning_tokens":8}}}}`,
+		``,
+	}, "\n"),
+
+	codec.ProtocolGemini: strings.Join([]string{
+		`data: {"responseId":"msg_u","modelVersion":"native","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"ok"}]}}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":12,"thoughtsTokenCount":8}}`,
+		``,
+		`data: {"candidates":[{"index":0,"finishReason":"STOP"}]}`,
+		``,
+	}, "\n"),
+}
+
+// 推理维度的可表达性因客户端协议而异，所以断言分两档：能表达的要求
+// 数字原样穿过；表达不了的只要求它仍含在输出总量里——那不是信息丢失，
+// 只是看不见推理占比，故也不报有损。
+func TestReasoningTokensSurviveWhereExpressible(t *testing.T) {
+	expressible := map[string]bool{
+		codec.ProtocolChatCompletions: true,
+		codec.ProtocolResponses:       true,
+		codec.ProtocolAnthropic:       false,
+	}
+	for up, raw := range reasoningUsageFixture {
+		for client, canExpress := range expressible {
+			t.Run(up+"→"+client, func(t *testing.T) {
+				events := decodeStream(t, up, raw)
+				rendered := renderStream(t, client, events)
+				resp := aggregate(t, client, rendered)
+
+				if resp.Usage.OutputTokens != 20 {
+					t.Errorf("output = %d, want 20 (reasoning is billed as output)\n%s",
+						resp.Usage.OutputTokens, rendered)
+				}
+				if canExpress {
+					if resp.Usage.ReasoningTokens != 8 {
+						t.Errorf("reasoning = %d, want 8\n%s", resp.Usage.ReasoningTokens, rendered)
+					}
+					return
+				}
+				if resp.Usage.ReasoningTokens != 0 {
+					t.Errorf("reasoning = %d, %s cannot express it\n%s",
+						resp.Usage.ReasoningTokens, client, rendered)
+				}
+			})
+		}
+	}
+}
+
+// cacheWriteUsageFixture 是带缓存写入量的一段流：输入总量 100（缓存命中 30、
+// 缓存写入 25、新鲜输入 70），输出 20。缓存写入按各协议口径都是独立计量的
+// 一笔，不含在输入总量里，所以守恒断言只管 70+30。
+//
+// responses 与 gemini 不在此表：两家的用量结构里没有缓存写入字段，
+// 作为上游给不出这一维。
+var cacheWriteUsageFixture = map[string]string{
+	codec.ProtocolAnthropic: strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_w","model":"native","role":"assistant","usage":{"input_tokens":70,"cache_read_input_tokens":30,"cache_creation_input_tokens":25}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":20}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n"),
+
+	// 本协议没有官方的缓存写入字段，兼容层通行的别名是 cache_creation_tokens。
+	codec.ProtocolChatCompletions: strings.Join([]string{
+		`data: {"id":"msg_w","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`,
+		``,
+		`data: {"id":"msg_w","object":"chat.completion.chunk","model":"native","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"prompt_tokens_details":{"cached_tokens":30},"cache_creation_tokens":25}}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n"),
+}
+
+// TestCacheWriteTokensSurviveWhereExpressible 与推理维度同构地分两档：
+// 客户端表达得了就要求数字原样穿过，表达不了就要求它归零而不是被折进
+// 别的口径——缓存写入单价与新鲜输入不同，混进 input 会直接算错账。
+// 两档都要求输入输出总量守恒。
+func TestCacheWriteTokensSurviveWhereExpressible(t *testing.T) {
+	expressible := map[string]bool{
+		codec.ProtocolAnthropic:       true,
+		codec.ProtocolChatCompletions: true,
+		codec.ProtocolResponses:       false,
+	}
+	for _, up := range outboundNames() {
+		raw, ok := cacheWriteUsageFixture[up]
+		if !ok {
+			continue
+		}
+		for _, client := range inboundNames() {
+			canExpress, known := expressible[client]
+			if !known {
+				t.Fatalf("入站 %q 未登记 cache_write 可表达性", client)
+			}
+			t.Run(up+"→"+client, func(t *testing.T) {
+				rendered := renderStream(t, client, decodeStream(t, up, raw))
+				resp := aggregate(t, client, rendered)
+
+				if resp.Usage.InputTokens != 70 || resp.Usage.CacheReadTokens != 30 {
+					t.Errorf("input/cache_read = %d/%d, want 70/30\n%s",
+						resp.Usage.InputTokens, resp.Usage.CacheReadTokens, rendered)
+				}
+				if resp.Usage.OutputTokens != 20 {
+					t.Errorf("output = %d, want 20\n%s", resp.Usage.OutputTokens, rendered)
+				}
+				if canExpress {
+					if resp.Usage.CacheWriteTokens != 25 {
+						t.Errorf("cache_write = %d, want 25\n%s", resp.Usage.CacheWriteTokens, rendered)
+					}
+					return
+				}
+				if resp.Usage.CacheWriteTokens != 0 {
+					t.Errorf("cache_write = %d，%s 表达不了这一维\n%s",
+						resp.Usage.CacheWriteTokens, client, rendered)
+				}
+			})
+		}
+	}
+}
+
+// --- 有损说明矩阵 ---
+
+// lossyProbe 是一个只带单一敏感特征的请求。矩阵拿它逐字段扫过四个出站协议：
+// 能力位为真必须一条说明都不出，为假必须恰有一条——多出一条意味着诊断把
+// 同一次丢弃报了两遍，少一条意味着字段被无声丢掉。
+type lossyProbe struct {
+	// field 是说明文本里该字段的标签，与 DescribeLossy 的 note 首参一致。
+	field string
+	build func() *ir.Request
+	// expressible 回答该出站协议表达得了这个特征没有。
+	expressible func(codec.Capabilities) bool
+}
+
+func probeRequest(blocks ...ir.Block) *ir.Request {
+	return &ir.Request{
+		Model:     "native",
+		MaxTokens: 256,
+		Messages: []ir.Message{
+			{Role: ir.RoleUser, Content: []ir.Block{{Type: ir.BlockText, Text: "hi"}}},
+			{Role: ir.RoleAssistant, Content: blocks},
+		},
+	}
+}
+
+func mediaProbe(kind ir.BlockType, mediaType, data, name string) lossyProbe {
+	return lossyProbe{
+		field: string(kind) + " blocks",
+		build: func() *ir.Request {
+			return probeRequest(ir.Block{
+				Type:  kind,
+				Media: &ir.Media{MediaType: mediaType, Data: data, Name: name},
+			})
+		},
+		expressible: func(c codec.Capabilities) bool { return c.AcceptsMedia(mediaType) },
+	}
+}
+
+func lossyProbes() []lossyProbe {
+	return []lossyProbe{
+		{
+			field: "tools",
+			build: func() *ir.Request {
+				req := probeRequest(ir.Block{Type: ir.BlockText, Text: "ok"})
+				req.Tools = []ir.Tool{{Name: "grep", Description: "search",
+					Schema: `{"type":"object","properties":{"pattern":{"type":"string"}}}`}}
+				return req
+			},
+			expressible: func(c codec.Capabilities) bool { return c.Tools },
+		},
+		{
+			field: "top_k",
+			build: func() *ir.Request {
+				req := probeRequest(ir.Block{Type: ir.BlockText, Text: "ok"})
+				k := 40
+				req.TopK = &k
+				return req
+			},
+			expressible: func(c codec.Capabilities) bool { return c.TopK },
+		},
+		{
+			field: "stop_sequences",
+			build: func() *ir.Request {
+				req := probeRequest(ir.Block{Type: ir.BlockText, Text: "ok"})
+				req.StopSequences = []string{"\n\n"}
+				return req
+			},
+			expressible: func(c codec.Capabilities) bool { return c.StopSequences },
+		},
+		{
+			field: "thinking",
+			build: func() *ir.Request {
+				req := probeRequest(ir.Block{Type: ir.BlockText, Text: "ok"})
+				req.Thinking = &ir.ThinkingConfig{Enabled: true, Effort: "medium", BudgetTokens: 4096}
+				return req
+			},
+			expressible: func(c codec.Capabilities) bool { return c.Thinking },
+		},
+		{
+			field: "cache_control",
+			build: func() *ir.Request {
+				return probeRequest(ir.Block{Type: ir.BlockText, Text: "ok", CacheCtl: "ephemeral"})
+			},
+			expressible: func(c codec.Capabilities) bool { return c.CacheControl },
+		},
+		{
+			field: "thinking blocks",
+			build: func() *ir.Request {
+				return probeRequest(ir.Block{Type: ir.BlockThinking,
+					Thinking: &ir.Thinking{Text: "pondering"}})
+			},
+			expressible: func(c codec.Capabilities) bool { return c.Thinking },
+		},
+		mediaProbe(ir.BlockImage, "image/png", pngPixel, "shot.png"),
+		mediaProbe(ir.BlockAudio, "audio/wav", wavClip, "clip.wav"),
+		mediaProbe(ir.BlockDocument, "application/pdf", pdfDoc, "spec.pdf"),
+		mediaProbe(ir.BlockFile, "text/plain", textFile, "notes.txt"),
+	}
+}
+
+// TestLossyNoteMatrixTracksCapabilities 是有损说明矩阵。
+//
+// 断言的是「能力位与说明一一对应」而非某个协议的固定清单：后者一改 Caps
+// 就得同步改测试，前者会自动跟着能力位走，新出站协议进注册表即入矩阵。
+func TestLossyNoteMatrixTracksCapabilities(t *testing.T) {
+	for _, out := range outboundNames() {
+		oc, ok := codec.Outbound(out)
+		if !ok {
+			t.Fatalf("outbound %q not registered", out)
+		}
+		caps := oc.Caps()
+		for _, probe := range lossyProbes() {
+			t.Run(out+"/"+probe.field, func(t *testing.T) {
+				body, notes := lossyOf(t, out, probe.build())
+				if !json.Valid(body) {
+					t.Fatalf("encoded body is not valid JSON: %s", body)
+				}
+				if probe.expressible(caps) {
+					if len(notes) != 0 {
+						t.Errorf("%s 表达得了 %s，不该有说明：%v", out, probe.field, notes)
+					}
+					return
+				}
+				if len(notes) != 1 {
+					t.Fatalf("%s 表达不了 %s，应恰有一条说明，实得 %v", out, probe.field, notes)
+				}
+				if !strings.Contains(notes[0], probe.field) {
+					t.Errorf("说明未点名字段 %s：%s", probe.field, notes[0])
+				}
+			})
+		}
+	}
+}
+
+// TestSignatureLossIsFamilyScoped 单独验签名维度：它有两个前置条件
+// （能力位与同族来源），塞进上面的字段矩阵会把两件事混成一条断言。
+func TestSignatureLossIsFamilyScoped(t *testing.T) {
+	for _, out := range outboundNames() {
+		oc, _ := codec.Outbound(out)
+		caps := oc.Caps()
+		if !caps.Thinking {
+			continue
+		}
+
+		t.Run(out+"/same-family", func(t *testing.T) {
+			req := probeRequest(ir.Block{Type: ir.BlockThinking,
+				Thinking: &ir.Thinking{Text: "pondering", Signature: "sig-abc", SignatureFrom: out}})
+			_, notes := lossyOf(t, out, req)
+			if caps.ThinkingSig {
+				if len(notes) != 0 {
+					t.Errorf("%s 支持签名且来源同族，不该有说明：%v", out, notes)
+				}
+				return
+			}
+			if len(notes) != 1 || !strings.Contains(notes[0], "thinking signature") {
+				t.Errorf("%s 不支持签名，应恰有一条签名说明，实得 %v", out, notes)
+			}
+		})
+
+		t.Run(out+"/foreign-family", func(t *testing.T) {
+			// 别家来源的签名一律剥离，与本协议支持签名与否无关。
+			req := probeRequest(ir.Block{Type: ir.BlockThinking,
+				Thinking: &ir.Thinking{Text: "pondering", Signature: "sig-abc",
+					SignatureFrom: "some-other-protocol"}})
+			_, notes := lossyOf(t, out, req)
+			if len(notes) != 1 || !strings.Contains(notes[0], "thinking signature") {
+				t.Errorf("%s 应剥离别家签名并恰报一条，实得 %v", out, notes)
+			}
+		})
+	}
+}
+
+// TestRedactedThinkingIsAlwaysLossy 断言加密推理块在每个出站协议上都报有损，
+// 包括同族的 anthropic。载荷不可解读，谁都重编不出来——这是唯一与能力位
+// 无关的丢弃，所以不放进按能力位断言的字段矩阵。
+func TestRedactedThinkingIsAlwaysLossy(t *testing.T) {
+	for _, out := range outboundNames() {
+		t.Run(out, func(t *testing.T) {
+			req := probeRequest(ir.Block{Type: ir.BlockThinking,
+				Thinking: &ir.Thinking{Redacted: true, SignatureFrom: out}})
+			_, notes := lossyOf(t, out, req)
+			if len(notes) != 1 || !strings.Contains(notes[0], "redacted_thinking") {
+				t.Errorf("%s 应恰报一条 redacted_thinking，实得 %v", out, notes)
+			}
+		})
+	}
+}
+
+// lossyOf 走出站有损编码，并顺带校验两条路径逐字节一致：
+// EncodeRequest 与 EncodeRequestLossy 若漂移，缓存前缀会跟着漂。
+func lossyOf(t *testing.T, out string, req *ir.Request) ([]byte, []string) {
+	t.Helper()
+	oc, ok := codec.Outbound(out)
+	if !ok {
+		t.Fatalf("outbound %q not registered", out)
+	}
+	le, ok := oc.(codec.LossyEncoder)
+	if !ok {
+		t.Fatalf("outbound %q must implement LossyEncoder", out)
+	}
+	body, notes, err := le.EncodeRequestLossy(req.Clone())
+	if err != nil {
+		t.Fatalf("%s EncodeRequestLossy: %v", out, err)
+	}
+	plain, err := oc.EncodeRequest(req.Clone())
+	if err != nil {
+		t.Fatalf("%s EncodeRequest: %v", out, err)
+	}
+	if !bytes.Equal(body, plain) {
+		t.Fatalf("%s: 两条编码路径产出不同请求体\n lossy: %s\n plain: %s", out, body, plain)
+	}
+	return body, notes
+}
+
+// --- stop_reason 矩阵 ---
+
+// allStopReasons 是 IR 的全部终止原因。写死一份而非从代码反射：
+// 新增取值时这里不会自动带上，编译也不报错，所以下面另有一处计数断言兜底。
+var allStopReasons = []ir.StopReason{
+	ir.StopEndTurn,
+	ir.StopMaxTokens,
+	ir.StopStopSequence,
+	ir.StopToolUse,
+	ir.StopContentFilter,
+}
+
+// upstreamStopWire 给出各上游协议表达某个 IR 终止原因所用的线上取值。
+//
+// 取值缺失表示该协议压根没有对应的线上表达，不是本服务丢了它：
+// stop_sequence 只有 anthropic 有专门取值，另外三家一律并入「正常结束」。
+// 这类格不进矩阵也不用 t.Skip——写不出 fixture 的格没有可断言的对象，
+// 放宽断言反而会把「协议本就如此」记成通过。
+var upstreamStopWire = map[string]map[ir.StopReason]string{
+	codec.ProtocolAnthropic: {
+		ir.StopEndTurn:       "end_turn",
+		ir.StopMaxTokens:     "max_tokens",
+		ir.StopStopSequence:  "stop_sequence",
+		ir.StopToolUse:       "tool_use",
+		ir.StopContentFilter: "refusal",
+	},
+	codec.ProtocolChatCompletions: {
+		ir.StopEndTurn:       "stop",
+		ir.StopMaxTokens:     "length",
+		ir.StopToolUse:       "tool_calls",
+		ir.StopContentFilter: "content_filter",
+	},
+	codec.ProtocolResponses: {
+		ir.StopEndTurn:       "completed",
+		ir.StopMaxTokens:     "max_output_tokens",
+		ir.StopToolUse:       "completed",
+		ir.StopContentFilter: "content_filter",
+	},
+	codec.ProtocolGemini: {
+		ir.StopEndTurn:   "STOP",
+		ir.StopMaxTokens: "MAX_TOKENS",
+		// 本协议以工具调用收尾时也报 STOP，tool_use 靠帧里有没有
+		// functionCall 判定，不靠这个取值。
+		ir.StopToolUse:       "STOP",
+		ir.StopContentFilter: "SAFETY",
+	},
+}
+
+// clientStopClass 给出终止原因经某客户端协议往返后应落到的取值。
+//
+// 有的协议会把多个 IR 取值折成同一个线上取值，往返回来就还原不出原值。
+// 这不是缺陷，是协议能力差：断言等价类而非原值，才能既不放宽又不误判。
+func clientStopClass(client string, reason ir.StopReason) ir.StopReason {
+	switch client {
+	case codec.ProtocolChatCompletions:
+		// finish_reason 没有 stop_sequence，与正常结束同为 "stop"。
+		if reason == ir.StopStopSequence {
+			return ir.StopEndTurn
+		}
+	case codec.ProtocolResponses:
+		// status 只有 completed / incomplete 两档，stop_sequence 归 completed。
+		if reason == ir.StopStopSequence {
+			return ir.StopEndTurn
+		}
+	}
+	return reason
+}
+
+// stopReasonStream 造一段以指定原因收尾的上游流。tool_use 那一格额外
+// 带上工具调用：三个协议里有两个靠帧内是否存在调用来判定 tool_use，
+// 只改终止取值造不出这一格。
+func stopReasonStream(t *testing.T, protocol string, reason ir.StopReason) string {
+	t.Helper()
+	wire, ok := upstreamStopWire[protocol][reason]
+	if !ok {
+		t.Fatalf("%s has no wire value for %s", protocol, reason)
+	}
+	withTool := reason == ir.StopToolUse
+
+	switch protocol {
+	case codec.ProtocolAnthropic:
+		frames := []string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"id":"msg_1","model":"native","usage":{"input_tokens":5}}}`,
+			``,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"body"}}`,
+			``,
+			`event: content_block_stop`,
+			`data: {"type":"content_block_stop","index":0}`,
+			``,
+		}
+		if withTool {
+			frames = append(frames,
+				`event: content_block_start`,
+				`data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call_1","name":"grep","input":{}}}`,
+				``,
+				`event: content_block_delta`,
+				`data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"pattern\":\"TODO\"}"}}`,
+				``,
+				`event: content_block_stop`,
+				`data: {"type":"content_block_stop","index":1}`,
+				``,
+			)
+		}
+		return strings.Join(append(frames,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"`+wire+`"},"usage":{"output_tokens":3}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		), "\n")
+
+	case codec.ProtocolChatCompletions:
+		frames := []string{
+			`data: {"id":"msg_1","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{"role":"assistant","content":"body"}}]}`,
+			``,
+		}
+		if withTool {
+			frames = append(frames,
+				`data: {"id":"msg_1","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"grep","arguments":"{\"pattern\":\"TODO\"}"}}]}}]}`,
+				``,
+			)
+		}
+		return strings.Join(append(frames,
+			`data: {"id":"msg_1","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{},"finish_reason":"`+wire+`"}],"usage":{"prompt_tokens":5,"completion_tokens":3}}`,
+			``,
+			`data: [DONE]`,
+			``,
+		), "\n")
+
+	case codec.ProtocolGemini:
+		frames := []string{
+			`data: {"responseId":"msg_1","modelVersion":"native","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"body"}]}}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3}}`,
+			``,
+		}
+		if withTool {
+			frames = append(frames,
+				`data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"id":"call_1","name":"grep","args":{"pattern":"TODO"}}}]}}]}`,
+				``,
+			)
+		}
+		return strings.Join(append(frames,
+			`data: {"candidates":[{"index":0,"finishReason":"`+wire+`"}]}`,
+			``,
+		), "\n")
+
+	case codec.ProtocolResponses:
+		frames := []string{
+			`event: response.created`,
+			`data: {"type":"response.created","response":{"id":"msg_1","model":"native","status":"in_progress"}}`,
+			``,
+			`event: response.output_item.added`,
+			`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant"}}`,
+			``,
+			`event: response.content_part.added`,
+			`data: {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text"}}`,
+			``,
+			`event: response.output_text.delta`,
+			`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"body"}`,
+			``,
+			`event: response.output_item.done`,
+			`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant"}}`,
+			``,
+		}
+		output := ""
+		if withTool {
+			frames = append(frames,
+				`event: response.output_item.added`,
+				`data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"call_1","name":"grep"}}`,
+				``,
+				`event: response.function_call_arguments.delta`,
+				`data: {"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"pattern\":\"TODO\"}"}`,
+				``,
+				`event: response.output_item.done`,
+				`data: {"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","call_id":"call_1","name":"grep","arguments":"{\"pattern\":\"TODO\"}"}}`,
+				``,
+			)
+			output = `,"output":[{"type":"function_call","call_id":"call_1","name":"grep"}]`
+		}
+		usage := `,"usage":{"input_tokens":5,"output_tokens":3}`
+		// 截断与安全拦截都走 incomplete，靠 incomplete_details.reason 区分。
+		if reason == ir.StopMaxTokens || reason == ir.StopContentFilter {
+			return strings.Join(append(frames,
+				`event: response.incomplete`,
+				`data: {"type":"response.incomplete","response":{"id":"msg_1","model":"native","status":"incomplete","incomplete_details":{"reason":"`+wire+`"}`+output+usage+`}}`,
+				``,
+			), "\n")
+		}
+		return strings.Join(append(frames,
+			`event: response.completed`,
+			`data: {"type":"response.completed","response":{"id":"msg_1","model":"native","status":"`+wire+`"`+output+usage+`}}`,
+			``,
+		), "\n")
+
+	default:
+		t.Fatalf("no stop-reason stream builder for %q", protocol)
+		return ""
+	}
+}
+
+// TestStopReasonMatrixPreservesSemantics 是 stop_reason 矩阵：
+// 每个 IR 取值 × 每个上游 × 每个客户端。终止原因错了，客户端会做错决定——
+// 把截断当成自然结束就不去续写，把工具调用当成结束就不去执行工具。
+func TestStopReasonMatrixPreservesSemantics(t *testing.T) {
+	for _, reason := range allStopReasons {
+		for _, up := range outboundNames() {
+			if _, ok := upstreamStopWire[up][reason]; !ok {
+				continue
+			}
+			for _, client := range inboundNames() {
+				t.Run(string(reason)+"/"+up+"→"+client, func(t *testing.T) {
+					events := decodeStream(t, up, stopReasonStream(t, up, reason))
+					rendered := renderStream(t, client, events)
+					resp := aggregate(t, client, rendered)
+
+					if want := clientStopClass(client, reason); resp.StopReason != want {
+						t.Errorf("stop_reason = %q, want %q\n%s", resp.StopReason, want, rendered)
+					}
+					if want := terminatorFor(client, reason); !strings.Contains(rendered, want) {
+						t.Errorf("流未以 %q 收尾\n%s", want, rendered)
+					}
+				})
+			}
+		}
+	}
+}
+
+// terminatorFor 在 terminator 之上按终止原因细化。
+// responses 的终止帧名随结果而变：未跑完的流收在 response.incomplete，
+// 断言恒定的 response.completed 会把正确行为记成缺陷。
+func terminatorFor(client string, reason ir.StopReason) string {
+	if client == codec.ProtocolResponses &&
+		(reason == ir.StopMaxTokens || reason == ir.StopContentFilter) {
+		return "response.incomplete"
+	}
+	return terminator(client)
+}
+
+// TestStopReasonWireTableCoversEveryUpstream 断言每个上游协议在表里都有
+// 一份取值。漏一个协议时上面的矩阵会静默少跑一整片格子，这里把它变成失败。
+func TestStopReasonWireTableCoversEveryUpstream(t *testing.T) {
+	for _, up := range outboundNames() {
+		table, ok := upstreamStopWire[up]
+		if !ok {
+			t.Fatalf("上游 %q 未登记 stop_reason 线上取值", up)
+		}
+		// 至少要能表达正常结束、截断、工具调用这三档，否则矩阵形同虚设。
+		for _, must := range []ir.StopReason{ir.StopEndTurn, ir.StopMaxTokens, ir.StopToolUse} {
+			if _, ok := table[must]; !ok {
+				t.Errorf("上游 %q 缺 %s 的线上取值", up, must)
+			}
+		}
+	}
+}
+
+// --- 媒体降级矩阵 ---
+
+// mediaCase 是一类媒体在三种入站协议里的等价写法。
+// wantKind 是解码后应落到的 IR 块类型，mediaType 用于查出站白名单。
+type mediaCase struct {
+	name      string
+	wantKind  ir.BlockType
+	mediaType string
+	bodies    map[string]string
+}
+
+// mediaCases 覆盖四类媒体块。每类都给出三种入站写法：各协议的容器名与
+// 载荷形态完全不同（anthropic 的 source 对象、chat_completions 的
+// data URI、responses 的 input_file），但必须解出同一个 IR 块。
+func mediaCases() []mediaCase {
+	return []mediaCase{
+		{
+			name: "image", wantKind: ir.BlockImage, mediaType: "image/png",
+			bodies: map[string]string{
+				codec.ProtocolAnthropic: `{"model":"user-model","max_tokens":256,"messages":[
+				  {"role":"user","content":[
+				    {"type":"text","text":"look"},
+				    {"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + pngPixel + `"}}
+				  ]}
+				]}`,
+				codec.ProtocolChatCompletions: `{"model":"user-model","messages":[
+				  {"role":"user","content":[
+				    {"type":"text","text":"look"},
+				    {"type":"image_url","image_url":{"url":"data:image/png;base64,` + pngPixel + `"}}
+				  ]}
+				]}`,
+				codec.ProtocolResponses: `{"model":"user-model","input":[
+				  {"role":"user","content":[
+				    {"type":"input_text","text":"look"},
+				    {"type":"input_image","image_url":"data:image/png;base64,` + pngPixel + `"}
+				  ]}
+				]}`,
+			},
+		},
+		{
+			name: "audio", wantKind: ir.BlockAudio, mediaType: "audio/wav",
+			bodies: map[string]string{
+				// anthropic 没有音频容器，只能塞进 document——解码按 media type
+				// 判类型而非容器名，所以仍应落到 BlockAudio。
+				codec.ProtocolAnthropic: `{"model":"user-model","max_tokens":256,"messages":[
+				  {"role":"user","content":[
+				    {"type":"text","text":"listen"},
+				    {"type":"document","source":{"type":"base64","media_type":"audio/wav","data":"` + wavClip + `"}}
+				  ]}
+				]}`,
+				codec.ProtocolChatCompletions: `{"model":"user-model","messages":[
+				  {"role":"user","content":[
+				    {"type":"text","text":"listen"},
+				    {"type":"input_audio","input_audio":{"format":"wav","data":"` + wavClip + `"}}
+				  ]}
+				]}`,
+				codec.ProtocolResponses: `{"model":"user-model","input":[
+				  {"role":"user","content":[
+				    {"type":"input_text","text":"listen"},
+				    {"type":"input_audio","input_audio":{"format":"wav","data":"` + wavClip + `"}}
+				  ]}
+				]}`,
+			},
+		},
+		{
+			name: "document", wantKind: ir.BlockDocument, mediaType: "application/pdf",
+			bodies: map[string]string{
+				codec.ProtocolAnthropic: `{"model":"user-model","max_tokens":256,"messages":[
+				  {"role":"user","content":[
+				    {"type":"text","text":"read"},
+				    {"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"` + pdfDoc + `"}}
+				  ]}
+				]}`,
+				codec.ProtocolChatCompletions: `{"model":"user-model","messages":[
+				  {"role":"user","content":[
+				    {"type":"text","text":"read"},
+				    {"type":"file","file":{"filename":"spec.pdf","file_data":"data:application/pdf;base64,` + pdfDoc + `"}}
+				  ]}
+				]}`,
+				codec.ProtocolResponses: `{"model":"user-model","input":[
+				  {"role":"user","content":[
+				    {"type":"input_text","text":"read"},
+				    {"type":"input_file","filename":"spec.pdf","file_data":"data:application/pdf;base64,` + pdfDoc + `"}
+				  ]}
+				]}`,
+			},
+		},
+		{
+			// 纯文本附件是「其余附件」的代表：多数协议只能降级成文本。
+			name: "file", wantKind: ir.BlockFile, mediaType: "text/plain",
+			bodies: map[string]string{
+				codec.ProtocolAnthropic: `{"model":"user-model","max_tokens":256,"messages":[
+				  {"role":"user","content":[
+				    {"type":"text","text":"attached"},
+				    {"type":"document","source":{"type":"base64","media_type":"text/plain","data":"` + textFile + `"}}
+				  ]}
+				]}`,
+				codec.ProtocolChatCompletions: `{"model":"user-model","messages":[
+				  {"role":"user","content":[
+				    {"type":"text","text":"attached"},
+				    {"type":"file","file":{"filename":"notes.txt","file_data":"data:text/plain;base64,` + textFile + `"}}
+				  ]}
+				]}`,
+				codec.ProtocolResponses: `{"model":"user-model","input":[
+				  {"role":"user","content":[
+				    {"type":"input_text","text":"attached"},
+				    {"type":"input_file","filename":"notes.txt","file_data":"data:text/plain;base64,` + textFile + `"}
+				  ]}
+				]}`,
+			},
+		},
+	}
+}
+
+// TestMediaDecodesToSameKindAcrossInbound 是媒体矩阵的前提：三种入站写法
+// 必须解出同一个 IR 块类型。这一步不过，下面的降级矩阵就无从比较。
+func TestMediaDecodesToSameKindAcrossInbound(t *testing.T) {
+	for _, mc := range mediaCases() {
+		for _, in := range inboundNames() {
+			t.Run(mc.name+"/"+in, func(t *testing.T) {
+				body, ok := mc.bodies[in]
+				if !ok {
+					t.Fatalf("入站 %q 缺 %s 的 fixture", in, mc.name)
+				}
+				req := decodeRequest(t, in, body)
+				block := findMedia(req)
+				if block == nil {
+					t.Fatalf("%s 未解出媒体块", in)
+				}
+				if block.Type != mc.wantKind {
+					t.Errorf("块类型 = %q, want %q", block.Type, mc.wantKind)
+				}
+				if got := codec.SniffMediaType(block.Media); got != mc.mediaType {
+					t.Errorf("media type = %q, want %q", got, mc.mediaType)
+				}
+			})
+		}
+	}
+}
+
+// TestMediaDowngradeMatrix 是媒体降级矩阵：四类媒体 × 3 入站 × 4 出站。
+//
+// 每格只有两种合法结局：出站白名单收得下就原生承载，收不下就改写成说明性
+// 文本并报一条有损。二者都不成立意味着媒体被无声吞掉——模型看不到附件，
+// 用户提到「上面那份文件」时它会答得莫名其妙，而日志里毫无线索。
+func TestMediaDowngradeMatrix(t *testing.T) {
+	for _, mc := range mediaCases() {
+		for _, in := range inboundNames() {
+			for _, out := range outboundNames() {
+				t.Run(mc.name+"/"+in+"→"+out, func(t *testing.T) {
+					req := decodeRequest(t, in, mc.bodies[in])
+					body, notes := lossyOf(t, out, req)
+					if !json.Valid(body) {
+						t.Fatalf("请求体不是合法 JSON：%s", body)
+					}
+
+					oc, _ := codec.Outbound(out)
+					native := oc.Caps().AcceptsMedia(mc.mediaType)
+					// 音频还有一层：白名单收得下，但只接受内联 base64 加
+					// 认得的格式名，两者缺一仍要降级。这里的 fixture 两者齐全。
+					downgraded := strings.Contains(string(body), "attachment omitted")
+
+					if native {
+						if downgraded {
+							t.Errorf("%s 支持 %s，不该降级：%s", out, mc.mediaType, body)
+						}
+						if len(notes) != 0 {
+							t.Errorf("%s 支持 %s，不该报有损：%v", out, mc.mediaType, notes)
+						}
+						// 原生承载时载荷必须真的出现在请求体里。
+						if !strings.Contains(string(body), mediaPayload(t, req)) {
+							t.Errorf("%s 声称原生承载，但请求体里没有载荷：%s", out, body)
+						}
+						return
+					}
+
+					if !downgraded {
+						t.Errorf("%s 表达不了 %s，应降级为说明文本：%s", out, mc.mediaType, body)
+					}
+					if len(notes) != 1 || !strings.Contains(notes[0], string(mc.wantKind)+" blocks") {
+						t.Errorf("降级应恰报一条 %s blocks 有损，实得 %v", mc.wantKind, notes)
+					}
+					// 同轮的文本内容不能被降级顺手吃掉。
+					if !strings.Contains(string(body), textOf(req)) {
+						t.Errorf("降级丢了同消息的文本 %q：%s", textOf(req), body)
+					}
+				})
+			}
+		}
+	}
+}
+
+// findMedia 取出请求里第一个媒体块。
+func findMedia(req *ir.Request) *ir.Block {
+	for i, m := range req.Messages {
+		for j, b := range m.Content {
+			if b.Type.IsMedia() {
+				return &req.Messages[i].Content[j]
+			}
+		}
+	}
+	return nil
+}
+
+// mediaPayload 取媒体块的 base64 载荷，用于确认它确实进了请求体。
+func mediaPayload(t *testing.T, req *ir.Request) string {
+	t.Helper()
+	b := findMedia(req)
+	if b == nil || b.Media == nil || b.Media.Data == "" {
+		t.Fatalf("fixture 应带内联 base64 载荷")
+	}
+	return b.Media.Data
+}
+
+// textOf 取请求里第一段文本。
+func textOf(req *ir.Request) string {
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			if b.Type == ir.BlockText && b.Text != "" {
+				return b.Text
+			}
+		}
+	}
+	return ""
+}
+
+// 媒体探针载荷。都是最小合法字节，靠魔数即可被 SniffMediaType 认出，
+// 从而在 media type 缺失时也走同一条判定。
+var (
+	pngPixel = base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n0123456789"))
+	wavClip  = base64.StdEncoding.EncodeToString([]byte("RIFF0000WAVEfmt "))
+	pdfDoc   = base64.StdEncoding.EncodeToString([]byte("%PDF-1.7\n%%EOF\n"))
+	textFile = base64.StdEncoding.EncodeToString([]byte("plain notes"))
+)
+
+// --- 收尾矩阵 ---
+
+// terminationCase 是一份在终止帧之前就断掉的上游流，按未闭合块的成色分类。
+// 三类成色对应聚合器的三种判定：可安全收尾的文本、入参截断的工具调用、
+// 无签名的推理块。
+type terminationCase struct {
+	name   string
+	frames map[string]string
+	// verify 同时拿到上游侧与客户端侧的聚合器：有些判定（块是否仍开着）
+	// 只在上游侧成立，因为入站编码器收尾时会补齐闭合帧。
+	verify func(t *testing.T, client string, up, down *ir.Aggregator, rendered string)
+}
+
+func terminationCases() []terminationCase {
+	return []terminationCase{
+		{
+			// 半句文本：可接受的截断。补一个闭合帧不会毒化历史，
+			// 但补出来的内容必须一个字都不多。
+			name: "open-text",
+			frames: map[string]string{
+				codec.ProtocolAnthropic: strings.Join([]string{
+					`event: message_start`,
+					`data: {"type":"message_start","message":{"id":"msg_c","model":"native","role":"assistant","usage":{"input_tokens":10}}}`,
+					``,
+					`event: content_block_start`,
+					`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+					``,
+					`event: content_block_delta`,
+					`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"half sen"}}`,
+					``,
+				}, "\n"),
+				codec.ProtocolChatCompletions: strings.Join([]string{
+					`data: {"id":"msg_c","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{"role":"assistant"}}]}`,
+					``,
+					`data: {"id":"msg_c","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{"content":"half sen"}}]}`,
+					``,
+				}, "\n"),
+				codec.ProtocolResponses: strings.Join([]string{
+					`event: response.created`,
+					`data: {"type":"response.created","response":{"id":"msg_c","model":"native","status":"in_progress"}}`,
+					``,
+					`event: response.output_item.added`,
+					`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant"}}`,
+					``,
+					`event: response.content_part.added`,
+					`data: {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text"}}`,
+					``,
+					`event: response.output_text.delta`,
+					`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"half sen"}`,
+					``,
+				}, "\n"),
+				codec.ProtocolGemini: strings.Join([]string{
+					`data: {"responseId":"msg_c","modelVersion":"native","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"half sen"}]}}],"usageMetadata":{"promptTokenCount":10}}`,
+					``,
+				}, "\n"),
+			},
+			verify: func(t *testing.T, client string, up, down *ir.Aggregator, rendered string) {
+				if bad := up.UnsafeToClose(); len(bad) != 0 {
+					t.Errorf("半句文本应可安全收尾，实被判为 %v\n%s", bad, rendered)
+				}
+				if got := responseText(down.Response()); got != "half sen" {
+					t.Errorf("文本 = %q，want %q（收尾不得凭空补造内容）\n%s", got, "half sen", rendered)
+				}
+			},
+		},
+		{
+			// 入参截断：补闭合帧就等于把一条毒历史交给客户端，
+			// 所以这类必须能被判定出来，并且在转换后仍然判得出来。
+			name: "truncated-tool-args",
+			frames: map[string]string{
+				codec.ProtocolAnthropic: strings.Join([]string{
+					`event: message_start`,
+					`data: {"type":"message_start","message":{"id":"msg_c","model":"native","role":"assistant","usage":{"input_tokens":10}}}`,
+					``,
+					`event: content_block_start`,
+					`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_9","name":"grep","input":{}}}`,
+					``,
+					`event: content_block_delta`,
+					`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"pattern\":"}}`,
+					``,
+				}, "\n"),
+				codec.ProtocolChatCompletions: strings.Join([]string{
+					`data: {"id":"msg_c","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_9","type":"function","function":{"name":"grep","arguments":"{\"pattern\":"}}]}}]}`,
+					``,
+				}, "\n"),
+				codec.ProtocolResponses: strings.Join([]string{
+					`event: response.created`,
+					`data: {"type":"response.created","response":{"id":"msg_c","model":"native","status":"in_progress"}}`,
+					``,
+					`event: response.output_item.added`,
+					`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_9","name":"grep"}}`,
+					``,
+					`event: response.function_call_arguments.delta`,
+					`data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"pattern\":"}`,
+					``,
+				}, "\n"),
+				// gemini 缺席：args 一次到齐，表达不出截断，写不出 fixture 的格
+				// 不进矩阵。
+			},
+			verify: func(t *testing.T, client string, up, down *ir.Aggregator, rendered string) {
+				if len(up.IncompleteTools()) == 0 {
+					t.Fatalf("上游侧未判出截断入参\n%s", rendered)
+				}
+				if len(up.UnsafeToClose()) == 0 {
+					t.Errorf("截断入参应属不可安全收尾\n%s", rendered)
+				}
+				if len(down.IncompleteTools()) == 0 {
+					t.Errorf("截断入参穿过转换后不再判得出来，客户端会把残缺调用存进历史\n%s", rendered)
+				}
+			},
+		},
+		{
+			// 无签名的推理块：回传给上游会被判为伪造而整轮拒收。
+			// 各上游解码器的 Finish 行为不同——有的补闭合帧有的不补——
+			// 所以断言写成蕴含式，两种行为下都成立。
+			name: "open-thinking",
+			frames: map[string]string{
+				codec.ProtocolAnthropic: strings.Join([]string{
+					`event: message_start`,
+					`data: {"type":"message_start","message":{"id":"msg_c","model":"native","role":"assistant","usage":{"input_tokens":10}}}`,
+					``,
+					`event: content_block_start`,
+					`data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`,
+					``,
+					`event: content_block_delta`,
+					`data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"pondering"}}`,
+					``,
+				}, "\n"),
+				codec.ProtocolChatCompletions: strings.Join([]string{
+					`data: {"id":"msg_c","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{"role":"assistant"}}]}`,
+					``,
+					`data: {"id":"msg_c","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{"reasoning_content":"pondering"}}]}`,
+					``,
+				}, "\n"),
+				codec.ProtocolResponses: strings.Join([]string{
+					`event: response.created`,
+					`data: {"type":"response.created","response":{"id":"msg_c","model":"native","status":"in_progress"}}`,
+					``,
+					`event: response.output_item.added`,
+					`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning"}}`,
+					``,
+					`event: response.reasoning_summary_text.delta`,
+					`data: {"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"delta":"pondering"}`,
+					``,
+				}, "\n"),
+				codec.ProtocolGemini: strings.Join([]string{
+					`data: {"responseId":"msg_c","modelVersion":"native","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"pondering","thought":true}]}}],"usageMetadata":{"promptTokenCount":10}}`,
+					``,
+				}, "\n"),
+			},
+			verify: func(t *testing.T, client string, up, down *ir.Aggregator, rendered string) {
+				if up.HasOpenBlocks() && len(up.UnsafeToClose()) == 0 {
+					t.Errorf("推理块仍开着且无签名，应属不可安全收尾\n%s", rendered)
+				}
+				if got := thinkingText(down.Response()); got != "pondering" {
+					t.Errorf("推理文本 = %q，want %q\n%s", got, "pondering", rendered)
+				}
+			},
+		},
+	}
+}
+
+// TestTerminationMatrixClosesOutCleanly 是收尾矩阵：三类成色 × 4 上游 × 3 客户端。
+// 每格的共同要求是「客户端一定拿到合法终止标志」——断流不能让客户端挂在
+// 半开的流上等超时；各成色自己的要求由 verify 补充。
+func TestTerminationMatrixClosesOutCleanly(t *testing.T) {
+	for _, tc := range terminationCases() {
+		for _, up := range outboundNames() {
+			raw, ok := tc.frames[up]
+			if !ok {
+				continue
+			}
+			for _, client := range inboundNames() {
+				t.Run(tc.name+"/"+up+"→"+client, func(t *testing.T) {
+					rendered := renderStream(t, client, decodeStream(t, up, raw))
+					if want := terminator(client); !strings.Contains(rendered, want) {
+						t.Fatalf("断流后客户端未收到终止标志 %q\n%s", want, rendered)
+					}
+					tc.verify(t, client, aggregator(t, up, raw), aggregator(t, client, rendered), rendered)
+				})
+			}
+		}
+	}
+}
+
+// --- 不可表达的格 ---
+
+// protocolLimitation 记录一个因协议本身表达不出而不进矩阵的格。
+//
+// 这类格不写 t.Skip：Skip 需要一个已经跑起来的子测试，而这里连 fixture 都
+// 写不出来——凭空造一份不存在的线上形态，测的就不是真实协议了。放宽断言更糟，
+// 会把「协议本就如此」记成通过。所以做法是让格缺席，并在此登记书面理由，
+// 再由下面的守卫测试保证缺席与登记严格一一对应：新增协议忘了写 fixture 会
+// 被判为未登记的缺口，协议后来长出该能力则登记会被判为过期。
+type protocolLimitation struct {
+	matrix   string
+	protocol string
+	feature  string
+	reason   string
+	// absent 回答该格此刻是否确实缺席。
+	absent func() bool
+}
+
+func protocolLimitations() []protocolLimitation {
+	return []protocolLimitation{
+		{
+			matrix: "stop_reason", protocol: codec.ProtocolChatCompletions, feature: "stop_sequence",
+			reason: "finish_reason 无专门取值，命中停止序列并入 stop（正常结束）",
+			absent: func() bool { return !hasStopWire(codec.ProtocolChatCompletions, ir.StopStopSequence) },
+		},
+		{
+			matrix: "stop_reason", protocol: codec.ProtocolResponses, feature: "stop_sequence",
+			reason: "status 只分 completed/incomplete，命中停止序列落在 completed",
+			absent: func() bool { return !hasStopWire(codec.ProtocolResponses, ir.StopStopSequence) },
+		},
+		{
+			matrix: "stop_reason", protocol: codec.ProtocolGemini, feature: "stop_sequence",
+			reason: "finishReason 无对应枚举值，命中停止序列报 STOP",
+			absent: func() bool { return !hasStopWire(codec.ProtocolGemini, ir.StopStopSequence) },
+		},
+		{
+			matrix: "malformed-stream", protocol: codec.ProtocolGemini, feature: "truncated tool args",
+			reason: "functionCall 的 args 一帧到齐，不分片，故表达不出入参截断",
+			absent: func() bool { return !hasMalformedStream("tool-args-truncated", codec.ProtocolGemini) },
+		},
+		{
+			matrix: "malformed-stream", protocol: codec.ProtocolAnthropic, feature: "args before name",
+			reason: "content_block_start 必带 name，入参不可能先于名字抵达",
+			absent: func() bool { return !hasMalformedStream("tool-args-before-name", codec.ProtocolAnthropic) },
+		},
+		{
+			matrix: "malformed-stream", protocol: codec.ProtocolResponses, feature: "args before name",
+			reason: "output_item.added 必带 name，同上",
+			absent: func() bool { return !hasMalformedStream("tool-args-before-name", codec.ProtocolResponses) },
+		},
+		{
+			matrix: "malformed-stream", protocol: codec.ProtocolGemini, feature: "args before name",
+			reason: "functionCall 是整体对象，name 与 args 同帧",
+			absent: func() bool { return !hasMalformedStream("tool-args-before-name", codec.ProtocolGemini) },
+		},
+		{
+			matrix: "termination", protocol: codec.ProtocolGemini, feature: "truncated tool args",
+			reason: "同上：args 不分片，断流断不出半截入参",
+			absent: func() bool { return !hasTerminationCase("truncated-tool-args", codec.ProtocolGemini) },
+		},
+		{
+			matrix: "usage-reasoning", protocol: codec.ProtocolAnthropic, feature: "reasoning tokens",
+			reason: "usage 结构无推理计量字段",
+			absent: func() bool { _, ok := reasoningUsageFixture[codec.ProtocolAnthropic]; return !ok },
+		},
+		{
+			matrix: "usage-cache-write", protocol: codec.ProtocolResponses, feature: "cache write tokens",
+			reason: "input_tokens_details 只有 cached_tokens，无缓存写入计量",
+			absent: func() bool { _, ok := cacheWriteUsageFixture[codec.ProtocolResponses]; return !ok },
+		},
+		{
+			matrix: "usage-cache-write", protocol: codec.ProtocolGemini, feature: "cache write tokens",
+			reason: "usageMetadata 只有 cachedContentTokenCount，无缓存写入计量",
+			absent: func() bool { _, ok := cacheWriteUsageFixture[codec.ProtocolGemini]; return !ok },
+		},
+	}
+}
+
+// TestProtocolLimitationsAreStillTrue 守卫每条登记：格必须真的缺席。
+// 登记的格若冒出了 fixture，说明协议已能表达，该把它并回矩阵而不是留着豁免。
+func TestProtocolLimitationsAreStillTrue(t *testing.T) {
+	for _, lim := range protocolLimitations() {
+		t.Run(lim.matrix+"/"+lim.protocol+"/"+lim.feature, func(t *testing.T) {
+			if lim.reason == "" {
+				t.Fatal("协议限制必须写明理由")
+			}
+			if !lim.absent() {
+				t.Errorf("该格已有 fixture，登记的限制已过期，应并回矩阵：%s", lim.reason)
+			}
+		})
+	}
+}
+
+// TestEveryMatrixGapIsDocumented 反向守卫：矩阵里每处缺席都得有登记。
+// 没这条的话，新增协议时忘写 fixture 会安静地少测一格。
+func TestEveryMatrixGapIsDocumented(t *testing.T) {
+	documented := map[string]bool{}
+	for _, lim := range protocolLimitations() {
+		documented[lim.matrix+"/"+lim.protocol+"/"+lim.feature] = true
+	}
+	assert := func(t *testing.T, matrix, protocol, feature string) {
+		t.Helper()
+		if !documented[matrix+"/"+protocol+"/"+feature] {
+			t.Errorf("%s 矩阵缺 %s 的 %s 格，且未登记协议限制", matrix, protocol, feature)
+		}
+	}
+
+	for _, up := range outboundNames() {
+		if !hasStopWire(up, ir.StopStopSequence) {
+			assert(t, "stop_reason", up, "stop_sequence")
+		}
+		if !hasMalformedStream("tool-args-truncated", up) {
+			assert(t, "malformed-stream", up, "truncated tool args")
+		}
+		if !hasMalformedStream("tool-args-before-name", up) {
+			assert(t, "malformed-stream", up, "args before name")
+		}
+		if !hasTerminationCase("truncated-tool-args", up) {
+			assert(t, "termination", up, "truncated tool args")
+		}
+		if _, ok := reasoningUsageFixture[up]; !ok {
+			assert(t, "usage-reasoning", up, "reasoning tokens")
+		}
+		if _, ok := cacheWriteUsageFixture[up]; !ok {
+			assert(t, "usage-cache-write", up, "cache write tokens")
+		}
+	}
+}
+
+func hasStopWire(protocol string, reason ir.StopReason) bool {
+	_, ok := upstreamStopWire[protocol][reason]
+	return ok
+}
+
+func hasMalformedStream(name, protocol string) bool {
+	for _, fx := range malformedStreams {
+		if fx.name != name {
+			continue
+		}
+		_, ok := fx.frames[protocol]
+		return ok
+	}
+	return false
+}
+
+func hasTerminationCase(name, protocol string) bool {
+	for _, tc := range terminationCases() {
+		if tc.name != name {
+			continue
+		}
+		_, ok := tc.frames[protocol]
+		return ok
+	}
+	return false
+}
+
+func responseText(resp *ir.Response) string {
+	var b strings.Builder
+	for _, blk := range resp.Content {
+		if blk.Type == ir.BlockText {
+			b.WriteString(blk.Text)
+		}
+	}
+	return b.String()
+}
+
+func thinkingText(resp *ir.Response) string {
+	var b strings.Builder
+	for _, blk := range resp.Content {
+		if blk.Type == ir.BlockThinking && blk.Thinking != nil {
+			b.WriteString(blk.Thinking.Text)
+		}
+	}
+	return b.String()
 }

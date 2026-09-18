@@ -94,6 +94,8 @@ type wireResponse struct {
 	Usage      wireUsage   `json:"usage"`
 }
 
+// wireUsage 没有推理 token 维度：本协议把推理消耗直接算进 output_tokens。
+// 转成本协议时该维度只是看不见，数值仍含在输出总量里，故不报有损。
 type wireUsage struct {
 	InputTokens              int64 `json:"input_tokens,omitempty"`
 	OutputTokens             int64 `json:"output_tokens,omitempty"`
@@ -117,6 +119,7 @@ const (
 const (
 	blockText             = "text"
 	blockImage            = "image"
+	blockDocument         = "document"
 	blockToolUse          = "tool_use"
 	blockToolResult       = "tool_result"
 	blockThinking         = "thinking"

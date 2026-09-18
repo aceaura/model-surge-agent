@@ -45,10 +45,26 @@ type wirePart struct {
 	Type     string        `json:"type"`
 	Text     string        `json:"text,omitempty"`
 	ImageURL *wireImageURL `json:"image_url,omitempty"`
+	// InputAudio 的 format 是裸格式名（"wav"、"mp3"）而非完整 media type。
+	InputAudio *wireInputAudio `json:"input_audio,omitempty"`
+	File       *wireFile       `json:"file,omitempty"`
 }
 
 type wireImageURL struct {
 	URL string `json:"url"`
+}
+
+type wireInputAudio struct {
+	Data   string `json:"data"`
+	Format string `json:"format"`
+}
+
+// wireFile 的 FileData 是 data URI。FileID 指向已上传的文件，
+// 本服务不做文件上传，只在解码时把它当 URL 承载。
+type wireFile struct {
+	Filename string `json:"filename,omitempty"`
+	FileData string `json:"file_data,omitempty"`
+	FileID   string `json:"file_id,omitempty"`
 }
 
 // wireToolCall 的 Index 只在流式增量里出现，且必须写出：
@@ -115,10 +131,17 @@ type wireUsage struct {
 	// 缓存写入量在本协议里没有官方字段，两个别名都是兼容层自造的。
 	CacheWriteTokens    int64 `json:"cache_write_tokens,omitempty"`
 	CacheCreationTokens int64 `json:"cache_creation_tokens,omitempty"`
+	// CompletionTokensDetails 是本协议报推理消耗的位置。
+	CompletionTokensDetails *wireCompletionDetails `json:"completion_tokens_details,omitempty"`
 }
 
 type wirePromptDetails struct {
 	CachedTokens int64 `json:"cached_tokens,omitempty"`
+}
+
+// wireCompletionDetails 的 reasoning_tokens 已含在 completion_tokens 内。
+type wireCompletionDetails struct {
+	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`
 }
 
 type wireError struct {
@@ -143,8 +166,10 @@ const (
 )
 
 const (
-	partText     = "text"
-	partImageURL = "image_url"
+	partText       = "text"
+	partImageURL   = "image_url"
+	partInputAudio = "input_audio"
+	partFile       = "file"
 )
 
 // doneSentinel 是本协议的流终止标记，不是 JSON。

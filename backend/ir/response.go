@@ -21,6 +21,12 @@ type Usage struct {
 	OutputTokens     int64 `json:"output_tokens,omitempty"`
 	CacheReadTokens  int64 `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+	// ReasoningTokens 是推理消耗，计费上属于输出，故已计入 OutputTokens。
+	// 独立承载只为成本归因：推理占比看不见时，一个模型贵在哪儿无从判断。
+	//
+	// 不对它与 OutputTokens 做「不得更大」的钳制：部分上游把两者作为
+	// 独立计量而非包含关系给出，钳制会把上游的真实数字改掉。
+	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`
 }
 
 // MergeUsage 把一帧 usage 并入累加器。
@@ -39,6 +45,10 @@ func MergeUsage(into *Usage, u Usage) {
 	}
 	if u.OutputTokens > 0 {
 		into.OutputTokens = u.OutputTokens
+	}
+	// 与输出同口径：末尾那帧的数字才是完整的，但缺了这一维的帧不该把它清零。
+	if u.ReasoningTokens > 0 {
+		into.ReasoningTokens = u.ReasoningTokens
 	}
 	if u.CacheReadTokens > into.CacheReadTokens {
 		into.CacheReadTokens = u.CacheReadTokens

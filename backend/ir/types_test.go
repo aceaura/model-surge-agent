@@ -12,6 +12,10 @@ func sampleRequest() *Request {
 			Role: RoleUser,
 			Content: []Block{
 				{Type: BlockText, Text: "hi"},
+				{Type: BlockImage, Media: &Media{MediaType: "image/png", Data: "AAAA"}},
+				{Type: BlockAudio, Media: &Media{MediaType: "audio/wav", Data: "BBBB"}},
+				{Type: BlockDocument, Media: &Media{MediaType: "application/pdf", Data: "CCCC", Name: "spec.pdf"}},
+				{Type: BlockFile, Media: &Media{MediaType: "text/csv", URL: "https://example.com/a.csv"}},
 				{Type: BlockToolResult, ToolResult: &ToolResult{
 					ToolUseID: "tu_1",
 					Content:   []Block{{Type: BlockText, Text: "result"}},
@@ -36,7 +40,13 @@ func TestCloneIsDeep(t *testing.T) {
 
 	got.Model = "other"
 	got.Messages[0].Content[0].Text = "mutated"
-	got.Messages[0].Content[1].ToolResult.Content[0].Text = "mutated"
+	for _, i := range []int{1, 2, 3, 4} {
+		got.Messages[0].Content[i].Media.MediaType = "mutated"
+		got.Messages[0].Content[i].Media.Data = "mutated"
+		got.Messages[0].Content[i].Media.URL = "mutated"
+		got.Messages[0].Content[i].Media.Name = "mutated"
+	}
+	got.Messages[0].Content[5].ToolResult.Content[0].Text = "mutated"
 	got.System[0].Text = "mutated"
 	got.Tools[0].Name = "mutated"
 	got.StopSequences[0] = "mutated"
@@ -52,8 +62,19 @@ func TestCloneIsDeep(t *testing.T) {
 	if src.Messages[0].Content[0].Text != "hi" {
 		t.Error("message block leaked")
 	}
-	if src.Messages[0].Content[1].ToolResult.Content[0].Text != "result" {
+	if src.Messages[0].Content[5].ToolResult.Content[0].Text != "result" {
 		t.Error("nested tool result content leaked")
+	}
+	wantMedia := []Media{
+		{MediaType: "image/png", Data: "AAAA"},
+		{MediaType: "audio/wav", Data: "BBBB"},
+		{MediaType: "application/pdf", Data: "CCCC", Name: "spec.pdf"},
+		{MediaType: "text/csv", URL: "https://example.com/a.csv"},
+	}
+	for i, want := range wantMedia {
+		if got := *src.Messages[0].Content[i+1].Media; got != want {
+			t.Errorf("media block[%d] leaked: got %+v, want %+v", i+1, got, want)
+		}
 	}
 	if src.System[0].Text != "be brief" {
 		t.Error("system block leaked")

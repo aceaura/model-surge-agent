@@ -58,6 +58,9 @@ type RequestSummary struct {
 	ErrorMessage     string    `json:"error_message,omitempty"`
 	// Sanitized 是对客户端请求所做的畸形修复说明；为空表示请求本身合法。
 	Sanitized []string `json:"sanitized,omitempty"`
+	// Lossy 是出站编码因目标协议表达不了而丢弃的字段说明；为空表示无损转换。
+	// 与 Sanitized 分列：前者指向客户端 bug，后者指向路由选型。
+	Lossy []string `json:"lossy,omitempty"`
 }
 
 // RequestPage 的 NextCursor 为空表示没有下一页。

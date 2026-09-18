@@ -33,10 +33,34 @@ func (outboundCodec) Caps() codec.Capabilities {
 		Images:        true,
 		TopK:          true,
 		StopSequences: true,
+		// 本协议的 mimeType 是必填项且上游按白名单校验，
+		// 不在表里的类型发出去会拿到不可重试的 400。
+		MediaTypes: []string{
+			"image/png", "image/jpeg", "image/webp", "image/heic", "image/heif",
+			"audio/wav", "audio/mpeg", "audio/mp3", "audio/aiff", "audio/aac",
+			"audio/ogg", "audio/flac",
+			"video/mp4", "video/mpeg", "video/mov", "video/avi", "video/webm",
+			"application/pdf",
+			"text/plain", "text/csv", "text/html", "text/markdown",
+			"application/json", "text/xml",
+		},
 	}
 }
 
-func (outboundCodec) EncodeRequest(req *ir.Request) ([]byte, error) { return EncodeRequest(req) }
+// EncodeRequest 是 EncodeRequestLossy 丢弃诊断的包装：两条路径共用同一编码，
+// 请求体逐字节相同，否则提示缓存前缀会因诊断开关而漂移。
+func (c outboundCodec) EncodeRequest(req *ir.Request) ([]byte, error) {
+	body, _, err := c.EncodeRequestLossy(req)
+	return body, err
+}
+
+func (outboundCodec) EncodeRequestLossy(req *ir.Request) ([]byte, []string, error) {
+	body, err := EncodeRequest(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	return body, codec.DescribeLossy(req, Name, outboundCodec{}.Caps()), nil
+}
 
 // Endpoint 与另外三个协议不同：模型名进路径，流式换方法名并加 alt=sse。
 // 所以这里的两个参数都不能忽略。

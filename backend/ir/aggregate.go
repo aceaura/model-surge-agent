@@ -19,6 +19,9 @@ type Aggregator struct {
 	// 与「入参发到一半断流」。记在这里而不是 Block 上：Block 要原样序列化
 	// 进下一轮请求，不该携带解码过程的状态。
 	sawInput map[int]bool
+	// closed 记录收到过 block_stop 的块。没收到就是断流时块还开着，
+	// 这类块的内容按协议无法判定完整。
+	closed map[int]bool
 }
 
 func (a *Aggregator) Add(ev Event) {
@@ -41,6 +44,11 @@ func (a *Aggregator) Add(ev Event) {
 			a.order = append(a.order, ev.Index)
 		}
 		a.blocks[ev.Index] = &b
+	case EvBlockStop:
+		if a.closed == nil {
+			a.closed = map[int]bool{}
+		}
+		a.closed[ev.Index] = true
 	case EvTextDelta:
 		if b := a.block(ev.Index, BlockText); b != nil {
 			b.Text += ev.Text
@@ -119,6 +127,40 @@ func (a *Aggregator) IncompleteTools() []string {
 	return out
 }
 
+// UnsafeToClose 返回不能照常收尾的块标签。
+//
+// 两类：入参被截断的工具调用，以及断流时仍开着且没拿到签名的 thinking 块。
+// 缺签名的推理块回传给上游会被判为伪造而整轮拒收，和残缺入参一样属于
+// 「补个闭合帧就变成一条有毒历史」，必须让客户端知道这次没说完。
+// 纯文本块不在其中——半句话是可接受的截断，由 max_tokens 表达。
+func (a *Aggregator) UnsafeToClose() []string {
+	out := a.IncompleteTools()
+	for _, idx := range a.order {
+		if a.closed[idx] {
+			continue
+		}
+		b := a.blocks[idx]
+		if b == nil || b.Type != BlockThinking {
+			continue
+		}
+		if b.Thinking != nil && b.Thinking.Signature != "" {
+			continue
+		}
+		out = append(out, "thinking block "+strconv.Itoa(idx))
+	}
+	return out
+}
+
+// HasOpenBlocks 报告是否有块在流结束时仍未收到闭合帧。
+func (a *Aggregator) HasOpenBlocks() bool {
+	for _, idx := range a.order {
+		if !a.closed[idx] {
+			return true
+		}
+	}
+	return false
+}
+
 // toolLabel 给截断的调用取一个可诊断的标签。
 func toolLabel(use *ToolUse, index int) string {
 	if use.ID != "" {
@@ -133,10 +175,20 @@ func toolLabel(use *ToolUse, index int) string {
 func (a *Aggregator) Response() *Response {
 	out := a.resp
 	out.Content = make([]Block, 0, len(a.order))
+	hasToolUse := false
 	for _, idx := range a.order {
 		if b := a.blocks[idx]; b != nil {
 			out.Content = append(out.Content, *b)
+			if b.Type == BlockToolUse {
+				hasToolUse = true
+			}
 		}
+	}
+	// 内容里确有工具调用，终止原因就必须表达为工具调用：客户端靠它决定
+	// 要不要执行工具，判成 end_turn 会让整个工具回合悄悄断在这里。
+	// content_filter 不改判——被拦截的工具调用不该被执行。
+	if hasToolUse && out.StopReason != StopContentFilter {
+		out.StopReason = StopToolUse
 	}
 	return &out
 }

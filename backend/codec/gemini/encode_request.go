@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aceaura/model-surge-agent/backend/codec"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
@@ -122,28 +123,31 @@ func encodeMessage(m ir.Message, names map[string]string) ([]wireContent, error)
 		switch b.Type {
 		case ir.BlockText:
 			parts = append(parts, wirePart{Text: b.Text})
-		case ir.BlockImage:
-			if b.Image == nil {
-				return nil, fmt.Errorf("image block without payload")
+		case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
+			if b.Media == nil {
+				return nil, fmt.Errorf("%s block without payload", b.Type)
 			}
-			if b.Image.URL != "" {
-				parts = append(parts, wirePart{FileData: &wireFileData{
-					MimeType: b.Image.MediaType, FileURI: b.Image.URL}})
+			media := codec.SniffMediaType(b.Media)
+			// 本协议对 mimeType 有白名单且它是必填项：类型不在白名单里
+			// 或压根嗅不出，发出去都会被上游拒收，只能降级为文本。
+			if !supportedMIME(media) {
+				parts = append(parts, wirePart{Text: codec.DowngradeMedia(b).Text})
 				continue
 			}
-			media := b.Image.MediaType
-			if media == "" {
-				media = "image/png"
+			if b.Media.URL != "" {
+				parts = append(parts, wirePart{FileData: &wireFileData{
+					MimeType: media, FileURI: b.Media.URL}})
+				continue
 			}
-			parts = append(parts, wirePart{InlineData: &wireBlob{MimeType: media, Data: b.Image.Data}})
+			parts = append(parts, wirePart{InlineData: &wireBlob{MimeType: media, Data: b.Media.Data}})
 		case ir.BlockThinking:
 			if b.Thinking == nil || b.Thinking.Text == "" {
 				continue
 			}
 			// 推理是带 thought 标记的 text part，不是独立的 part 类型。
 			part := wirePart{Text: b.Thinking.Text, Thought: true}
-			// 签名只在同族协议间有效，别家的发过来会被拒。
-			if b.Thinking.SignatureFrom == Name {
+			// 签名只在同族协议间有效，别家的发过来会被拒。判定与有损诊断共用一处出处。
+			if !codec.ForeignSignature(b.Thinking, Name) {
 				part.ThoughtSignature = b.Thinking.Signature
 			}
 			parts = append(parts, part)
@@ -194,6 +198,13 @@ func encodeMessage(m ir.Message, names map[string]string) ([]wireContent, error)
 		out = append(out, wireContent{Role: roleFor(m.Role), Parts: parts})
 	}
 	return out, nil
+}
+
+// supportedMIME 查 Caps 声明的白名单。
+// 判定只留一处出处：诊断说丢了而编码器实际发出去，比不诊断更糟——
+// 排查的人会照着诊断去找一个不存在的原因。
+func supportedMIME(media string) bool {
+	return outboundCodec{}.Caps().AcceptsMedia(media)
 }
 
 // wrapResponse 把工具结果包成 response 要求的对象形态。

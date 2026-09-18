@@ -3,7 +3,9 @@ package chatcompletions
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
+	"github.com/aceaura/model-surge-agent/backend/codec"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
@@ -184,14 +186,15 @@ func encodeContent(blocks []ir.Block) (json.RawMessage, error) {
 		switch b.Type {
 		case ir.BlockText:
 			parts = append(parts, wirePart{Type: partText, Text: b.Text})
-		case ir.BlockImage:
-			if b.Image == nil {
-				return nil, fmt.Errorf("image block without payload")
+		case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
+			if b.Media == nil {
+				return nil, fmt.Errorf("%s block without payload", b.Type)
 			}
-			parts = append(parts, wirePart{
-				Type:     partImageURL,
-				ImageURL: &wireImageURL{URL: renderImageURL(b.Image)},
-			})
+			part, ok := encodeMediaPart(b)
+			if !ok {
+				part = wirePart{Type: partText, Text: codec.DowngradeMedia(b).Text}
+			}
+			parts = append(parts, part)
 		default:
 			return nil, fmt.Errorf("cannot encode block type %q as content", b.Type)
 		}
@@ -199,16 +202,63 @@ func encodeContent(blocks []ir.Block) (json.RawMessage, error) {
 	return json.Marshal(parts)
 }
 
+// encodeMediaPart 把媒体块编成本协议的原生 part。
+// 返回 ok=false 表示本协议表达不了，交由调用方降级为文本。
+func encodeMediaPart(b ir.Block) (wirePart, bool) {
+	media := codec.SniffMediaType(b.Media)
+	// 白名单判定与有损诊断共用 Caps，避免两处漂移。
+	if !(outboundCodec{}.Caps().AcceptsMedia(media)) {
+		return wirePart{}, false
+	}
+	switch {
+	case strings.HasPrefix(media, "image/"):
+		return wirePart{Type: partImageURL, ImageURL: &wireImageURL{URL: renderImageURL(b.Media)}}, true
+
+	case strings.HasPrefix(media, "audio/"):
+		// input_audio 只接受内联 base64 与它认得的格式名，
+		// 远程链接与冷门格式都表达不了。
+		format := audioFormat(media)
+		if b.Media.Data == "" || format == "" {
+			return wirePart{}, false
+		}
+		return wirePart{Type: partInputAudio, InputAudio: &wireInputAudio{
+			Data: b.Media.Data, Format: format,
+		}}, true
+
+	case b.Media.Data != "" && media != "":
+		return wirePart{Type: partFile, File: &wireFile{
+			Filename: b.Media.Name,
+			FileData: "data:" + media + ";base64," + b.Media.Data,
+		}}, true
+
+	default:
+		return wirePart{}, false
+	}
+}
+
+// audioFormat 把 media type 折成本协议要的裸格式名，不认得返回空串。
+func audioFormat(media string) string {
+	switch media {
+	case "audio/wav", "audio/x-wav":
+		return "wav"
+	case "audio/mpeg", "audio/mp3":
+		return "mp3"
+	default:
+		return ""
+	}
+}
+
 // renderImageURL 把 IR 的分离字段拼回本协议的单一 url 字段。
-func renderImageURL(img *ir.Image) string {
+func renderImageURL(img *ir.Media) string {
 	if img.URL != "" {
 		return img.URL
 	}
-	media := img.MediaType
-	if media == "" {
-		media = "image/png"
+	// 类型嗅不出时不编造一个：谎报的类型会让上游拒收整个请求，
+	// 而不带类型的 data URI 多数上游会自行探测。
+	if media := codec.SniffMediaType(img); media != "" {
+		return "data:" + media + ";base64," + img.Data
 	}
-	return "data:" + media + ";base64," + img.Data
+	return "data:;base64," + img.Data
 }
 
 func encodeToolChoice(tc *ir.ToolChoice) (json.RawMessage, error) {

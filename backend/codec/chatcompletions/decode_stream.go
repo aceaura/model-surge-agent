@@ -337,7 +337,9 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 func DecodeError(status int, body []byte) *ir.Error {
 	var env wireErrorEnvelope
 	if err := json.Unmarshal(body, &env); err != nil || env.Error.Message == "" {
-		return ir.NewError(codec.KindForStatus(status, ""), status, "", codec.StatusMessage(status, body))
+		// 本协议的兼容实现最多，错误体形状五花八门：先尽力挖消息，
+		// 挖不到才回落状态码描述。
+		return codec.FallbackError(status, body)
 	}
 	return convertError(status, &env.Error)
 }
@@ -350,7 +352,10 @@ func convertError(status int, e *wireError) *ir.Error {
 	if code == "" {
 		code = errorCode(e.Code)
 	}
-	return ir.NewError(codec.KindForStatus(status, e.Message), status, code, e.Message)
+	// 消息位上可能是被字符串化的下游错误体，取出里面的真消息再归类：
+	// 上下文超限的判定要看消息文本，读到一串转义引号就判不出来了。
+	msg := codec.RefineMessage(e.Message)
+	return ir.NewError(codec.KindFor(status, code, msg), status, code, msg)
 }
 
 // errorCode 取 code 的文本形式：各家有时给字符串有时给数字。
@@ -384,6 +389,10 @@ func convertUsage(u wireUsage) ir.Usage {
 	if out.CacheWriteTokens == 0 {
 		out.CacheWriteTokens = u.CacheCreationTokens
 	}
+	// 本协议的 completion_tokens 已含推理，IR 同口径，故只记维度不做扣减。
+	if u.CompletionTokensDetails != nil {
+		out.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
+	}
 	// 本协议的 prompt_tokens 含缓存命中，而 IR 的 InputTokens 定义为
 	// 不含缓存的新鲜输入，故减去。上游数字不自洽时钳到 0，不出负数。
 	out.InputTokens -= out.CacheReadTokens
@@ -408,6 +417,10 @@ func renderUsage(u ir.Usage) wireUsage {
 	if u.CacheWriteTokens > 0 {
 		out.CacheWriteTokens = u.CacheWriteTokens
 	}
+	// 本协议表达得了推理维度，如实写出，让客户端看得见推理占比。
+	if u.ReasoningTokens > 0 {
+		out.CompletionTokensDetails = &wireCompletionDetails{ReasoningTokens: u.ReasoningTokens}
+	}
 	return out
 }
 
@@ -421,8 +434,13 @@ func convertFinishReason(s string) ir.StopReason {
 		return ir.StopToolUse
 	case "content_filter":
 		return ir.StopContentFilter
-	default:
+	case "":
+		// 上游没给：留空由聚合层兜底，不能当成被拦截。
 		return ""
+	default:
+		// 未识别的取值按安全侧兜底：把被拦截的回答当正常结束，
+		// 客户端会照着不完整的内容继续往下走。
+		return ir.StopContentFilter
 	}
 }
 
@@ -436,7 +454,11 @@ func renderFinishReason(s ir.StopReason) string {
 		return "tool_calls"
 	case ir.StopContentFilter:
 		return "content_filter"
-	default:
+	case ir.StopEndTurn, ir.StopStopSequence, "":
 		return "stop"
+	default:
+		// 认不出的 IR 取值不能一律说成正常结束：宁可让客户端知道
+		// 这次终止有异常，也不要它照着可能残缺的内容继续。
+		return "content_filter"
 	}
 }

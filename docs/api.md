@@ -247,10 +247,12 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 | `first_token_ms` | int | 首个上游帧解码成功的耗时（毫秒）；流式与非流式都记录；未收到任何帧即结束时为 0 |
 | `error_code` | string | 错误种类（成功时为空） |
 | `error_message` | string | 错误文本（可能含上游原文；成功时为空） |
+| `sanitized` | string[] | 对客户端请求所做的畸形修复说明，如补配对的 `tool_result`、合并连续同角色消息；为空或不出现表示请求本身合法。指向客户端 bug |
+| `lossy` | string[] | 出站编码因目标协议表达不了而丢弃的字段说明，形如 `dropped top_k (chat_completions cannot express it: ...)`；为空或不出现表示无损转换。指向路由选型 |
 
 ### 3.3 LiveEntry
 
-实时环元素（`GET /admin/live`）。是 `RequestSummary` 的子集：为速度省略了 `tried_ids`、`error_message`、`usage_estimated`、`cache_read_tokens`，其余同名字段含义一致：
+实时环元素（`GET /admin/live`）。是 `RequestSummary` 的子集：为速度省略了 `tried_ids`、`error_message`、`usage_estimated`、`cache_read_tokens`、`sanitized`、`lossy`，其余同名字段含义一致：
 
 `request_id`、`at`、`inbound_protocol`、`outbound_protocol`、`user_model`、`model_id`、`account`、`outcome`、`status_code`、`attempts`、`stream`、`latency_ms`、`first_token_ms`、`input_tokens`、`output_tokens`、`error_code`。
 

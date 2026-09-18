@@ -31,6 +31,10 @@ func (l *RequestLog) Insert(ctx context.Context, rec pipeline.Record) error {
 	if err != nil {
 		return fmt.Errorf("encode sanitized: %w", err)
 	}
+	lossy, err := json.Marshal(nonNil(rec.Lossy))
+	if err != nil {
+		return fmt.Errorf("encode lossy: %w", err)
+	}
 	at := rec.At
 	if at.IsZero() {
 		at = time.Now()
@@ -41,8 +45,8 @@ func (l *RequestLog) Insert(ctx context.Context, rec pipeline.Record) error {
 			model_id, account, outcome, status_code, attempts, tried_ids,
 			committed, stream, usage_estimated,
 			input_tokens, output_tokens, cache_read_tokens,
-			latency_ms, first_token_ms, error_code, error_message, sanitized)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+			latency_ms, first_token_ms, error_code, error_message, sanitized, lossy)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
 		ON CONFLICT (request_id) DO UPDATE SET
 			at = EXCLUDED.at, outbound_protocol = EXCLUDED.outbound_protocol,
 			model_id = EXCLUDED.model_id, account = EXCLUDED.account,
@@ -53,12 +57,12 @@ func (l *RequestLog) Insert(ctx context.Context, rec pipeline.Record) error {
 			cache_read_tokens = EXCLUDED.cache_read_tokens,
 			latency_ms = EXCLUDED.latency_ms, first_token_ms = EXCLUDED.first_token_ms,
 			error_code = EXCLUDED.error_code, error_message = EXCLUDED.error_message,
-			sanitized = EXCLUDED.sanitized`,
+			sanitized = EXCLUDED.sanitized, lossy = EXCLUDED.lossy`,
 		rec.RequestID, at, rec.InboundProtocol, rec.UserModel, rec.OutboundProtocol,
 		rec.ModelID, rec.Account, rec.Outcome, rec.StatusCode, rec.Attempts, tried,
 		rec.Committed, rec.Stream, rec.UsageEstimated,
 		rec.Usage.InputTokens, rec.Usage.OutputTokens, rec.Usage.CacheReadTokens,
-		rec.LatencyMS, rec.FirstTokenMS, rec.ErrorCode, rec.ErrorMessage, sanitized)
+		rec.LatencyMS, rec.FirstTokenMS, rec.ErrorCode, rec.ErrorMessage, sanitized, lossy)
 	return err
 }
 
@@ -181,20 +185,21 @@ const recordColumns = `request_id, at, inbound_protocol, user_model, outbound_pr
 	model_id, account, outcome, status_code, attempts, tried_ids,
 	committed, stream, usage_estimated,
 	input_tokens, output_tokens, cache_read_tokens,
-	latency_ms, first_token_ms, error_code, error_message, sanitized`
+	latency_ms, first_token_ms, error_code, error_message, sanitized, lossy`
 
 func scanRecord(rows pgx.Rows) (pipeline.Record, error) {
 	var (
 		rec       pipeline.Record
 		tried     []byte
 		sanitized []byte
+		lossy     []byte
 	)
 	if err := rows.Scan(&rec.RequestID, &rec.At, &rec.InboundProtocol, &rec.UserModel,
 		&rec.OutboundProtocol, &rec.ModelID, &rec.Account, &rec.Outcome, &rec.StatusCode,
 		&rec.Attempts, &tried, &rec.Committed, &rec.Stream, &rec.UsageEstimated,
 		&rec.Usage.InputTokens, &rec.Usage.OutputTokens, &rec.Usage.CacheReadTokens,
 		&rec.LatencyMS, &rec.FirstTokenMS, &rec.ErrorCode, &rec.ErrorMessage,
-		&sanitized); err != nil {
+		&sanitized, &lossy); err != nil {
 		return rec, err
 	}
 	if len(tried) > 0 {
@@ -205,6 +210,11 @@ func scanRecord(rows pgx.Rows) (pipeline.Record, error) {
 	if len(sanitized) > 0 {
 		if err := json.Unmarshal(sanitized, &rec.Sanitized); err != nil {
 			return rec, fmt.Errorf("decode sanitized: %w", err)
+		}
+	}
+	if len(lossy) > 0 {
+		if err := json.Unmarshal(lossy, &rec.Lossy); err != nil {
+			return rec, fmt.Errorf("decode lossy: %w", err)
 		}
 	}
 	return rec, nil

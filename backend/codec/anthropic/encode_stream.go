@@ -13,8 +13,11 @@ import (
 // message_start 必须先到，块必须成对开闭，末尾必须有 message_stop。
 // 上游流被中途掐断时，Finish 要把这些缺口补齐。
 type streamEncoder struct {
-	started    bool
-	stopped    bool
+	started bool
+	stopped bool
+	// errored 表示流已用错误帧收尾。此后既不补正常终止帧，也丢弃迟到的增量：
+	// 错误之后再发内容或 message_stop，客户端会把这轮当成功而存下残缺历史。
+	errored    bool
 	openBlocks map[int]bool
 	// blockOrder 让 Finish 按开启顺序闭合，避免 map 遍历顺序不定
 	// 导致同样的输入产出不同的帧序。
@@ -27,6 +30,9 @@ func newStreamEncoder() *streamEncoder {
 }
 
 func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
+	if e.errored {
+		return nil, nil
+	}
 	switch ev.Type {
 	case ir.EvMessageStart:
 		return e.encodeStart(ev)
@@ -124,6 +130,7 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		return [][]byte{frame}, nil
 
 	case ir.EvError:
+		e.errored = true
 		return RenderStreamError(ev.Err), nil
 
 	default:
@@ -244,8 +251,11 @@ func (e *streamEncoder) closeAll() [][]byte {
 
 // Finish 补齐流：闭合未关的块，补 message_delta 与 message_stop。
 // 上游中途断流后必须调用，否则客户端会一直等一个不会来的结束帧。
+//
+// 已用错误帧收尾时什么都不补：错误帧本身就是终止，再补 message_stop
+// 会让客户端以为这轮正常结束。
 func (e *streamEncoder) Finish() [][]byte {
-	if e.stopped {
+	if e.stopped || e.errored {
 		return nil
 	}
 	out, err := e.Encode(ir.Event{Type: ir.EvMessageStop})

@@ -4,7 +4,11 @@
 // target.protocol 可直接用来查出站 codec，无需映射表。
 package codec
 
-import "github.com/aceaura/model-surge-agent/backend/ir"
+import (
+	"strings"
+
+	"github.com/aceaura/model-surge-agent/backend/ir"
+)
 
 const (
 	ProtocolAnthropic       = "anthropic"
@@ -53,6 +57,35 @@ type Capabilities struct {
 	CacheControl  bool
 	TopK          bool
 	StopSequences bool
+	// MediaTypes 是本协议接受的 media type 白名单。nil 表示只接受 image/*。
+	// 白名单而非黑名单：上游对不认得的类型多回不可重试的 400，
+	// 而不可重试意味着换目标也救不回来，只能在发出前降级。
+	MediaTypes []string
+}
+
+// AcceptsMedia 判断本协议能否原生承载该 media type。
+// 类型为空视为不能：多数协议的 mime 字段是必填的，谎报或留空都会被拒收。
+func (c Capabilities) AcceptsMedia(mediaType string) bool {
+	if !c.Images || mediaType == "" {
+		return false
+	}
+	if c.MediaTypes == nil {
+		return strings.HasPrefix(mediaType, "image/")
+	}
+	for _, t := range c.MediaTypes {
+		if t == mediaType {
+			return true
+		}
+	}
+	return false
+}
+
+// LossyEncoder 是可选接口。出站 codec 实现它即可在编码请求时报告
+// 因协议表达能力不足而丢弃的字段。不实现等价于「不丢任何字段」。
+type LossyEncoder interface {
+	// EncodeRequestLossy 除请求体外返回去重、已排序的有损说明。
+	// 无丢弃时说明为 nil，且返回的请求体必须与 EncodeRequest 逐字节相同。
+	EncodeRequestLossy(req *ir.Request) ([]byte, []string, error)
 }
 
 // OutboundCodec 面向上游：编请求、解响应。

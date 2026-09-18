@@ -343,7 +343,8 @@ func DecodeError(status int, body []byte) *ir.Error {
 	if err := json.Unmarshal(body, &resp); err == nil && resp.Error != nil {
 		return convertError(status, resp.Error)
 	}
-	return ir.NewError(codec.KindForStatus(status, ""), status, "", codec.StatusMessage(status, body))
+	// 两种规范形状都不匹配：尽力从任意形状里挖消息，挖不到才回落状态码描述。
+	return codec.FallbackError(status, body)
 }
 
 func convertError(status int, e *wireError) *ir.Error {
@@ -354,7 +355,10 @@ func convertError(status int, e *wireError) *ir.Error {
 	if code == "" {
 		code = e.Type
 	}
-	return ir.NewError(codec.KindForStatus(status, e.Message), status, code, e.Message)
+	// 消息位上可能是被字符串化的下游错误体，取出里面的真消息再归类：
+	// 上下文超限的判定要看消息文本，读到一串转义引号就判不出来了。
+	msg := codec.RefineMessage(e.Message)
+	return ir.NewError(codec.KindFor(status, code, msg), status, code, msg)
 }
 
 func streamError(ev wireStreamEvent) *ir.Error {
@@ -365,6 +369,10 @@ func convertUsage(u wireUsage) ir.Usage {
 	out := ir.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens}
 	if u.InputTokensDetails != nil {
 		out.CacheReadTokens = u.InputTokensDetails.CachedTokens
+	}
+	// 本协议的 output_tokens 已含推理，IR 同口径，故只记维度不做扣减。
+	if u.OutputTokensDetails != nil {
+		out.ReasoningTokens = u.OutputTokensDetails.ReasoningTokens
 	}
 	// 本协议的 input_tokens 含缓存命中，而 IR 的 InputTokens 定义为
 	// 不含缓存的新鲜输入，故减去。上游数字不自洽时钳到 0，不出负数。
@@ -386,6 +394,10 @@ func renderUsage(u ir.Usage) wireUsage {
 	if u.CacheReadTokens > 0 {
 		out.InputTokensDetails = &wireInputDetails{CachedTokens: u.CacheReadTokens}
 	}
+	// 本协议表达得了推理维度，如实写出，让客户端看得见推理占比。
+	if u.ReasoningTokens > 0 {
+		out.OutputTokensDetails = &wireOutputDetails{ReasoningTokens: u.ReasoningTokens}
+	}
 	return out
 }
 
@@ -396,11 +408,13 @@ func stopReasonFor(r *wireResponse) ir.StopReason {
 	if r == nil {
 		return ""
 	}
-	if r.IncompleteDetails != nil {
+	if r.IncompleteDetails != nil && r.IncompleteDetails.Reason != "" {
 		switch r.IncompleteDetails.Reason {
 		case "max_output_tokens":
 			return ir.StopMaxTokens
-		case "content_filter":
+		default:
+			// 上游已明说这次没完成，未识别的原因按安全侧兜底。
+			// 落到下面的分支会被判成正常结束，客户端就不知道内容是残的。
 			return ir.StopContentFilter
 		}
 	}
@@ -416,13 +430,23 @@ func stopReasonFor(r *wireResponse) ir.StopReason {
 }
 
 // renderStatus 是反向映射：出站为客户端合成 response 对象时用。
+//
+// 本协议没有独立的终止原因字段，工具调用由 output 里的 function_call 条目
+// 表达，所以 tool_use 必须回 completed——标成 incomplete 会让客户端
+// 以为回答被截断而不去执行工具，整个工具回合就断在这里。
+//
+// stop_sequence 在本协议里无对应取值，completed 是最接近的表达：
+// 命中停止序列确实是一次正常收尾，只是「因何而停」这一位表达不出来。
 func renderStatus(s ir.StopReason) (status string, incomplete *wireIncomplete) {
 	switch s {
 	case ir.StopMaxTokens:
 		return "incomplete", &wireIncomplete{Reason: "max_output_tokens"}
 	case ir.StopContentFilter:
 		return "incomplete", &wireIncomplete{Reason: "content_filter"}
-	default:
+	case ir.StopEndTurn, ir.StopToolUse, ir.StopStopSequence, "":
 		return "completed", nil
+	default:
+		// 认不出的 IR 取值不按正常结束报，理由同各 convert 的 default 分支。
+		return "incomplete", &wireIncomplete{Reason: "content_filter"}
 	}
 }

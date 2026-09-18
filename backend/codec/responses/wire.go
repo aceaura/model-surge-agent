@@ -26,6 +26,13 @@ type wireRequest struct {
 	// 让上游留存会在多目标间产生互相看不见的分叉状态。
 	Store *bool  `json:"store,omitempty"`
 	User  string `json:"user,omitempty"`
+
+	// 以下三个字段把对话状态托管在上游那一侧，本服务表达不了：请求会被
+	// 分发到任意一个目标账号，那里没有这条 id 指向的历史。收下再忽略等于
+	// 悄悄丢掉客户端以为已经带上的上下文，只能显式拒收。
+	PreviousResponseID string          `json:"previous_response_id,omitempty"`
+	Conversation       json.RawMessage `json:"conversation,omitempty"`
+	Prompt             json.RawMessage `json:"prompt,omitempty"`
 }
 
 type wireTool struct {
@@ -78,6 +85,17 @@ type wirePart struct {
 	ImageURL string `json:"image_url,omitempty"`
 	// Refusal 是安全拒答文本，作为普通文本处理。
 	Refusal string `json:"refusal,omitempty"`
+	// InputAudio 的 format 是裸格式名（"wav"、"mp3"）而非完整 media type。
+	InputAudio *wireInputAudio `json:"input_audio,omitempty"`
+	// input_file 的三个字段是扁平的，不像音频那样嵌一层。
+	Filename string `json:"filename,omitempty"`
+	FileData string `json:"file_data,omitempty"`
+	FileID   string `json:"file_id,omitempty"`
+}
+
+type wireInputAudio struct {
+	Data   string `json:"data"`
+	Format string `json:"format"`
 }
 
 // wireResponse 是 response 对象，出现在非流式响应与流式的 response.* 帧里。
@@ -98,14 +116,21 @@ type wireIncomplete struct {
 }
 
 type wireUsage struct {
-	InputTokens        int64             `json:"input_tokens,omitempty"`
-	OutputTokens       int64             `json:"output_tokens,omitempty"`
-	TotalTokens        int64             `json:"total_tokens,omitempty"`
-	InputTokensDetails *wireInputDetails `json:"input_tokens_details,omitempty"`
+	InputTokens         int64              `json:"input_tokens,omitempty"`
+	OutputTokens        int64              `json:"output_tokens,omitempty"`
+	TotalTokens         int64              `json:"total_tokens,omitempty"`
+	InputTokensDetails  *wireInputDetails  `json:"input_tokens_details,omitempty"`
+	OutputTokensDetails *wireOutputDetails `json:"output_tokens_details,omitempty"`
 }
 
 type wireInputDetails struct {
 	CachedTokens int64 `json:"cached_tokens,omitempty"`
+}
+
+// wireOutputDetails 的 reasoning_tokens 已含在 output_tokens 内，
+// 单列出来是为了看清推理占了多少。
+type wireOutputDetails struct {
+	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`
 }
 
 type wireError struct {
@@ -150,6 +175,8 @@ const (
 const (
 	partInputText   = "input_text"
 	partInputImage  = "input_image"
+	partInputAudio  = "input_audio"
+	partInputFile   = "input_file"
 	partOutputText  = "output_text"
 	partRefusal     = "refusal"
 	partSummaryText = "summary_text"

@@ -23,11 +23,13 @@ CREATE TABLE IF NOT EXISTS request_log (
   first_token_ms    INT NOT NULL DEFAULT 0,
   error_code        TEXT NOT NULL DEFAULT '',
   error_message     TEXT NOT NULL DEFAULT '',
-  sanitized         JSONB NOT NULL DEFAULT '[]'
+  sanitized         JSONB NOT NULL DEFAULT '[]',
+  lossy             JSONB NOT NULL DEFAULT '[]'
 );
 
--- 给先于 sanitized 列建起的旧表补列。
+-- 给先于这两列建起的旧表补列。
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS sanitized JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS lossy JSONB NOT NULL DEFAULT '[]';
 
 CREATE INDEX IF NOT EXISTS request_log_at_idx ON request_log(at DESC);
 CREATE INDEX IF NOT EXISTS request_log_model_idx ON request_log(model_id, at DESC);

@@ -52,7 +52,7 @@ func TestEstimateRequestCoversAllTextSources(t *testing.T) {
 func TestEstimateIgnoresImagePayloads(t *testing.T) {
 	r := &Request{Messages: []Message{{
 		Role:    RoleUser,
-		Content: []Block{{Type: BlockImage, Image: &Image{Data: string(make([]byte, 4096))}}},
+		Content: []Block{{Type: BlockImage, Media: &Media{Data: string(make([]byte, 4096))}}},
 	}}}
 	if got := EstimateRequest(r); got != 0 {
 		t.Errorf("estimate = %d, image bytes must not inflate the count", got)

@@ -65,7 +65,7 @@ func TestDecodeRequestCarriesEveryField(t *testing.T) {
 	if len(req.Messages) != 3 {
 		t.Fatalf("messages = %d", len(req.Messages))
 	}
-	if img := req.Messages[0].Content[1].Image; img == nil || img.MediaType != "image/png" || img.Data != "AAAA" {
+	if img := req.Messages[0].Content[1].Media; img == nil || img.MediaType != "image/png" || img.Data != "AAAA" {
 		t.Errorf("image lost: %+v", req.Messages[0].Content[1])
 	}
 	th := req.Messages[1].Content[0].Thinking

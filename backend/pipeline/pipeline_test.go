@@ -3,6 +3,7 @@ package pipeline_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -376,6 +377,65 @@ func TestSanitizeDiagnosticsLandInTheRecord(t *testing.T) {
 	}
 }
 
+// 目标协议承不住的字段要记进 Lossy，且不能混进 Sanitized：
+// 请求本身合法，问题在路由选到了表达不了它的目标。
+func TestLossyRecordsWhatTheTargetCannotExpress(t *testing.T) {
+	up := &fakeUpstream{handler: func(_ int, w http.ResponseWriter) {
+		writeStream(w, okStream)
+	}}
+	url := up.start(t)
+	f := newFixture(t, relaymock.Step{Target: target(url, "kimi-1/k3")})
+
+	in, ok := codec.Inbound(codec.ProtocolAnthropic)
+	if !ok {
+		t.Fatal("anthropic inbound codec not registered")
+	}
+	// document 容器里装音频：合法的客户端请求，但 Anthropic 不收这个类型。
+	body := `{"model":"kimi-k3","max_tokens":1024,"stream":true,"messages":[
+	  {"role":"user","content":[
+	    {"type":"text","text":"transcribe this"},
+	    {"type":"document","source":{"type":"base64","media_type":"audio/wav","data":"UklGRg=="}}]}]}`
+	req, err := in.DecodeRequest([]byte(body))
+	if err != nil {
+		t.Fatalf("DecodeRequest: %v", err)
+	}
+	f.p.Serve(context.Background(), httptest.NewRecorder(), pipeline.Call{
+		RequestID: "req-1",
+		Protocol:  codec.ProtocolAnthropic,
+		Inbound:   in,
+		Request:   req,
+		UserModel: "kimi-k3",
+		ClientKey: "ck-1",
+		Stream:    true,
+	})
+
+	rec := f.col.record(t)
+	if len(rec.Lossy) == 0 {
+		t.Fatal("want a lossy diagnostic for the unsupported media type")
+	}
+	if !strings.Contains(strings.Join(rec.Lossy, "; "), "audio") {
+		t.Errorf("diagnostics must name the dropped block type: %v", rec.Lossy)
+	}
+	if len(rec.Sanitized) != 0 {
+		t.Errorf("a legal request must not be reported as sanitized: %v", rec.Sanitized)
+	}
+}
+
+// 无损转换不产出 Lossy 说明。
+func TestLossyIsEmptyForLosslessConversion(t *testing.T) {
+	up := &fakeUpstream{handler: func(_ int, w http.ResponseWriter) {
+		writeStream(w, okStream)
+	}}
+	url := up.start(t)
+	f := newFixture(t, relaymock.Step{Target: target(url, "kimi-1/k3")})
+
+	f.p.Serve(context.Background(), httptest.NewRecorder(), call(t, true))
+
+	if got := f.col.record(t).Lossy; len(got) != 0 {
+		t.Fatalf("lossless conversion must produce no diagnostics, got %v", got)
+	}
+}
+
 // 合法请求不被改动，也不产出诊断。
 func TestSanitizeLeavesHealthyRequestsUnreported(t *testing.T) {
 	up := &fakeUpstream{handler: func(_ int, w http.ResponseWriter) {
@@ -642,11 +702,10 @@ data: {"type":"error","error":{"type":"api_error","message":"upstream exploded"}
 	if !strings.Contains(out, "upstream exploded") {
 		t.Errorf("the error must appear inside the stream: %s", out)
 	}
-	// 未闭合的块必须补齐，否则客户端一直等。
-	for _, want := range []string{"content_block_stop", "message_stop"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("stream must be closed out with %s: %s", want, out)
-		}
+	// 错误事件本身就是本协议的终止形态。再补 message_stop 会让客户端
+	// 把这轮当正常结束，把残缺内容存进历史。
+	if strings.Contains(out, "message_stop") {
+		t.Errorf("an error-terminated stream must not carry a normal terminator: %s", out)
 	}
 	if up.calls() != 1 {
 		t.Errorf("upstream calls = %d, must not swap targets after commit", up.calls())
@@ -680,6 +739,11 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
 	}
 	if !strings.Contains(out, "message_stop") {
 		t.Errorf("a truncated stream must still be terminated: %s", out)
+	}
+	// 半句文本是可接受的截断，但终止原因必须说成 max_tokens：
+	// 报 end_turn 等于告诉客户端这段话说完了，它就不会去续写。
+	if !strings.Contains(out, `"stop_reason":"max_tokens"`) {
+		t.Errorf("a truncated text stream must report max_tokens: %s", out)
 	}
 }
 
@@ -727,8 +791,9 @@ func TestTruncatedToolInputSwapsTargetWhenNotStreaming(t *testing.T) {
 	}
 }
 
-// 流式客户端已经收到内容、状态码已定：只能记下事实并完整终止。
-func TestTruncatedToolInputIsRecordedWhenStreaming(t *testing.T) {
+// 流式客户端已经收到内容、状态码已定：只能用流内错误收尾。
+// 补一个 message_stop 会把残缺的工具调用伪装成完整回答，客户端会存进历史。
+func TestTruncatedToolInputEndsStreamWithError(t *testing.T) {
 	up := &fakeUpstream{handler: func(_ int, w http.ResponseWriter) {
 		writeStream(w, truncatedToolStream)
 	}}
@@ -738,14 +803,80 @@ func TestTruncatedToolInputIsRecordedWhenStreaming(t *testing.T) {
 	w := httptest.NewRecorder()
 	f.p.Serve(context.Background(), w, call(t, true))
 
-	if !strings.Contains(w.Body.String(), "message_stop") {
-		t.Errorf("the client must still get a complete stream: %s", w.Body)
+	body := w.Body.String()
+	if !strings.Contains(body, "event: error") {
+		t.Errorf("the stream must terminate with an error event: %s", body)
 	}
-	if got := f.col.outcomes(); len(got) != 1 || got[0] != relayclient.OutcomeNormal {
-		t.Errorf("outcomes = %v, a committed stream cannot be retried", got)
+	if strings.Contains(body, "message_stop") {
+		t.Errorf("a normal terminator would present the truncation as success: %s", body)
 	}
-	if code := f.col.record(t).ErrorCode; code != "truncated_tool_input" {
+	if got := f.col.outcomes(); len(got) != 1 || got[0] != relayclient.OutcomeAbnormal {
+		t.Errorf("outcomes = %v, want one abnormal", got)
+	}
+	if code := f.col.record(t).ErrorCode; code != "incomplete_stream" {
 		t.Errorf("error_code = %q, the truncation must be recorded", code)
+	}
+}
+
+// 客户端自己按了停止：上游一路正常，不该记成上游失败去累计冷却，
+// 且已经产生的用量要照实记账。
+func TestClientDisconnectIsAccountedAsNormal(t *testing.T) {
+	up := &fakeUpstream{handler: func(_ int, w http.ResponseWriter) {
+		writeStream(w, okStream)
+	}}
+	url := up.start(t)
+	f := newFixture(t, relaymock.Step{Target: target(url, "kimi-1/k3")})
+
+	w := &brokenWriter{ResponseRecorder: httptest.NewRecorder()}
+	f.p.Serve(context.Background(), w, call(t, true))
+
+	if got := f.col.outcomes(); len(got) != 1 || got[0] != relayclient.OutcomeNormal {
+		t.Fatalf("outcomes = %v, a client hang-up is not an upstream failure", got)
+	}
+	if got := f.col.record(t).Usage.InputTokens; got == 0 {
+		t.Errorf("input tokens = %d, the usage already received must be billed", got)
+	}
+}
+
+// brokenWriter 在第一次写入后开始报错，模拟客户端中途断开。
+type brokenWriter struct {
+	*httptest.ResponseRecorder
+	writes int
+}
+
+func (w *brokenWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes > 1 {
+		return 0, errors.New("connection reset by peer")
+	}
+	return w.ResponseRecorder.Write(p)
+}
+
+// HTTP 200 却一个事件都没解出来：上游在写 body 之前就断了。
+// 这是截断而非空回答，一个字节都还没写给客户端，可以换目标。
+func TestEmptyBodyOnHTTP200SwapsTarget(t *testing.T) {
+	up := &fakeUpstream{handler: func(n int, w http.ResponseWriter) {
+		if n == 0 {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		writeStream(w, okStream)
+	}}
+	url := up.start(t)
+	f := newFixture(t,
+		relaymock.Step{Target: target(url, "kimi-1/k3")},
+		relaymock.Step{Target: target(url, "ark-1/ds")},
+	)
+
+	w := httptest.NewRecorder()
+	f.p.Serve(context.Background(), w, call(t, true))
+
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "hello") {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body)
+	}
+	if got := f.col.outcomes(); len(got) != 2 || got[0] != relayclient.OutcomeRetrying {
+		t.Errorf("outcomes = %v, an empty 200 must be retried", got)
 	}
 }
 

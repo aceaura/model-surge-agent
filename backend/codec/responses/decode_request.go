@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aceaura/model-surge-agent/backend/codec"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
@@ -16,6 +17,10 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	}
 	if w.Model == "" {
 		return nil, badRequest("model is required")
+	}
+	if stateful := statefulFields(w); len(stateful) > 0 {
+		return nil, badRequest("server-side conversation state is not supported: " +
+			strings.Join(stateful, ", ") + "; send the full conversation in input")
 	}
 
 	out := &ir.Request{
@@ -214,7 +219,28 @@ func decodeContent(raw json.RawMessage) ([]ir.Block, error) {
 			if p.ImageURL == "" {
 				return nil, fmt.Errorf("input_image part needs an image_url")
 			}
-			out = append(out, ir.Block{Type: ir.BlockImage, Image: decodeImageURL(p.ImageURL)})
+			out = append(out, ir.Block{Type: ir.BlockImage, Media: decodeImageURL(p.ImageURL)})
+		case partInputAudio:
+			if p.InputAudio == nil {
+				return nil, fmt.Errorf("input_audio part needs a payload")
+			}
+			out = append(out, ir.Block{Type: ir.BlockAudio, Media: &ir.Media{
+				MediaType: audioMediaType(p.InputAudio.Format),
+				Data:      p.InputAudio.Data,
+			}})
+		case partInputFile:
+			media := &ir.Media{Name: p.Filename}
+			if p.FileData != "" {
+				if got := decodeImageURL(p.FileData); got.Data != "" {
+					media.MediaType, media.Data = got.MediaType, got.Data
+				} else {
+					media.URL = p.FileData
+				}
+			} else {
+				// file_id 指向上游已存的文件，本服务不解引用，原样当 URL 带过去。
+				media.URL = p.FileID
+			}
+			out = append(out, ir.Block{Type: codec.MediaKindFor(codec.SniffMediaType(media)), Media: media})
 		case partSummaryText:
 			out = append(out, ir.Block{
 				Type:     ir.BlockThinking,
@@ -227,22 +253,37 @@ func decodeContent(raw json.RawMessage) ([]ir.Block, error) {
 	return out, nil
 }
 
+// audioMediaType 把本协议的裸格式名补成完整 media type。
+// 未知格式仍加 audio/ 前缀：具体子类型不认得，但「这是音频」这个事实要保住。
+func audioMediaType(format string) string {
+	switch format {
+	case "":
+		return ""
+	case "wav":
+		return "audio/wav"
+	case "mp3":
+		return "audio/mpeg"
+	default:
+		return "audio/" + format
+	}
+}
+
 // decodeImageURL 拆 data URI。本协议用单个字符串同时表达内联 base64
 // 与远程链接，IR 分开存，因为 Anthropic 与 Gemini 都要求分开给出。
-func decodeImageURL(url string) *ir.Image {
+func decodeImageURL(url string) *ir.Media {
 	rest, found := strings.CutPrefix(url, "data:")
 	if !found {
-		return &ir.Image{URL: url}
+		return &ir.Media{URL: url}
 	}
 	head, payload, found := strings.Cut(rest, ",")
 	if !found {
-		return &ir.Image{URL: url}
+		return &ir.Media{URL: url}
 	}
 	media, encoding, found := strings.Cut(head, ";")
 	if !found || encoding != "base64" {
-		return &ir.Image{URL: url}
+		return &ir.Media{URL: url}
 	}
-	return &ir.Image{MediaType: media, Data: payload}
+	return &ir.Media{MediaType: media, Data: payload}
 }
 
 func decodeToolChoice(raw json.RawMessage) (*ir.ToolChoice, error) {
@@ -277,4 +318,28 @@ func decodeToolChoice(raw json.RawMessage) (*ir.ToolChoice, error) {
 
 func badRequest(msg string) error {
 	return ir.NewError(ir.ErrInvalidRequest, 400, "invalid_request_error", msg)
+}
+
+// statefulFields 列出请求里命中的上游托管状态字段。
+//
+// 全部列出而不是命中第一个就返回：客户端往往同时带了两三个，一次只报一个
+// 会让它改一处再撞一次，白等一个来回。
+func statefulFields(w wireRequest) []string {
+	var out []string
+	if w.PreviousResponseID != "" {
+		out = append(out, "previous_response_id")
+	}
+	if hasJSONValue(w.Conversation) {
+		out = append(out, "conversation")
+	}
+	if hasJSONValue(w.Prompt) {
+		out = append(out, "prompt")
+	}
+	return out
+}
+
+// hasJSONValue 判断一个原始字段是否真的带了值：显式的 null 等于没带。
+func hasJSONValue(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed != "" && trimmed != "null"
 }

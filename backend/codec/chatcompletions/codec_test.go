@@ -77,10 +77,10 @@ func TestDecodeSplitsDataURIIntoMediaAndPayload(t *testing.T) {
 		t.Fatalf("blocks = %d, want 2", len(blocks))
 	}
 	// 内联图片必须拆成 media_type 与 data：Anthropic 与 Gemini 都要求分开给出。
-	if got := blocks[0].Image; got.MediaType != "image/png" || got.Data != "QUJD" || got.URL != "" {
+	if got := blocks[0].Media; got.MediaType != "image/png" || got.Data != "QUJD" || got.URL != "" {
 		t.Errorf("inline image = %+v, want media/data split", got)
 	}
-	if got := blocks[1].Image; got.URL != "https://example.com/a.png" || got.Data != "" {
+	if got := blocks[1].Media; got.URL != "https://example.com/a.png" || got.Data != "" {
 		t.Errorf("remote image = %+v, want url kept as-is", got)
 	}
 }

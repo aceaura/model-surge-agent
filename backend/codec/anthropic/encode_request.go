@@ -3,7 +3,9 @@ package anthropic
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
+	"github.com/aceaura/model-surge-agent/backend/codec"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
@@ -131,13 +133,20 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 	case ir.BlockText:
 		out.Type = blockText
 		out.Text = b.Text
-	case ir.BlockImage:
-		if b.Image == nil {
-			return out, false, fmt.Errorf("image block without payload")
+	case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
+		if b.Media == nil {
+			return out, false, fmt.Errorf("%s block without payload", b.Type)
 		}
-		out.Type = blockImage
-		out.Source = &wireSource{MediaType: b.Image.MediaType, Data: b.Image.Data, URL: b.Image.URL}
-		if b.Image.URL != "" {
+		media := codec.SniffMediaType(b.Media)
+		container, ok := anthropicMediaContainer(media)
+		if !ok {
+			// 本协议只读图片与 PDF；其余附件降级为文本，
+			// 让模型知道这里本来有个文件而不是整轮请求被拒。
+			return encodeBlock(codec.DowngradeMedia(b))
+		}
+		out.Type = container
+		out.Source = &wireSource{MediaType: media, Data: b.Media.Data, URL: b.Media.URL}
+		if b.Media.URL != "" {
 			out.Source.Type = "url"
 		} else {
 			out.Source.Type = "base64"
@@ -169,20 +178,38 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 		out.Content = content
 		out.IsError = b.ToolResult.IsError
 	case ir.BlockThinking:
-		if b.Thinking == nil {
+		// Redacted 块的载荷在解码期就已舍弃，编出一个空 thinking 块会被上游拒收。
+		if b.Thinking == nil || b.Thinking.Redacted {
 			return out, false, nil
 		}
 		out.Type = blockThinking
 		out.Thinking = b.Thinking.Text
 		// 签名只在同族协议间有效：别家协议的签名发给 Anthropic 会被拒，
-		// 丢掉签名后该块作为纯文本推理仍可被接受。
-		if b.Thinking.SignatureFrom == Name {
+		// 丢掉签名后该块作为纯文本推理仍可被接受。判定与有损诊断共用一处出处。
+		if !codec.ForeignSignature(b.Thinking, Name) {
 			out.Signature = b.Thinking.Signature
 		}
 	default:
 		return out, false, fmt.Errorf("cannot encode block type %q", b.Type)
 	}
 	return out, true, nil
+}
+
+// anthropicMediaContainer 给出 media type 在本协议里的承载块名。
+// 本协议只读图片与 PDF，其余返回 ok=false 交由调用方降级。
+func anthropicMediaContainer(media string) (string, bool) {
+	// 白名单判定与有损诊断共用 Caps，避免两处漂移。
+	if !(outboundCodec{}.Caps().AcceptsMedia(media)) {
+		return "", false
+	}
+	switch {
+	case strings.HasPrefix(media, "image/"):
+		return blockImage, true
+	case media == "application/pdf":
+		return blockDocument, true
+	default:
+		return "", false
+	}
 }
 
 func encodeToolChoice(tc *ir.ToolChoice) *wireToolChoice {

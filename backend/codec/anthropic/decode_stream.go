@@ -65,9 +65,10 @@ func (d *streamDecoder) Feed(event, data string) ([]ir.Event, error) {
 				return nil, ir.NewError(ir.ErrUpstream, 0, "",
 					fmt.Sprintf("undecodable content block: %v", err))
 			}
-			if !ok {
+			if !ok || isRedactedThinking(b) {
 				// redacted_thinking：整块丢弃，后续该 index 的 delta 也就无处落地，
 				// 聚合器会按 delta 类型补块，内容照样保留为普通推理文本。
+				// 请求侧留标记是为了报有损，响应侧没有下游要看它。
 				return nil, nil
 			}
 			block = b
@@ -162,19 +163,26 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 			return nil, ir.NewError(ir.ErrUpstream, 0, "",
 				fmt.Sprintf("undecodable response block: %v", err))
 		}
-		if ok {
+		if ok && !isRedactedThinking(block) {
 			out.Content = append(out.Content, block)
 		}
 	}
 	return out, nil
 }
 
+// isRedactedThinking 认出解码期留下的加密推理标记。
+// 请求侧留着它是为了报有损，响应侧一律丢：客户端拿到一个空推理块没有用处。
+func isRedactedThinking(b ir.Block) bool {
+	return b.Type == ir.BlockThinking && b.Thinking != nil && b.Thinking.Redacted
+}
+
 // DecodeError 把上游错误响应归一成 ir.Error。
 func DecodeError(status int, body []byte) *ir.Error {
 	var env wireErrorEnvelope
 	if err := json.Unmarshal(body, &env); err != nil || env.Error.Message == "" {
-		// 上游返回了非预期格式（网关 HTML 页面之类），按状态码归类。
-		return ir.NewError(codec.KindForStatus(status, ""), status, "", codec.StatusMessage(status, body))
+		// 上游没按本协议的错误结构回（网关 HTML、兼容层自创字段名之类）：
+		// 尽力从任意形状里挖消息，挖不到才回落状态码描述。
+		return codec.FallbackError(status, body)
 	}
 	return convertError(status, &env.Error)
 }
@@ -183,7 +191,10 @@ func convertError(status int, e *wireError) *ir.Error {
 	if e == nil {
 		return ir.NewError(codec.KindForStatus(status, ""), status, "", "upstream error without detail")
 	}
-	return ir.NewError(codec.KindForStatus(status, e.Message), status, e.Type, e.Message)
+	// 消息位上可能是被字符串化的下游错误体，取出里面的真消息再归类：
+	// 上下文超限的判定要看消息文本，读到一串转义引号就判不出来了。
+	msg := codec.RefineMessage(e.Message)
+	return ir.NewError(codec.KindFor(status, e.Type, msg), status, e.Type, msg)
 }
 
 func convertUsage(u wireUsage) ir.Usage {
@@ -207,8 +218,16 @@ func convertStopReason(s string) ir.StopReason {
 		return ir.StopToolUse
 	case "refusal":
 		return ir.StopContentFilter
-	default:
+	case "pause_turn":
+		// 该状态表示回合可以续跑，语义上等同于「没说完」。
+		return ir.StopMaxTokens
+	case "":
+		// 上游没给：留空由聚合层兜底，不能当成被拦截。
 		return ""
+	default:
+		// 未识别的取值按安全侧兜底：把被拦截的回答当正常结束，
+		// 客户端会照着不完整的内容继续往下走。
+		return ir.StopContentFilter
 	}
 }
 

@@ -18,6 +18,9 @@ type streamEncoder struct {
 	model   string
 	created int64
 	stopped bool
+	// errored 表示流已用错误帧收尾。此后不再发 finish_reason/usage/[DONE]，
+	// 也丢弃迟到的增量：那些帧会让客户端把残缺回答当成正常结束存下来。
+	errored bool
 	// blockKind 记录每个块索引的类型，delta 到来时据此决定落点。
 	blockKind map[int]ir.BlockType
 	// toolIndex 把块索引映射成连续的 tool_calls 序号。
@@ -42,6 +45,9 @@ func newStreamEncoder() *streamEncoder {
 }
 
 func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
+	if e.errored {
+		return nil, nil
+	}
 	switch ev.Type {
 	case ir.EvMessageStart:
 		e.id = ev.MessageID
@@ -119,6 +125,7 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		return nil, nil
 
 	case ir.EvError:
+		e.errored = true
 		return RenderStreamError(ev.Err), nil
 
 	default:
@@ -130,7 +137,8 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 // usage 单独成帧是本协议 stream_options.include_usage 的约定形态：
 // 那一帧的 choices 为空数组。
 func (e *streamEncoder) finish() ([][]byte, error) {
-	if e.stopped {
+	// 错误帧已自带 [DONE]，这里再发一套会让客户端读到两个终止。
+	if e.stopped || e.errored {
 		return nil, nil
 	}
 	e.stopped = true

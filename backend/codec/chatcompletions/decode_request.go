@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aceaura/model-surge-agent/backend/codec"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
@@ -175,7 +176,31 @@ func decodeContent(raw json.RawMessage) ([]ir.Block, error) {
 			if p.ImageURL == nil {
 				return nil, fmt.Errorf("image_url part needs a url")
 			}
-			out = append(out, ir.Block{Type: ir.BlockImage, Image: decodeImageURL(p.ImageURL.URL)})
+			out = append(out, ir.Block{Type: ir.BlockImage, Media: decodeImageURL(p.ImageURL.URL)})
+		case partInputAudio:
+			if p.InputAudio == nil {
+				return nil, fmt.Errorf("input_audio part needs a payload")
+			}
+			out = append(out, ir.Block{Type: ir.BlockAudio, Media: &ir.Media{
+				MediaType: audioMediaType(p.InputAudio.Format),
+				Data:      p.InputAudio.Data,
+			}})
+		case partFile:
+			if p.File == nil {
+				return nil, fmt.Errorf("file part needs a payload")
+			}
+			media := &ir.Media{Name: p.File.Filename}
+			if p.File.FileData != "" {
+				if t, data, ok := splitDataURI(p.File.FileData); ok {
+					media.MediaType, media.Data = t, data
+				} else {
+					media.URL = p.File.FileData
+				}
+			} else {
+				// file_id 指向上游已存的文件，本服务不解引用，原样当 URL 带过去。
+				media.URL = p.File.FileID
+			}
+			out = append(out, ir.Block{Type: codec.MediaKindFor(codec.SniffMediaType(media)), Media: media})
 		default:
 			return nil, fmt.Errorf("unknown content part type %q", p.Type)
 		}
@@ -183,14 +208,29 @@ func decodeContent(raw json.RawMessage) ([]ir.Block, error) {
 	return out, nil
 }
 
+// audioMediaType 把本协议的裸格式名补成完整 media type。
+// 未知格式仍加 audio/ 前缀：具体子类型不认得，但「这是音频」这个事实要保住。
+func audioMediaType(format string) string {
+	switch format {
+	case "":
+		return ""
+	case "wav":
+		return "audio/wav"
+	case "mp3":
+		return "audio/mpeg"
+	default:
+		return "audio/" + format
+	}
+}
+
 // decodeImageURL 拆 data URI。本协议用单个 url 字段同时表达内联 base64
 // 与远程链接，而 IR 分开存，因为 Anthropic 与 Gemini 都要求分开给出。
-func decodeImageURL(url string) *ir.Image {
+func decodeImageURL(url string) *ir.Media {
 	media, data, ok := splitDataURI(url)
 	if !ok {
-		return &ir.Image{URL: url}
+		return &ir.Media{URL: url}
 	}
-	return &ir.Image{MediaType: media, Data: data}
+	return &ir.Media{MediaType: media, Data: data}
 }
 
 func splitDataURI(url string) (media, data string, ok bool) {

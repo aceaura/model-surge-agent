@@ -57,6 +57,12 @@ type Record struct {
 	// Sanitized 是 ir.Sanitize 对本次请求做出的修复说明；
 	// 为空表示请求本身合法，未被改动。
 	Sanitized []string
+	// Lossy 是出站编码因目标协议表达不了而丢弃的字段说明。
+	//
+	// 与 Sanitized 刻意分列两个字段：前者说「客户端发来的请求畸形，我修了」，
+	// 指向客户端 bug；后者说「请求本身合法，是这个目标承不住」，指向路由选型。
+	// 合成一列就无法据此判断该改客户端还是该换目标。
+	Lossy []string
 }
 
 type Options struct {
@@ -207,12 +213,15 @@ func (p *Pipeline) attempt(ctx context.Context, w http.ResponseWriter, call Call
 	// native model 在编码前替换：出站请求体里必须是上游认识的名字。
 	req.Model = target.NativeModel
 
-	body, err := outbound.EncodeRequest(req)
+	body, lossy, err := encodeWithLossy(outbound, req)
 	if err != nil {
 		return relayclient.OutcomeInvalidModel, attemptResult{
 			err: retryableErr(asIRError(err, ir.ErrInternal)),
 		}
 	}
+	// 换目标重试时覆盖而非累加：诊断描述的是最终发出去的那次编码，
+	// 混入上一个目标的丢弃项会把排查引向一个没被采用的路径。
+	rec.Lossy = lossy
 	// 参数覆盖作用在编码之后的 wire body 上，因此运维配的是**出站协议的
 	// 原生字段名**，出站协议特有的嵌套结构天然可表达。
 	body, err = paramover.Apply(body, target.Defaults, target.Overrides)
@@ -326,6 +335,16 @@ func dispatchError(err error) *ir.Error {
 	// 候选耗尽后重试也没用，不管 relay 怎么标。
 	out.Retryable = re.Retryable && !re.Exhausted()
 	return out
+}
+
+// encodeWithLossy 编码请求，并在出站 codec 支持时顺带取回有损说明。
+// 未实现该可选接口等价于「不丢任何字段」。
+func encodeWithLossy(outbound codec.OutboundCodec, req *ir.Request) ([]byte, []string, error) {
+	if le, ok := outbound.(codec.LossyEncoder); ok {
+		return le.EncodeRequestLossy(req)
+	}
+	body, err := outbound.EncodeRequest(req)
+	return body, nil, err
 }
 
 func asIRError(err error, fallback ir.ErrorKind) *ir.Error {

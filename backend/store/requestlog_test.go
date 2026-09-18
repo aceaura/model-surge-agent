@@ -36,6 +36,8 @@ func fullRecord() pipeline.Record {
 		FirstTokenMS:     320,
 		ErrorCode:        "",
 		ErrorMessage:     "",
+		Sanitized:        []string{"dropped an orphan tool_result"},
+		Lossy:            []string{"dropped top_k (chat_completions cannot express it: no top_k parameter)"},
 	}
 }
 
@@ -268,14 +270,17 @@ func TestRecordCarriesNoCredentialShapedFields(t *testing.T) {
 	}
 }
 
-// sameRecord 比较两条记录。tried_ids 单独用 slices.Equal 比，
+// sameRecord 比较两条记录。三个 JSONB 列单独用 slices.Equal 比，
 // 因为 nil 与空切片在这里语义相同（PG 存的是空数组）。
 func sameRecord(a, b pipeline.Record) bool {
-	// 两个 JSONB 列往返后是空切片而非 nil，DeepEqual 会把它与未设值判为不同。
-	if !slices.Equal(a.TriedIDs, b.TriedIDs) || !slices.Equal(a.Sanitized, b.Sanitized) {
+	// 这些列往返后是空切片而非 nil，DeepEqual 会把它与未设值判为不同。
+	if !slices.Equal(a.TriedIDs, b.TriedIDs) ||
+		!slices.Equal(a.Sanitized, b.Sanitized) ||
+		!slices.Equal(a.Lossy, b.Lossy) {
 		return false
 	}
 	a.TriedIDs, b.TriedIDs = nil, nil
 	a.Sanitized, b.Sanitized = nil, nil
+	a.Lossy, b.Lossy = nil, nil
 	return reflect.DeepEqual(a, b)
 }

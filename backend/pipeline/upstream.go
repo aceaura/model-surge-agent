@@ -100,7 +100,9 @@ func (u *upstream) read(ctx context.Context) <-chan frame {
 	out := make(chan frame, 8)
 	go func() {
 		defer close(out)
+		sawFrame := false
 		for u.scanner.Scan() {
+			sawFrame = true
 			f := u.scanner.Frame()
 			events, err := u.decoder.Feed(f.Event, f.Data)
 			if err != nil {
@@ -114,6 +116,13 @@ func (u *upstream) read(ctx context.Context) <-chan frame {
 		if err := u.scanner.Err(); err != nil {
 			send(ctx, out, frame{err: ir.NewError(ir.ErrUpstream, 0, "",
 				fmt.Sprintf("upstream stream broke: %v", err))})
+			return
+		}
+		if !sawFrame {
+			// HTTP 200 但 body 一帧都没有：上游在写内容之前就断了。
+			// 此时不能让解码器补终止事件——那会让上层以为目标已经响应而
+			// 锁定它，实际这是截断，还能换个目标重来。
+			send(ctx, out, frame{done: true})
 			return
 		}
 		// 上游没发终止事件时解码器补一个，下游才知道流结束了。

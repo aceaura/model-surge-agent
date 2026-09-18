@@ -142,7 +142,7 @@ func TestContextExceededDoesNotSwapTargets(t *testing.T) {
 
 func TestBrokenStreamAfterCommitStaysA200WithTheErrorInside(t *testing.T) {
 	// 首帧已解码出事件，200 与响应头都写出去了。此后换目标会让客户端看到
-	// 两段拼接的回答，改状态码更是不可能，所以只能把错误放进流里并闭合。
+	// 两段拼接的回答，改状态码更是不可能，所以只能把错误放进流里当终止。
 	h := newHarness(t, harnessOpts{
 		targets: []relayclient.Target{anthropicTarget("m-a"), anthropicTarget("m-b")},
 		replies: []reply{{sse: truncatedStream, abort: true}},
@@ -156,9 +156,9 @@ func TestBrokenStreamAfterCommitStaysA200WithTheErrorInside(t *testing.T) {
 	if !strings.Contains(body, "event: error") {
 		t.Errorf("stream must carry the error: %s", body)
 	}
-	// 缺终止帧客户端会一直等一个不会来的结束。
-	if !strings.Contains(body, "message_stop") {
-		t.Errorf("stream must be closed out: %s", body)
+	// error 事件即终止。补 message_stop 会让客户端把残缺回答当正常结束。
+	if strings.Contains(body, "message_stop") {
+		t.Errorf("an error-terminated stream must not carry a normal terminator: %s", body)
 	}
 	if n := len(h.relay.Dispatches()); n != 1 {
 		t.Errorf("dispatches = %d, want 1: committed 之后不该换目标", n)

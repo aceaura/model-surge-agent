@@ -19,19 +19,35 @@ const (
 type BlockType string
 
 const (
-	BlockText       BlockType = "text"
+	BlockText BlockType = "text"
+	// BlockImage / BlockAudio / BlockDocument / BlockFile 是四类媒体块，
+	// 共用 Block.Media 承载，Type 作判别位。BlockDocument 指模型能直读的
+	// 文档（PDF 等），BlockFile 是其余附件——多数协议只能把后者降级为文本。
 	BlockImage      BlockType = "image"
+	BlockAudio      BlockType = "audio"
+	BlockDocument   BlockType = "document"
+	BlockFile       BlockType = "file"
 	BlockToolUse    BlockType = "tool_use"
 	BlockToolResult BlockType = "tool_result"
 	BlockThinking   BlockType = "thinking"
 )
+
+// IsMedia 判断块是否由 Media 字段承载内容。
+func (t BlockType) IsMedia() bool {
+	switch t {
+	case BlockImage, BlockAudio, BlockDocument, BlockFile:
+		return true
+	default:
+		return false
+	}
+}
 
 // Block 用判别式 Type 而非 interface：IR 要能原样序列化进日志与测试黄金文件，
 // interface 反序列化需要自定义 UnmarshalJSON，得不偿失。
 type Block struct {
 	Type       BlockType   `json:"type"`
 	Text       string      `json:"text,omitempty"`
-	Image      *Image      `json:"image,omitempty"`
+	Media      *Media      `json:"media,omitempty"`
 	ToolUse    *ToolUse    `json:"tool_use,omitempty"`
 	ToolResult *ToolResult `json:"tool_result,omitempty"`
 	Thinking   *Thinking   `json:"thinking,omitempty"`
@@ -40,11 +56,17 @@ type Block struct {
 	CacheCtl string `json:"cache_ctl,omitempty"`
 }
 
-type Image struct {
-	// MediaType 形如 "image/png"。Data 是 base64，URL 与 Data 二者其一。
+// Media 承载四类媒体块的内容。用一个结构而非每类各开一个字段：
+// 四类的线上形态完全同形，分开只会多出四处 nil 检查。
+type Media struct {
+	// MediaType 形如 "image/png"、"audio/wav"、"application/pdf"。
+	// Data 是 base64，URL 与 Data 二者其一。
 	MediaType string `json:"media_type,omitempty"`
 	Data      string `json:"data,omitempty"`
 	URL       string `json:"url,omitempty"`
+	// Name 是附件文件名。只有部分协议表达得了，主要用于降级成文本时
+	// 让模型知道这里本来有个什么文件。
+	Name string `json:"name,omitempty"`
 }
 
 type ToolUse struct {
@@ -68,6 +90,10 @@ type Thinking struct {
 	Text          string `json:"text,omitempty"`
 	Signature     string `json:"signature,omitempty"`
 	SignatureFrom string `json:"signature_from,omitempty"`
+	// Redacted 标记载荷是不可解读的加密推理（Anthropic 的 redacted_thinking）。
+	// 这类块出站时一律丢弃，留标记只为让有损诊断报得出来——
+	// 解码时直接丢掉的话，IR 里就再没有痕迹可查。
+	Redacted bool `json:"redacted,omitempty"`
 }
 
 type Message struct {
@@ -186,9 +212,9 @@ func cloneBlocks(in []Block) []Block {
 	out := make([]Block, len(in))
 	for i, b := range in {
 		out[i] = b
-		if b.Image != nil {
-			v := *b.Image
-			out[i].Image = &v
+		if b.Media != nil {
+			v := *b.Media
+			out[i].Media = &v
 		}
 		if b.ToolUse != nil {
 			v := *b.ToolUse

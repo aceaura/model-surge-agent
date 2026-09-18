@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/aceaura/model-surge-agent/backend/codec"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
@@ -108,16 +109,19 @@ func decodeBlock(b wireBlock) (ir.Block, bool, error) {
 	case blockText:
 		out.Type = ir.BlockText
 		out.Text = b.Text
-	case blockImage:
+	case blockImage, blockDocument:
 		if b.Source == nil {
-			return out, false, fmt.Errorf("image block needs a source")
+			return out, false, fmt.Errorf("%s block needs a source", b.Type)
 		}
-		out.Type = ir.BlockImage
-		out.Image = &ir.Image{
+		media := &ir.Media{
 			MediaType: b.Source.MediaType,
 			Data:      b.Source.Data,
 			URL:       b.Source.URL,
 		}
+		// 两个容器同形，块类型按 media type 判定而非容器名：
+		// document 容器里也可能装别的类型。
+		out.Type = codec.MediaKindFor(codec.SniffMediaType(media))
+		out.Media = media
 	case blockToolUse:
 		out.Type = ir.BlockToolUse
 		out.ToolUse = &ir.ToolUse{ID: b.ID, Name: b.Name, Input: string(b.Input)}
@@ -140,8 +144,11 @@ func decodeBlock(b wireBlock) (ir.Block, bool, error) {
 			SignatureFrom: Name,
 		}
 	case blockRedactedThinking:
-		// 载荷是加密的，本服务无法解读也无法转成其他协议，丢弃。
-		return out, false, nil
+		// 载荷是加密的，本服务无法解读也无法转给任何上游。这里不丢，
+		// 带标记进 IR，由出站编码丢弃并报一条有损说明——
+		// 解码期丢掉就再没有痕迹可查了。
+		out.Type = ir.BlockThinking
+		out.Thinking = &ir.Thinking{Redacted: true, SignatureFrom: Name}
 	default:
 		return out, false, fmt.Errorf("unknown block type %q", b.Type)
 	}

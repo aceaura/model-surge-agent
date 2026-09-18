@@ -280,7 +280,8 @@ func DecodeError(status int, body []byte) *ir.Error {
 	if err := json.Unmarshal(body, &env); err == nil && env.Error.Message != "" {
 		return convertError(status, &env.Error)
 	}
-	return ir.NewError(codec.KindForStatus(status, ""), status, "", codec.StatusMessage(status, body))
+	// 不是本协议的错误结构：尽力从任意形状里挖消息，挖不到才回落状态码描述。
+	return codec.FallbackError(status, body)
 }
 
 func convertError(status int, e *wireError) *ir.Error {
@@ -292,19 +293,21 @@ func convertError(status int, e *wireError) *ir.Error {
 	if status == 0 {
 		status = e.Code
 	}
-	// RESOURCE_EXHAUSTED 是本协议的限流状态名。它在 HTTP 层是 429，
-	// 但流内错误帧没有状态码，只能靠这个字符串识别。
-	if e.Status == "RESOURCE_EXHAUSTED" {
-		return ir.NewError(ir.ErrRateLimit, status, e.Status, e.Message)
-	}
-	return ir.NewError(codec.KindForStatus(status, e.Message), status, e.Status, e.Message)
+	// 消息位上可能是被字符串化的下游错误体，取出里面的真消息再归类：
+	// 上下文超限的判定要看消息文本，读到一串转义引号就判不出来了。
+	msg := codec.RefineMessage(e.Message)
+	// 状态串（RESOURCE_EXHAUSTED 之类）是流内错误帧唯一的分类依据：
+	// 那里没有 HTTP 状态码，不看它限流就会被归成目标故障去冷却。
+	return ir.NewError(codec.KindFor(status, e.Status, msg), status, e.Status, msg)
 }
 
 func convertUsage(u wireUsage) ir.Usage {
 	out := ir.Usage{
 		InputTokens: u.PromptTokenCount,
-		// 推理消耗不含在 candidatesTokenCount 里，但计费上属于输出。
+		// 推理消耗不含在 candidatesTokenCount 里，但计费上属于输出，
+		// 所以既并进输出总量，又单记一维——与 responses 口径一致。
 		OutputTokens:    u.CandidatesTokenCount + u.ThoughtsTokenCount,
+		ReasoningTokens: u.ThoughtsTokenCount,
 		CacheReadTokens: u.CachedContentTokens,
 	}
 	// promptTokenCount 含 cachedContentTokenCount（与 Chat Completions 的
@@ -325,7 +328,17 @@ func convertFinishReason(s string) ir.StopReason {
 		return ir.StopMaxTokens
 	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII":
 		return ir.StopContentFilter
-	default:
+	// 这四个都是「回答没能正常产出」：OTHER 是本协议的兜底拦截原因，
+	// MALFORMED_FUNCTION_CALL 是模型生成的工具调用不合法而被丢弃，
+	// LANGUAGE 与 IMAGE_SAFETY 是语言与图片两类内容策略。
+	case "OTHER", "MALFORMED_FUNCTION_CALL", "LANGUAGE", "IMAGE_SAFETY":
+		return ir.StopContentFilter
+	case "FINISH_REASON_UNSPECIFIED", "":
+		// 上游没给：留空由聚合层兜底，不能当成被拦截。
 		return ""
+	default:
+		// 未识别的取值按安全侧兜底：把被拦截的回答当正常结束，
+		// 客户端会照着不完整的内容继续往下走。
+		return ir.StopContentFilter
 	}
 }

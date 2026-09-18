@@ -41,6 +41,46 @@ func TestAggregateTextAndToolBlocks(t *testing.T) {
 	}
 }
 
+// 上游给了普通结束但内容里确有工具调用：终止原因必须改判，
+// 否则客户端不会去执行工具，整个回合悄悄断在这里。
+func TestToolUseBlockForcesToolUseStopReason(t *testing.T) {
+	a := &Aggregator{}
+	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{
+		Type: BlockToolUse, ToolUse: &ToolUse{ID: "tu_1", Name: "read"},
+	}})
+	a.Add(Event{Type: EvToolInput, Index: 0, Text: `{"path":"a.go"}`})
+	a.Add(Event{Type: EvMessageDelta, StopReason: StopEndTurn})
+
+	if got := a.Response().StopReason; got != StopToolUse {
+		t.Errorf("stop_reason = %q, want %q", got, StopToolUse)
+	}
+}
+
+// 被拦截的工具调用不该被执行，所以 content_filter 不改判。
+func TestContentFilterSurvivesToolUseBlocks(t *testing.T) {
+	a := &Aggregator{}
+	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{
+		Type: BlockToolUse, ToolUse: &ToolUse{ID: "tu_1", Name: "read"},
+	}})
+	a.Add(Event{Type: EvMessageDelta, StopReason: StopContentFilter})
+
+	if got := a.Response().StopReason; got != StopContentFilter {
+		t.Errorf("stop_reason = %q, want %q", got, StopContentFilter)
+	}
+}
+
+// 没有工具调用就不改判，免得纯文本回答被说成要执行工具。
+func TestStopReasonUntouchedWithoutToolUse(t *testing.T) {
+	a := &Aggregator{}
+	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{Type: BlockText}})
+	a.Add(Event{Type: EvTextDelta, Index: 0, Text: "hi"})
+	a.Add(Event{Type: EvMessageDelta, StopReason: StopEndTurn})
+
+	if got := a.Response().StopReason; got != StopEndTurn {
+		t.Errorf("stop_reason = %q, want %q", got, StopEndTurn)
+	}
+}
+
 func TestAggregateThinkingWithSignature(t *testing.T) {
 	a := &Aggregator{}
 	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{Type: BlockThinking}})
@@ -151,6 +191,62 @@ func TestIncompleteToolsFallsBackToToolName(t *testing.T) {
 	got := a.IncompleteTools()
 	if len(got) != 1 || got[0] != "read" {
 		t.Fatalf("IncompleteTools = %v, want [read]", got)
+	}
+}
+
+// 残缺工具入参属于不能补闭合的一类。
+func TestUnsafeToCloseCoversTruncatedToolInput(t *testing.T) {
+	a := &Aggregator{}
+	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{
+		Type: BlockToolUse, ToolUse: &ToolUse{ID: "tu_1", Name: "read"},
+	}})
+	a.Add(Event{Type: EvToolInput, Index: 0, Text: `{"path":`})
+	got := a.UnsafeToClose()
+	if len(got) != 1 || got[0] != "tu_1" {
+		t.Fatalf("UnsafeToClose = %v, want [tu_1]", got)
+	}
+}
+
+// 推理块还开着且没拿到签名：回传给上游会被判伪造而整轮拒收。
+func TestUnsafeToCloseCoversUnsignedOpenThinking(t *testing.T) {
+	a := &Aggregator{}
+	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{Type: BlockThinking}})
+	a.Add(Event{Type: EvThinkingDelta, Index: 0, Text: "half a thought"})
+	got := a.UnsafeToClose()
+	if len(got) != 1 || got[0] != "thinking block 0" {
+		t.Fatalf("UnsafeToClose = %v, want the open unsigned thinking block", got)
+	}
+}
+
+// 拿到签名就算说完了，即便上游漏发 block_stop。
+func TestUnsafeToCloseAcceptsSignedThinking(t *testing.T) {
+	a := &Aggregator{}
+	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{Type: BlockThinking}})
+	a.Add(Event{Type: EvThinkingDelta, Index: 0, Text: "a thought"})
+	a.Add(Event{Type: EvSigDelta, Index: 0, Text: "sig"})
+	if got := a.UnsafeToClose(); len(got) != 0 {
+		t.Fatalf("UnsafeToClose = %v, a signed block is complete", got)
+	}
+}
+
+// 收到 block_stop 就是正常闭合，不该因为缺签名被判成不安全。
+func TestUnsafeToCloseIgnoresClosedThinking(t *testing.T) {
+	a := &Aggregator{}
+	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{Type: BlockThinking}})
+	a.Add(Event{Type: EvThinkingDelta, Index: 0, Text: "a thought"})
+	a.Add(Event{Type: EvBlockStop, Index: 0})
+	if got := a.UnsafeToClose(); len(got) != 0 {
+		t.Fatalf("UnsafeToClose = %v, a closed block is complete", got)
+	}
+}
+
+// 未闭合的纯文本块是可接受的截断：半句话由 max_tokens 表达，不必报错。
+func TestUnsafeToCloseIgnoresOpenTextBlock(t *testing.T) {
+	a := &Aggregator{}
+	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{Type: BlockText}})
+	a.Add(Event{Type: EvTextDelta, Index: 0, Text: "half a sen"})
+	if got := a.UnsafeToClose(); len(got) != 0 {
+		t.Fatalf("UnsafeToClose = %v, a truncated sentence is acceptable", got)
 	}
 }
 
