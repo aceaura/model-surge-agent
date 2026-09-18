@@ -33,6 +33,9 @@ type streamDecoder struct {
 	byID map[string]*toolSlot
 	// callCounter 用于给没带 id 的调用合成一个。
 	callCounter int
+	// messageID 是上游这次响应的 id，作为合成 id 的 scope。
+	// 缺它则两轮的同名调用会拿到同一个合成 id，见 codec.SynthToolID。
+	messageID string
 	// notes 记录改写说明，走响应侧诊断通道。
 	notes []string
 
@@ -128,6 +131,7 @@ func (d *streamDecoder) ensureStarted(chunk wireResponse) []ir.Event {
 		return nil
 	}
 	d.started = true
+	d.messageID = chunk.ID
 	return []ir.Event{{Type: ir.EvMessageStart, MessageID: chunk.ID, Model: chunk.Model}}
 }
 
@@ -245,7 +249,7 @@ func (d *streamDecoder) announce(slot *toolSlot) []ir.Event {
 
 func (d *streamDecoder) synthCallID(name string) string {
 	d.callCounter++
-	return codec.SynthToolID(name, d.callCounter)
+	return codec.SynthToolID(d.messageID, name, d.callCounter)
 }
 
 // slot 取槽位对应的块索引，首次出现时同时产出 block_start。

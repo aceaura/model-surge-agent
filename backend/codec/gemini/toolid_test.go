@@ -15,7 +15,7 @@ import (
 // 省略是因为合成的 id 上游从未见过，发回去它有权拒绝或错配；
 // 保留是因为原生 id 能让调用标识原样穿过一轮，省掉下一轮的再次合成。
 func TestSynthToolIDIsOmittedButNativeIDSurvives(t *testing.T) {
-	synth := codec.SynthToolID("grep", 1)
+	synth := codec.SynthToolID("resp-1", "grep", 1)
 	const native = "call_native_42"
 
 	body, err := EncodeRequest(&ir.Request{
@@ -84,7 +84,7 @@ func TestOmittingSynthToolIDIsNotReportedAsLossy(t *testing.T) {
 		Model: "m",
 		Messages: []ir.Message{{Role: ir.RoleAssistant, Content: []ir.Block{
 			{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
-				ID: codec.SynthToolID("grep", 1), Name: "grep", Input: `{}`,
+				ID: codec.SynthToolID("resp-1", "grep", 1), Name: "grep", Input: `{}`,
 			}},
 		}}},
 	}

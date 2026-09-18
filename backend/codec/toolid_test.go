@@ -10,7 +10,7 @@ import (
 // 合成 id 必须能被判定回来：出站侧只拿到 id 文本，
 // 判不出来源就无从决定该不该省略。
 func TestSynthToolIDIsRecognizable(t *testing.T) {
-	id := codec.SynthToolID("grep", 1)
+	id := codec.SynthToolID("resp-1", "grep", 1)
 	if !codec.IsSynthToolID(id) {
 		t.Errorf("IsSynthToolID(%q) = false，合成 id 判不回来", id)
 	}
@@ -22,7 +22,7 @@ func TestSynthToolIDIsRecognizable(t *testing.T) {
 // name 缺席时仍要给出可判定的 id：上游先发 arguments 后发 name 时
 // 合成发生在 name 到达之前。
 func TestSynthToolIDWithoutName(t *testing.T) {
-	id := codec.SynthToolID("", 3)
+	id := codec.SynthToolID("resp-1", "", 3)
 	if !codec.IsSynthToolID(id) {
 		t.Errorf("IsSynthToolID(%q) = false", id)
 	}
@@ -36,7 +36,7 @@ func TestSynthToolIDWithoutName(t *testing.T) {
 func TestSynthToolIDIsUniquePerSeq(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 1; i <= 8; i++ {
-		id := codec.SynthToolID("grep", i)
+		id := codec.SynthToolID("resp-1", "grep", i)
 		if seen[id] {
 			t.Fatalf("序号 %d 产出重复 id %q", i, id)
 		}

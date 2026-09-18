@@ -97,7 +97,7 @@ func TestUpstreamIDIsNotMarkedSynth(t *testing.T) {
 // id 字段可选的协议（gemini）省略合成 id，交由上游按调用顺序消歧；
 // 必填的协议保留，因为省略会让上游彻底无法配对——比发一个陌生 id 更糟。
 func TestSynthIDOmissionMatrix(t *testing.T) {
-	synth := codec.SynthToolID("grep", 1)
+	synth := codec.SynthToolID("resp-1", "grep", 1)
 
 	for _, out := range outboundNames() {
 		oc, ok := codec.Outbound(out)

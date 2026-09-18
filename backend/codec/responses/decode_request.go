@@ -332,6 +332,9 @@ func statefulFields(w wireRequest) []string {
 	if hasJSONValue(w.Conversation) {
 		out = append(out, "conversation")
 	}
+	if hasJSONValue(w.ContextManagement) {
+		out = append(out, "context_management")
+	}
 	if hasJSONValue(w.Prompt) {
 		out = append(out, "prompt")
 	}

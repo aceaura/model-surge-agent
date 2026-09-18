@@ -333,7 +333,7 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 | `first_token_ms` | int | 首个上游帧解码成功的耗时（毫秒）；流式与非流式都记录；未收到任何帧即结束时为 0 |
 | `error_code` | string | 错误种类（成功时为空） |
 | `error_message` | string | 错误文本（可能含上游原文；成功时为空） |
-| `sanitized` | string[] | 对客户端请求所做的畸形修复说明，如补配对的 `tool_result`、合并连续同角色消息；为空或不出现表示请求本身合法。指向客户端 bug |
+| `sanitized` | string[] | 对客户端请求所做的畸形修复说明，如把孤儿 `tool_result` 降级为文本、丢弃无人应答的 `tool_use`；为空或不出现表示请求本身合法。指向客户端 bug |
 | `lossy` | string[] | 出站编码因目标协议表达不了而丢弃或改写的字段说明，形如 `dropped top_k (chat_completions cannot express it: ...)`；为空或不出现表示无损转换。指向路由选型 |
 
 #### 3.2.1 `sanitized` 的说明形态
@@ -347,6 +347,19 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 | `dropped a duplicate tool declaration named %q, kept the first` | 同名工具重复声明，保留首个 |
 
 改名会同步改写历史消息里对应的 `tool_use`，配对关系不受影响。
+
+工具调用与结果的配对治理同样记在这里：
+
+| 形态 | 触发条件 |
+| --- | --- |
+| `orphan tool_result %q demoted to text` | 结果找不到宣告它的 `tool_use`（上下文压缩删掉了调用却留下结果）。降级而非丢弃，因为结果里的内容仍是模型接下来要用的事实 |
+| `duplicate tool_result %q demoted to text` | 同一个 id 有多份结果（重连留下的重放），只留最后一份 |
+| `dropped unanswered tool_use %q` | 调用没有任何结果应答，上游会拒收这种悬空调用 |
+| `dropped %s message left empty by tool_use removal` | 上一条删空了整条消息 |
+| `reordered tool_result %q next to its tool_use` | 结果与调用的顺序不一致，上游按顺序绑回会让参数与结果对错 |
+| `duplicate tool_use id %q in history (results may be paired to the wrong call)` | 历史里出现同 id 的两次 `tool_use`。这通常意味着上游不给调用 id 且合成 id 未按响应区分，导致跨轮撞号；后果是前一轮的结果被当成重复结果降级，后一轮的结果绑到前一轮的调用上 |
+
+> 相邻的同角色消息**不是**畸形，本服务不合并它们。`user(tool_result)` 紧跟 `user(text)` 正是每一次工具回合的真实形态，合并会在每一轮都破坏上游的 prompt cache 前缀。
 
 #### 3.2.2 `lossy` 的说明形态
 
@@ -419,7 +432,7 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 
 #### 3.2.5 工具调用 id 的生命周期
 
-上游不给调用 id 时本服务会合成一个（另外三个协议都要 id 才能把工具结果回指到调用）。合成的 id 带 `msa_synth_` 前缀，作用是让出站侧仅凭 id 文本就能判断来源：
+上游不给调用 id 时本服务会合成一个（另外三个协议都要 id 才能把工具结果回指到调用）。合成 id 的形态是 `msa_synth_<响应标记>_<工具名>_<序号>`，例如 `msa_synth_3f9a1c_grep_1`。前缀的作用是让出站侧仅凭 id 文本就能判断来源：
 
 | 协议 | id 字段 | 合成 id 的处置 |
 | --- | --- | --- |
@@ -433,6 +446,15 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 **省略不记进 `lossy`**：这是恢复协议的原生形态而非削弱请求，而且 gemini 每个无 id 的调用都会触发，恒定出现的说明会把真正的有损信号淹掉。
 
 省略只发生在写请求体这一步，IR 内部的 id 保持完整——gemini 的 `functionResponse` 只有 name 没有 id，填 name 要靠一张以 id 为键的表，IR 里的 id 一清那张表就查不到了。
+
+**响应标记保证跨轮不撞号。** 标记是上游这次响应的 id（Chat Completions 的 `id`、Gemini 的 `responseId`）取 sha256 前 6 位十六进制，序号是该次响应内的调用序号。两者都必须参与：
+
+- 只有序号时，第二轮的同名调用会拿到与第一轮一样的 id。客户端把两轮都回传进历史，于是历史里出现同 id 的两次 `tool_use`——配对治理据此把前一轮的结果当成重复结果降级成文本，把后一轮的结果绑到前一轮的调用上，参数与结果就对错了。这类历史会附带 `duplicate tool_use id ...` 说明（见 §3.2.1）。
+- 只有标记时，同一次响应里的多个并行调用会互相撞。
+
+不原样拼上游的响应 id：Gemini 的 `responseId` 很长，拼进去会把工具 id 顶到各家的长度上限附近，反而触发 id 收敛。
+
+上游连响应 id 都不给时（兼容层网关常见）用一个随机值，而不是固定串：固定串会让所有缺响应 id 的上游退回到「只有序号」那个撞车状态。同一次响应内该值不变，所以该次响应的各调用仍共享同一个标记。
 
 #### 3.2.6 错误的 `param` 维度
 
@@ -971,7 +993,26 @@ curl -s $BASE/v1/chat/completions \
 | `reasoning` | object | 否 | `{"effort": "low"\|"medium"\|"high"\|..., "summary":"auto"\|"concise"\|"detailed"}` | 推理配置。开启思考时本服务出站恒带 `summary:"auto"`（否则推理内容对客户端不可见） |
 | `store` | bool | 否 | 默认 `false` | **出站恒为 `false`**：本服务不让上游留存会话（多目标重试时各上游留存状态互不可见，会分叉） |
 | `user` | string | 否 | 非空 | 终端用户标识，透传上游 |
+| `previous_response_id` | string | 否 | **带值即 400** | 上游托管的会话续接，见下文「托管状态字段」 |
+| `conversation` | `string \| object` | 否 | **带值即 400** | 同上 |
+| `context_management` | object | 否 | **带值即 400** | 同上 |
+| `prompt` | object | 否 | **带值即 400** | 同上 |
 | 其他 | — | — | — | 未列出的字段被忽略 |
+
+**托管状态字段**
+
+上表四个字段都把状态放在上游那一侧，本服务表达不了：请求会被分发到任意一个目标账号，那里没有这个 id 指向的历史。收下再忽略等于悄悄丢掉客户端以为已经带上的上下文，因此一律显式拒收：
+
+```json
+{"error":{"type":"invalid_request_error","code":"invalid_request","message":"server-side conversation state is not supported: previous_response_id, conversation; send the full conversation in input"}}
+```
+
+规则：
+
+- 一次报全所有命中的字段（按 `previous_response_id` → `conversation` → `context_management` → `prompt` 的顺序），不是命中第一个就返回。客户端往往同时带了两三个，一次只报一个会让它改一处再撞一次。
+- 显式的 `null` 等于没带这个字段，不触发拒收。
+- `context_management` 是上游自己裁剪历史的开关，同样依赖上游那一侧存着历史。收下再忽略会让客户端以为超长上下文已被裁剪，实际整段原样发出并撞上窗口上限。
+- 替代做法：把完整历史放进 `input` 自行携带。
 
 **`input` 条目类型**（`type` 字段区分）
 
@@ -1724,6 +1765,7 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| 2.2 | 2026-09-19 | 多轮会话状态一致性：合成工具 id 加入响应标记以保证跨轮不撞号（[3.2.5](#325-工具调用-id-的生命周期)）；`sanitized` 新增 `duplicate tool_use id ...` 说明并补齐全部配对治理形态（[3.2.1](#321-sanitized-的说明形态)）；Responses 的 `context_management` 纳入托管状态字段拒收，四个字段与拒收规则首次成文（[5.4](#54-post-v1responsesopenai-responses)）。**文档更正**：`sanitized` 曾写「合并连续同角色消息」，本服务从未有此行为也不应有——`user(tool_result)` 紧跟 `user(text)` 是每次工具回合的真实形态，合并会破坏 prompt cache 前缀 |
 | 2.1 | 2026-09-19 | 清单外形改为按客户端身份推断（`/v1/models`、`/models` 两族 SDK 都会打，路径优先于头）；新增 Gemini 清单外形与 `/v1beta/models`；新增单模型查询端点 [5.7](#57-get-modelsid单模型查询)；新增跨域与预检 [5.8](#58-跨域cors与预检)；新增请求体 media type 闸门 [2.3.3](#233-请求体-media-type)（表单两种回 415）。**行为变更**：`/models` 从固定 OpenAI 外形改为按客户端信号推断，无专有头的请求仍得到 OpenAI 外形 |
 | 2.0 | 2026-09-17 | 每个端点补齐「使用场景 / 请求字段表（类型·必填·约束与允许值·含义）/ 响应字段表（取值与含义）/ 错误表 / 示例」；新增类型词汇表、枚举值索引；修正响应 `model` 字段含义（上游回传模型名，非用户模型名）；修正已提交边界描述（非流式客户端仍能拿到真实 HTTP 错误码）；补充跨协议能力差异表 |
 | 1.0 | 2026-09-17 | 初稿 |

@@ -35,12 +35,13 @@ type useSite struct {
 
 // pairTools 治理工具调用与结果的配对关系。
 func pairTools(r *Request) []string {
-	uses, results := indexTools(r)
+	uses, results, dups := indexTools(r)
 	if len(uses) == 0 && len(results) == 0 {
 		return nil
 	}
 
 	var notes []string
+	notes = append(notes, dups...)
 	notes = append(notes, demoteOrphans(r, uses)...)
 	notes = append(notes, dropUnanswered(r, results)...)
 	notes = append(notes, reorderResults(r)...)
@@ -51,7 +52,10 @@ func pairTools(r *Request) []string {
 //
 // 用全局索引而非只比对相邻消息：客户端会在助手消息与工具回复之间插入
 // 自己的通知消息，相邻判定会把这类正常配对误判成孤儿，白白破坏一次缓存。
-func indexTools(r *Request) (uses map[string]useSite, results map[string]int) {
+// 同 id 的重复 tool_use 单独记一条说明：索引只留最后一处，
+// 前面那次调用从此没有宣告方，它的结果会被当成重复结果降级成文本。
+// 表面症状是「结果不见了」，根因是 id 撞车，不说出来排查得从零猜。
+func indexTools(r *Request) (uses map[string]useSite, results map[string]int, dups []string) {
 	uses = map[string]useSite{}
 	results = map[string]int{}
 	for mi, m := range r.Messages {
@@ -59,6 +63,11 @@ func indexTools(r *Request) (uses map[string]useSite, results map[string]int) {
 			switch b.Type {
 			case BlockToolUse:
 				if b.ToolUse != nil && b.ToolUse.ID != "" {
+					if _, seen := uses[b.ToolUse.ID]; seen {
+						dups = append(dups, fmt.Sprintf(
+							"duplicate tool_use id %q in history (results may be paired to the wrong call)",
+							b.ToolUse.ID))
+					}
 					uses[b.ToolUse.ID] = useSite{msg: mi, block: bi}
 				}
 			case BlockToolResult:
@@ -68,7 +77,7 @@ func indexTools(r *Request) (uses map[string]useSite, results map[string]int) {
 			}
 		}
 	}
-	return uses, results
+	return uses, results, dups
 }
 
 // demoteOrphans 把找不到宣告方的工具结果降级为文本，并去掉重复的结果。
@@ -163,7 +172,7 @@ func dropUnanswered(r *Request, results map[string]int) []string {
 // 报告改动。这样不必枚举「哪些情形算已经正确」——本来就正确的输入
 // 重插后与原样逐块相同，请求不变、缓存前缀也不动。
 func reorderResults(r *Request) []string {
-	uses, _ := indexTools(r)
+	uses, _, _ := indexTools(r)
 	if len(uses) == 0 {
 		return nil
 	}

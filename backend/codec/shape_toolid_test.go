@@ -114,7 +114,7 @@ func TestShapeToolIDsAvoidsCollision(t *testing.T) {
 // 收敛后仍要能判出这是合成 id：前缀承载省略与否的判定，丢了它
 // 出站侧就无从决定该不该把 id 写进请求体。
 func TestShortenedSynthIDKeepsItsPrefix(t *testing.T) {
-	long := SynthToolID(strings.Repeat("n", 80), 1)
+	long := SynthToolID("resp-1", strings.Repeat("n", 80), 1)
 	req := reqWithToolPair(long)
 
 	shapeToolIDs(req, Capabilities{MaxToolIDLen: 32}, &noteCollector{name: "probe"})

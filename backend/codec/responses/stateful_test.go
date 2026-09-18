@@ -20,6 +20,9 @@ func TestStatefulFieldsAreRejected(t *testing.T) {
 		{"conversation", `{"model":"m","input":"hi","conversation":"conv_1"}`, "conversation"},
 		{"conversation object", `{"model":"m","input":"hi","conversation":{"id":"conv_1"}}`, "conversation"},
 		{"prompt", `{"model":"m","input":"hi","prompt":{"id":"pmpt_1"}}`, "prompt"},
+		// 上游裁剪历史同样依赖上游那一侧存着历史，收下再忽略会让客户端
+		// 以为超长上下文已裁剪，实际整段发出并撞窗口上限。
+		{"context_management", `{"model":"m","input":"hi","context_management":{"type":"auto"}}`, "context_management"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -44,12 +47,12 @@ func TestStatefulFieldsAreRejected(t *testing.T) {
 // 客户端往往同时带了两三个。一次只报一个会让它改一处再撞一次，白等一个来回。
 func TestRejectionNamesEveryStatefulFieldPresent(t *testing.T) {
 	body := `{"model":"m","input":"hi","previous_response_id":"resp_1",` +
-		`"conversation":"conv_1","prompt":{"id":"pmpt_1"}}`
+		`"conversation":"conv_1","context_management":{"type":"auto"},"prompt":{"id":"pmpt_1"}}`
 	_, err := DecodeRequest([]byte(body))
 	if err == nil {
 		t.Fatal("decode must reject the request")
 	}
-	for _, want := range []string{"previous_response_id", "conversation", "prompt"} {
+	for _, want := range []string{"previous_response_id", "conversation", "context_management", "prompt"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("message = %q, must name %q too", err.Error(), want)
 		}

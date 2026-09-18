@@ -27,11 +27,16 @@ type wireRequest struct {
 	Store *bool  `json:"store,omitempty"`
 	User  string `json:"user,omitempty"`
 
-	// 以下三个字段把对话状态托管在上游那一侧，本服务表达不了：请求会被
+	// 以下四个字段把对话状态托管在上游那一侧，本服务表达不了：请求会被
 	// 分发到任意一个目标账号，那里没有这条 id 指向的历史。收下再忽略等于
 	// 悄悄丢掉客户端以为已经带上的上下文，只能显式拒收。
+	//
+	// context_management 是上游自己裁剪历史的开关，同样依赖上游那一侧存着
+	// 历史；收下再忽略会让客户端以为超长上下文已被裁剪，实际整段原样发出去
+	// 并撞上窗口上限。
 	PreviousResponseID string          `json:"previous_response_id,omitempty"`
 	Conversation       json.RawMessage `json:"conversation,omitempty"`
+	ContextManagement  json.RawMessage `json:"context_management,omitempty"`
 	Prompt             json.RawMessage `json:"prompt,omitempty"`
 }
 
