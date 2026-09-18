@@ -49,6 +49,27 @@ var contextOverflowMarkers = []string{
 	"input length",
 	"reduce the length",
 	"exceeds the maximum",
+	// Anthropic 的另一种文案，与 "prompt is too long" 并存。
+	"request is too long",
+	// Gemini 形态。
+	"input token count exceeds",
+	"exceeds the context",
+	"context limit",
+}
+
+// 「token limit」单独出现不算上下文超限：同一措辞也用于速率限制
+// （「每分钟 token limit」），误判会把该等待重试的 429 变成不换目标的 400。
+// 只有它伴随上下文语境与一个超出类动词才算。做法采自 sub2api 的组合式判定
+// （openai_gateway_upstream_errors.go:196-218），它同样不信裸关键词。
+var overflowVerbs = []string{"exceed", "too long", "too large"}
+
+func hasOverflowVerb(m string) bool {
+	for _, v := range overflowVerbs {
+		if strings.Contains(m, v) {
+			return true
+		}
+	}
+	return false
 }
 
 func IsContextOverflow(message string) bool {
@@ -57,6 +78,10 @@ func IsContextOverflow(message string) bool {
 		if strings.Contains(m, marker) {
 			return true
 		}
+	}
+	if strings.Contains(m, "token limit") &&
+		strings.Contains(m, "context") && hasOverflowVerb(m) {
+		return true
 	}
 	return false
 }

@@ -137,6 +137,18 @@ func (p *Pipeline) finish(w http.ResponseWriter, call Call, encoder codec.Stream
 		usage.OutputTokens = int64(ir.EstimateResponse(resp))
 		rec.UsageEstimated = true
 	}
+	if p.Opts.EstimateUsage && usage.InputTokens == 0 {
+		// 输入侧同样要兜：只兜 output 的话上游不报 usage 时整个输入维度恒为 0，
+		// 调度层的用量累计会系统性漏掉它。
+		//
+		// 用调度方向（低估）而非公开方向：这个数字进的是配额累计，
+		// 高估等于凭空吃掉用户的额度。
+		//
+		// 判 == 0 而不是 <= 0：负数是上游给了畸形数字，那是另一类问题，
+		// 兜底会把它掩盖成一个看起来正常的值。
+		usage.InputTokens = ir.EstimateRequest(call.Request)
+		rec.UsageEstimated = true
+	}
 
 	if err == nil {
 		if !committed {

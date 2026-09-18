@@ -326,7 +326,7 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 | `committed` | bool | 是否越过已提交边界，见 [6.1](#61-已提交边界committed-boundary) |
 | `stream` | bool | 客户端是否要 SSE |
 | `usage_estimated` | bool | 用量是否为估算（上游没回 usage 时按字符数兜底） |
-| `input_tokens` | int64 | 输入 token 数（上游报的或估算的） |
+| `input_tokens` | int64 | 输入 token 数（上游报的，或上游未报时按调度方向估算的，见 [6.5](#65-用量估算兜底)） |
 | `output_tokens` | int64 | 输出 token 数 |
 | `cache_read_tokens` | int64 | 命中提示缓存的输入 token 数 |
 | `latency_ms` | int | 总耗时（毫秒） |
@@ -1116,6 +1116,13 @@ curl -s $BASE/v1/responses \
 |---|---|---|
 | `input_tokens` | int64 | 估算的输入 token 数。**偏保守（宁多勿少）**：据此裁剪上下文不会踩到真实上限 |
 
+**估算口径**（不是真分词器，见 [6.6](#66-token-估算的两个方向)）：
+
+- CJK（中日韩）按**每字符约 1.25 token** 计。各家实测的 CJK 系数在 0.68–1.21 之间，取上界才能保证不低报。
+- 其余字符按每 4 字符约 1 token 计。
+- 每个媒体块（图片、音频等）计入 258 token 的**下限**，不按 base64 长度算。真实消耗通常高于这个数。
+- `tools` 的名称、描述、schema 全部计入。
+
 **错误**：按 Anthropic 形状，见 [2.6](#26-数据面错误响应)。
 
 **示例**
@@ -1339,9 +1346,28 @@ curl -s $BASE/v1beta/models/models/demo-pool
 
 ### 6.5 用量估算兜底
 
-上游没回 usage 时（少数上游流末不发 usage），本服务按响应字符数估算输出 token 数，此时流水里 `usage_estimated: true`。估算仅用于调度层用量统计；`/admin/requests` 的 `input_tokens` / `output_tokens` 会标注其可信度。
+上游没回 usage 时（少数上游流末不发 usage），本服务按字符数估算填入，此时流水里 `usage_estimated: true`。
 
-### 6.6 出站连接层
+**两个维度各自独立判断**：`input_tokens` 与 `output_tokens` 哪个为 0 就兜哪个。上游报了非 0 值的维度**原样透传，绝不覆盖**——上游的数字是唯一权威，用估算盖掉它会让账目与上游对不上且看不出是谁改的。只有一个维度被兜底时 `usage_estimated` 同样为 `true`：它表达「这行数字里有估算成分」，不区分是哪一维。
+
+兜底用**调度方向**的估算（见 [6.6](#66-token-估算的两个方向)）。`MSA_ESTIMATE_USAGE=false` 时两个维度都不兜，上游没报就留 0。
+
+### 6.6 token 估算的两个方向
+
+本服务不带分词器，token 数是按字符类别加权估算的。同一个估算有两个方向，因为用途对偏差方向的要求相反：
+
+| 方向 | 用途 | 偏差要求 | CJK 权重 |
+|---|---|---|---|
+| 调度 | dispatch 的 `est_tokens`、用量兜底 | 宁可**低**估 | 每字符 0.6 |
+| 公开 | `count_tokens` 的回答 | 宁可**高**估 | 每字符 1.25 |
+
+- **调度方向宁可低估**：`est_tokens` 给策略脚本按上下文窗口筛候选，高估会让本装得下的请求被排掉所有目标，客户端拿到「无可用目标」而不是一个回答；用量兜底进的是配额累计，高估等于凭空吃掉用户的额度。
+- **公开方向宁可高估**：客户端据 `count_tokens` 裁上下文，低估会让它裁完照样被上游以超长拒掉，而历史已经删了。
+- 非 CJK 字符两个方向都按每 4 字符约 1 token，英文下没有上调空间。
+- 媒体块两个方向都按每块 258 token 的下限计入。**两个方向只在字符权重上不同，算哪些块是一样的**。
+- 不按厂商分表：`count_tokens` 要在选目标之前回答，那时还不知道会落到哪个上游。参考实现能分表是因为它在渠道上下文里。
+
+### 6.7 出站连接层
 
 本服务与上游之间的连接由一个专用客户端管理，**不使用** Go 标准库的默认客户端。
 
@@ -1787,7 +1813,8 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
-| 2.3 | 2026-09-19 | 出站连接层首次成文（[6.6](#66-出站连接层)）：连接复用上限抬高（标准库默认每 host 只留 2 条空闲连接）、新增响应头等待时限、写 deadline 逐次推进挡慢客户端；四层时限的分工与边界一并列明。附录 A 新增 `MSA_MAX_IDLE_CONNS`、`MSA_MAX_IDLE_CONNS_PER_HOST`、`MSA_IDLE_CONN_TIMEOUT`、`MSA_RESPONSE_HEADER_TIMEOUT` |
+| 2.4 | 2026-09-19 | 用量与 token 计数的对外口径：估算区分调度/公开两个方向，CJK 按字符加权（[6.6](#66-token-估算的两个方向)）；`count_tokens` 改用公开方向并补上估算口径说明（[5.5](#55-post-v1messagescount_tokens本地估算)）；`input_tokens` 补上用量兜底（原先只兜 output，上游不报时输入维度恒为 0）；上下文超限新增 `request is too long`、`input token count exceeds` 等文案，`token limit` 改为需伴随上下文语境的组合式判定。**行为变更**：`count_tokens` 对中文提示的回答从「每 4 字符 1 token」抬到「每字符 1.25 token」，带媒体块的请求不再报 0。**文档更正**：`input_tokens` 字段曾写「上游报的或估算的」，而在本轮之前它从不估算 |
+| 2.3 | 2026-09-19 | 出站连接层首次成文（[6.7](#67-出站连接层)）：连接复用上限抬高（标准库默认每 host 只留 2 条空闲连接）、新增响应头等待时限、写 deadline 逐次推进挡慢客户端；四层时限的分工与边界一并列明。附录 A 新增 `MSA_MAX_IDLE_CONNS`、`MSA_MAX_IDLE_CONNS_PER_HOST`、`MSA_IDLE_CONN_TIMEOUT`、`MSA_RESPONSE_HEADER_TIMEOUT` |
 | 2.2 | 2026-09-19 | 多轮会话状态一致性：合成工具 id 加入响应标记以保证跨轮不撞号（[3.2.5](#325-工具调用-id-的生命周期)）；`sanitized` 新增 `duplicate tool_use id ...` 说明并补齐全部配对治理形态（[3.2.1](#321-sanitized-的说明形态)）；Responses 的 `context_management` 纳入托管状态字段拒收，四个字段与拒收规则首次成文（[5.4](#54-post-v1responsesopenai-responses)）。**文档更正**：`sanitized` 曾写「合并连续同角色消息」，本服务从未有此行为也不应有——`user(tool_result)` 紧跟 `user(text)` 是每次工具回合的真实形态，合并会破坏 prompt cache 前缀 |
 | 2.1 | 2026-09-19 | 清单外形改为按客户端身份推断（`/v1/models`、`/models` 两族 SDK 都会打，路径优先于头）；新增 Gemini 清单外形与 `/v1beta/models`；新增单模型查询端点 [5.7](#57-get-modelsid单模型查询)；新增跨域与预检 [5.8](#58-跨域cors与预检)；新增请求体 media type 闸门 [2.3.3](#233-请求体-media-type)（表单两种回 415）。**行为变更**：`/models` 从固定 OpenAI 外形改为按客户端信号推断，无专有头的请求仍得到 OpenAI 外形 |
 | 2.0 | 2026-09-17 | 每个端点补齐「使用场景 / 请求字段表（类型·必填·约束与允许值·含义）/ 响应字段表（取值与含义）/ 错误表 / 示例」；新增类型词汇表、枚举值索引；修正响应 `model` 字段含义（上游回传模型名，非用户模型名）；修正已提交边界描述（非流式客户端仍能拿到真实 HTTP 错误码）；补充跨协议能力差异表 |
@@ -1820,7 +1847,7 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 | `MSA_MAX_IDLE_CONNS_PER_HOST` | `32` | 每个上游 host 保留的空闲连接数上限。标准库默认只留 2 条，并发超过它的请求每次都要重新 TLS 握手 |
 | `MSA_MAX_IDLE_CONNS` | `256` | 全部 host 合计的空闲连接数上限。账号池横跨多个上游，总量卡太死会让 PerHost 白设 |
 | `MSA_IDLE_CONN_TIMEOUT` | `90s` | 空闲连接多久后回收。负值表示不回收 |
-| `MSA_RESPONSE_HEADER_TIMEOUT` | `120s` | **只**约束「请求发出 → 响应头到达」这一段；头到了之后读正文不受它影响。负值表示不设限。见 [6.6](#66-出站连接层) |
+| `MSA_RESPONSE_HEADER_TIMEOUT` | `120s` | **只**约束「请求发出 → 响应头到达」这一段；头到了之后读正文不受它影响。负值表示不设限。见 [6.7](#67-出站连接层) |
 
 ---
 

@@ -140,8 +140,10 @@ func (s *Server) dataPlane(protocol string) http.HandlerFunc {
 // countTokens 本地估算，不打上游。
 //
 // 打上游要先 dispatch 选目标，而客户端调这个接口只是想知道自己的提示多长，
-// 为此消耗一次配额并把延迟抬到几百毫秒不值得。估算偏保守（宁多勿少），
-// 客户端据此裁剪上下文时不会踩到真正的上限。
+// 为此消耗一次配额并把延迟抬到几百毫秒不值得。
+//
+// 用公开方向（宁多勿少）而非调度方向：客户端据这个数字裁上下文，低估会让它
+// 裁完照样被上游以超长拒掉，而那时它已经删掉了历史。
 func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 	inbound, _ := codec.Inbound(codec.ProtocolAnthropic)
 	body, err := s.readBody(w, r)
@@ -155,7 +157,7 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set(headerRequestID, requestID(r))
-	writeJSON(w, http.StatusOK, map[string]int64{"input_tokens": ir.EstimateRequest(req)})
+	writeJSON(w, http.StatusOK, map[string]int64{"input_tokens": ir.EstimateRequestMode(req, ir.ModePublic)})
 }
 
 // listModels 代理调度层的清单，按路径或请求头渲染成对应协议族的外形。
