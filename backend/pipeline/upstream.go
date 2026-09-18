@@ -149,12 +149,18 @@ func adoptWholeResponse(resp *http.Response, outbound codec.OutboundCodec,
 	}, nil
 }
 
+// fallbackClient 是没装配 HTTP 时用的客户端。
+//
+// 回落到本层的默认配置而不是 http.DefaultClient：后者 PerHost 只留 2 条
+// 空闲连接、且响应头等待不设限，装配漏一行就把整层配置静默降级成旧行为，
+// 而那是编译器与所有单测都看不见的。
+var fallbackClient = NewHTTPClient(TransportOptions{})
+
 func (p *Pipeline) client() *http.Client {
 	if p.HTTP != nil {
 		return p.HTTP
 	}
-	// 不设整体 Timeout：流可以跑很久，超时用首字节与空闲两个计时器控制。
-	return http.DefaultClient
+	return fallbackClient
 }
 
 // frame 是从上游读到的一帧解码结果。

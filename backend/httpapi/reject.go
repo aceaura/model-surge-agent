@@ -127,6 +127,12 @@ func (w *rejectWriter) Flush() {
 	}
 }
 
+// Unwrap 透传，否则数据面给每次写推的写 deadline 会静默失效，
+// 慢客户端就能无限占住一条上游连接。理由同 statusRecorder.Unwrap。
+func (w *rejectWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 // rejectRouting 渲染路由层拒绝的响应体。
 //
 // 消息里带上方法与路径：客户端据此能直接看出是 base_url 配错（路径不认识）

@@ -97,6 +97,12 @@ func run(log *slog.Logger) error {
 			Dispatch: relay,
 			Reporter: worker,
 			Recorder: &recorder.Recorder{Log: requests, Cache: rdb, Logger: log},
+			HTTP: pipeline.NewHTTPClient(pipeline.TransportOptions{
+				MaxIdleConns:          cfg.MaxIdleConns,
+				MaxIdleConnsPerHost:   cfg.MaxIdleConnsPerHost,
+				IdleConnTimeout:       cfg.IdleConnTimeout,
+				ResponseHeaderTimeout: cfg.ResponseHeaderTimeout,
+			}),
 			Opts: pipeline.Options{
 				MaxAttempts:       cfg.MaxAttempts,
 				FirstTokenTimeout: cfg.FirstTokenTimeout,

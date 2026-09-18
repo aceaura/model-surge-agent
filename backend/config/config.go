@@ -38,6 +38,14 @@ type Config struct {
 	// CORSOrigins 是允许跨域的来源。空或含 "*" 表示放开所有来源，
 	// 此时不发 Allow-Credentials——浏览器拒绝 `*` 与凭据并存。
 	CORSOrigins []string
+
+	// 出站连接层。零值一律取 pipeline 的内置默认。
+	MaxIdleConns        int
+	MaxIdleConnsPerHost int
+	IdleConnTimeout     time.Duration
+	// ResponseHeaderTimeout 只约束「发出请求到响应头到达」这一段，
+	// 头到了之后读正文不受它影响。负值表示显式不设限。
+	ResponseHeaderTimeout time.Duration
 }
 
 // Load 收集所有问题一次报全，而不是逐个失败：改配置的人通常在容器日志里
@@ -90,6 +98,13 @@ func Load() (Config, error) {
 	c.AccessLog = boolOr(&errs, "MSA_ACCESS_LOG", true)
 	c.LogRetention = durationOr(&errs, "MSA_LOG_RETENTION", 14*24*time.Hour)
 	c.CORSOrigins = listOr("MSA_CORS_ORIGINS")
+
+	// 零值交给 pipeline 取内置默认，不在这里重复一份默认值：
+	// 两处各写一份迟早会漂移，而漂移后看配置看不出实际生效的是哪个。
+	c.MaxIdleConns = intOr(&errs, "MSA_MAX_IDLE_CONNS", 0)
+	c.MaxIdleConnsPerHost = intOr(&errs, "MSA_MAX_IDLE_CONNS_PER_HOST", 0)
+	c.IdleConnTimeout = durationOr(&errs, "MSA_IDLE_CONN_TIMEOUT", 0)
+	c.ResponseHeaderTimeout = durationOr(&errs, "MSA_RESPONSE_HEADER_TIMEOUT", 0)
 
 	if len(errs) > 0 {
 		return Config{}, errors.Join(errs...)

@@ -271,6 +271,7 @@ func writeEvents(w http.ResponseWriter, encoder codec.StreamEncoder, ev ir.Event
 		// 编码失败不该中断整个流：跳过这个事件，其余内容照发。
 		return nil
 	}
+	extendWriteDeadline(w)
 	for _, f := range out {
 		if _, err := w.Write(f); err != nil {
 			return err
@@ -281,11 +282,38 @@ func writeEvents(w http.ResponseWriter, encoder codec.StreamEncoder, ev ir.Event
 }
 
 func writeFrames(w http.ResponseWriter, frames [][]byte) {
+	extendWriteDeadline(w)
 	for _, f := range frames {
 		if _, err := w.Write(f); err != nil {
 			return
 		}
 	}
+}
+
+// streamWriteTimeout 限制单次写被慢客户端阻塞多久。
+//
+// 挡的是「连着但不读」：客户端把 TCP 接收窗口打满却不断开时，
+// w.Write 会一直阻塞，而它是同步调用、不在任何 select 里——
+// 空闲超时的计时器与客户端取消都观察不到，于是 goroutine、上游连接、
+// 帧缓冲全部长期占用，上游那边还在计费生成。
+//
+// 30s 对正常客户端是三个数量级的余量（一次写是微秒级）。
+const streamWriteTimeout = 30 * time.Second
+
+// extendWriteDeadline 在每次写之前把写 deadline 往后推。
+//
+// 逐次推进而非一次性总时限：Server.WriteTimeout 从响应开始算，
+// SSE 跑几分钟必然撞上。每帧推一次等价于「单次写不得阻塞超过 N 秒」，
+// 读得正常的客户端永远不会触发。
+//
+// 不支持设 deadline 时静默跳过：httptest.ResponseRecorder 恒不支持，
+// 而单元测试全走它，当成故障会让每帧都误判为写失败。
+//
+// 注意这条链路上每一层包装 ResponseWriter 的类型都必须提供 Unwrap，
+// ResponseController 靠 Unwrap 方法链找真实连接，只做 struct embedding
+// 会让它认不出底层、返回 ErrNotSupported——代码写了也不生效且不报错。
+func extendWriteDeadline(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(streamWriteTimeout))
 }
 
 func writeStreamHeaders(w http.ResponseWriter) {

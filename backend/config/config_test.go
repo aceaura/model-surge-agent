@@ -161,3 +161,63 @@ func TestCORSOriginsSplitAndTrim(t *testing.T) {
 		}
 	}
 }
+
+// 出站连接层的四个变量不配时必须留零值：默认值只在 pipeline 一处写，
+// 两边各写一份迟早漂移，而漂移之后看配置看不出实际生效的是哪个。
+func TestOutboundConnectionDefaultsStayZero(t *testing.T) {
+	setRequired(t)
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.MaxIdleConns != 0 || c.MaxIdleConnsPerHost != 0 ||
+		c.IdleConnTimeout != 0 || c.ResponseHeaderTimeout != 0 {
+		t.Errorf("连接层默认应当留零值交给 pipeline：%d/%d/%v/%v",
+			c.MaxIdleConns, c.MaxIdleConnsPerHost,
+			c.IdleConnTimeout, c.ResponseHeaderTimeout)
+	}
+}
+
+func TestOutboundConnectionVarsParsed(t *testing.T) {
+	setRequired(t)
+	t.Setenv("MSA_MAX_IDLE_CONNS", "512")
+	t.Setenv("MSA_MAX_IDLE_CONNS_PER_HOST", "64")
+	t.Setenv("MSA_IDLE_CONN_TIMEOUT", "30s")
+	t.Setenv("MSA_RESPONSE_HEADER_TIMEOUT", "5m")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.MaxIdleConns != 512 || c.MaxIdleConnsPerHost != 64 {
+		t.Errorf("空闲连接数 = %d/%d, want 512/64", c.MaxIdleConns, c.MaxIdleConnsPerHost)
+	}
+	if c.IdleConnTimeout != 30*time.Second || c.ResponseHeaderTimeout != 5*time.Minute {
+		t.Errorf("超时 = %v/%v, want 30s/5m", c.IdleConnTimeout, c.ResponseHeaderTimeout)
+	}
+}
+
+// 负的响应头超时是「显式不设限」，必须能配进来而不是被当成非法值。
+func TestNegativeResponseHeaderTimeoutAccepted(t *testing.T) {
+	setRequired(t)
+	t.Setenv("MSA_RESPONSE_HEADER_TIMEOUT", "-1s")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.ResponseHeaderTimeout >= 0 {
+		t.Errorf("ResponseHeaderTimeout = %v，负值应当原样透传表示不设限",
+			c.ResponseHeaderTimeout)
+	}
+}
+
+// 超出 int64 纳秒的时长必须进启动错误，而不是回绕成一个极小的正值
+// ——回绕后每个请求都会被掐断，症状是「上游全挂了」。
+func TestOverflowingDurationIsAStartupError(t *testing.T) {
+	setRequired(t)
+	t.Setenv("MSA_RESPONSE_HEADER_TIMEOUT", "2562048h")
+	if _, err := Load(); err == nil {
+		t.Fatal("溢出的时长被接受了")
+	} else if !strings.Contains(err.Error(), "MSA_RESPONSE_HEADER_TIMEOUT") {
+		t.Errorf("错误没指出是哪个变量：%v", err)
+	}
+}
