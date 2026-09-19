@@ -46,11 +46,42 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 	}
 
 	timeout := p.firstTokenTimeout()
+	// 超时改成绝对时刻而不是每轮新起一个 time.After：心跳会让循环多醒几次，
+	// 每轮重起的计时器等于被心跳一次次推后，于是一条彻底静默的上游流永远
+	// 等不到空闲超时——加心跳恰好会废掉空闲超时，这是必须一起改的。
+	// 只有真帧到达才推进它。
+	deadline := time.Now().Add(timeout)
+
+	// 非流式请求不建这个计时器：encoder 为 nil 时循环里那条分支本来也会
+	// 直接跳过，但每个非流式请求白起一个 ticker 是纯开销。
+	// 判据用 encoder 而不是 call.Stream：循环里那条分支判的就是 encoder，
+	// 两处用同一个依据才不会出现「开了计时器却永远发不出」的错配。
+	var heartbeat <-chan time.Time
+	if hb := p.heartbeatInterval(); hb > 0 && encoder != nil {
+		ticker := time.NewTicker(hb)
+		defer ticker.Stop()
+		heartbeat = ticker.C
+	}
+
 	for {
 		var f frame
 		var ok bool
 		select {
+		case <-heartbeat:
+			// committed 之前不发：响应头还没写出，此时往 w 写会把状态码钉死在
+			// 200，而这个阶段的失败本该换目标重试或回一个正确的 HTTP 错误码。
+			if !committed || encoder == nil {
+				continue
+			}
+			if err := writeHeartbeat(w, encoder, call.Capture); err != nil {
+				return p.clientGone(&agg, rec)
+			}
+			// 刻意不推进 deadline：心跳是我们自己发的，它不是上游还活着的证据。
+			continue
+
 		case f, ok = <-frames:
+			// 真帧到达才算上游还活着。
+			deadline = time.Now().Add(timeout)
 			if !ok {
 				// channel 关了却没收到 done：读协程被 ctx 掐断了。
 				// 先分清是谁断的——客户端自己走了就不是这个目标的故障，
@@ -61,7 +92,7 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 				return p.finish(w, call, encoder, &agg, committed, tail,
 					ir.NewError(ir.ErrUpstream, 0, "", "upstream stream ended without a terminator"), rec)
 			}
-		case <-time.After(timeout):
+		case <-time.After(time.Until(deadline)):
 			kind := "first token"
 			if committed {
 				kind = "idle"
@@ -304,6 +335,38 @@ func writeEvents(w http.ResponseWriter, encoder codec.StreamEncoder, ev ir.Event
 		// 捕获在写成功之后：客户端真收到的才算回给客户端的字节。
 		capt.Add(capture.ClientResponse, f)
 	}
+	flush(w)
+	return nil
+}
+
+// writeHeartbeat 往已开启的流里写一个保活帧。
+//
+// 挡的是中间设施的空闲断连：反代、负载均衡与云网关普遍在 30~60s 无字节时
+// 掐掉连接，而推理模型在长思考期间可以几分钟不出一个 token。被掐时客户端
+// 看到的是连接异常中断，而上游其实一切正常、还在计费生成。
+//
+// 不进 agg、不进 tail、不动 usage：它不是内容，混进去会让记账多算、
+// 让完整性判定看到一个不存在的事件。进 capture：客户端确实收到了这些字节，
+// 排查「客户端说流里有奇怪帧」时需要它们在场。
+//
+// 写失败按客户端已走处理，与 writeEvents 同口径。
+func writeHeartbeat(w http.ResponseWriter, encoder codec.StreamEncoder,
+	capt *capture.Session) error {
+
+	frame := codec.HeartbeatComment
+	if h, ok := encoder.(codec.StreamHeartbeat); ok {
+		// 编码器明确返回 nil 表示本协议不发保活，此时不能回落到注释帧——
+		// 那会绕过它的判断。
+		frame = h.HeartbeatFrame()
+		if frame == nil {
+			return nil
+		}
+	}
+	extendWriteDeadline(w)
+	if _, err := w.Write(frame); err != nil {
+		return err
+	}
+	capt.Add(capture.ClientResponse, frame)
 	flush(w)
 	return nil
 }

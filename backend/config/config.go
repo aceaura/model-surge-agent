@@ -29,6 +29,7 @@ type Config struct {
 	MaxAttempts       int
 	FirstTokenTimeout time.Duration
 	IdleTimeout       time.Duration
+	HeartbeatInterval time.Duration
 
 	OutboxInterval    time.Duration
 	OutboxMaxAttempts int
@@ -104,6 +105,8 @@ func Load() (Config, error) {
 	}
 	c.FirstTokenTimeout = durationOr(&errs, "MSA_FIRST_TOKEN_TIMEOUT", 60*time.Second)
 	c.IdleTimeout = durationOr(&errs, "MSA_IDLE_TIMEOUT", 120*time.Second)
+	// 负值表示显式关闭保活，所以这里不做 > 0 校验。
+	c.HeartbeatInterval = durationOr(&errs, "MSA_HEARTBEAT_INTERVAL", 15*time.Second)
 	c.OutboxInterval = durationOr(&errs, "MSA_OUTBOX_INTERVAL", time.Second)
 	c.OutboxMaxAttempts = intOr(&errs, "MSA_OUTBOX_MAX_ATTEMPTS", 20)
 	c.EstimateUsage = boolOr(&errs, "MSA_ESTIMATE_USAGE", true)

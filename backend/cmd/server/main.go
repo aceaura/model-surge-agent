@@ -116,6 +116,7 @@ func run(log *slog.Logger) error {
 				MaxAttempts:       cfg.MaxAttempts,
 				FirstTokenTimeout: cfg.FirstTokenTimeout,
 				IdleTimeout:       cfg.IdleTimeout,
+				HeartbeatInterval: cfg.HeartbeatInterval,
 				EstimateUsage:     cfg.EstimateUsage,
 			},
 		},

@@ -28,6 +28,24 @@ type StreamEncoder interface {
 	Finish() [][]byte
 }
 
+// StreamHeartbeat 是 StreamEncoder 的可选出口：静默期内给客户端发的保活帧。
+//
+// 挂在编码器上而不是由桥接层统一发一个注释帧：SSE 注释（`: \n\n`）对多数
+// 客户端可行，但 Anthropic 协议有自己的 `ping` 事件类型，而严格按事件类型
+// 分派的客户端遇到注释帧可能当成协议违规。形状只有编码器知道。
+//
+// 不实现该出口的协议由桥接层回落到注释帧。
+type StreamHeartbeat interface {
+	// HeartbeatFrame 返回一个不携带任何内容语义的帧。
+	// 返回 nil 表示本协议不发保活。
+	HeartbeatFrame() []byte
+}
+
+// HeartbeatComment 是没实现 StreamHeartbeat 的协议用的保活帧。
+//
+// SSE 注释行：规范要求客户端忽略以冒号开头的行，所以它不会被误当成数据。
+var HeartbeatComment = []byte(": keepalive\n\n")
+
 // StreamDecoder 把上游 SSE 帧解码成 IR 事件。
 type StreamDecoder interface {
 	// Feed 接收一帧。event 是 SSE 的 event 名（无名协议传空串），data 是 data 行内容。

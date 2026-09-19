@@ -30,6 +30,25 @@ type streamEncoder struct {
 // Notes 实现 codec.StreamNotes。
 func (e *streamEncoder) Notes() []string { return codec.DedupeNotes(e.notes) }
 
+// HeartbeatFrame 实现 codec.StreamHeartbeat：本协议有自己的 ping 事件类型。
+//
+// 用 ping 而不是 SSE 注释：Anthropic 的客户端 SDK 按事件类型分派，
+// ping 是它已知且会忽略的一类；注释帧虽然规范上也该被忽略，
+// 但那是对解析器的要求，而按类型分派的实现可能压根没走到注释分支。
+//
+// 不置 started/stopped 也不动块状态：保活帧不参与帧序不变式，
+// 它在 message_start 之前之后都合法。
+//
+// marshal 失败返回 nil：调用方对 nil 的处置是不发，而保活帧漏一次无后果——
+// 下一个周期还会再来。
+func (e *streamEncoder) HeartbeatFrame() []byte {
+	frame, err := marshalFrame(evPing, streamEvent{Type: evPing})
+	if err != nil {
+		return nil
+	}
+	return frame
+}
+
 func newStreamEncoder() *streamEncoder {
 	return &streamEncoder{openBlocks: map[int]bool{}}
 }

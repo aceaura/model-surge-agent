@@ -58,21 +58,25 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 		cancel()
 		return nil, ir.NewError(ir.ErrInternal, 0, "", fmt.Sprintf("build upstream request: %v", err))
 	}
+	// 这两行是代码而不是配置，直接写：改它们要过评审，不必受运行时保护。
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
+	// 下面三层的头都来自配置（端点定义、客户端声明、调度层下发），
+	// 一律过保护集合：其中任一写进 Accept-Encoding 都会静默关掉透明解压。
+	var notes []string
 	for k, v := range extra {
-		req.Header.Set(k, v)
+		notes = setOutboundHeader(req, k, v, notes)
 	}
 	// 客户端声明排在凭据头之前：调度层的头来自运维配置，
 	// 运维意图优先于客户端声明。
 	if de, ok := outbound.(codec.DeclarationEncoder); ok {
 		for k, v := range de.DeclarationHeaders(decls) {
-			req.Header.Set(k, v)
+			notes = setOutboundHeader(req, k, v, notes)
 		}
 	}
 	// 凭据头来自调度层，只写进这个 http.Request，不入库不落日志。
 	for k, v := range target.Headers {
-		req.Header.Set(k, v)
+		notes = setOutboundHeader(req, k, v, notes)
 	}
 
 	upstreamStart := p.now()
@@ -99,7 +103,15 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 		return nil, ir.NewError(ir.ErrUpstream, 0, "", "upstream unreachable: "+reason)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		// 错误体同样要解压：压缩的错误体交给 DecodeError 只会解不出结构、
+		// 归成一个笼统的上游错误，而限流与配额耗尽正是靠这个体区分的。
+		// 解压失败时退回原始体：归因已经是「上游不行」，再因为解压失败
+		// 换一条错误路径只会丢掉状态码这条更硬的信息。
+		var errBody io.Reader = resp.Body
+		if dec, decErr := decodeBody(resp.Header, resp.Body); decErr == nil {
+			errBody = dec
+		}
+		raw, _ := io.ReadAll(io.LimitReader(errBody, 64<<10))
 		_ = resp.Body.Close()
 		// 错误体也是上游回的字节，而且正是最需要看的一类：DecodeError
 		// 会把它归一化成一个 ir.Error，归错的时候只有原文能说明它到底说了什么。
@@ -108,17 +120,26 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 		return nil, outbound.DecodeError(resp.StatusCode, resp.Header, raw)
 	}
 
-	// 上游是否真的在发流，与客户端要不要流无关：兼容层网关忽略
-	// stream:true 回一整份 JSON 是常见形态，按 SSE 去切它会一帧都读不出。
+	// 解压挂在捕获的里侧：捕获要留的是能读的字节。存压缩字节等于把
+	// 「上游到底回了什么」这条最后的线索变成一段谁也看不懂的二进制，
+	// 而排查这类问题时恰好只有它可看。
+	decoded, encErr := decodeBody(resp.Header, resp.Body)
+	if encErr != nil {
+		_ = resp.Body.Close()
+		cancel()
+		return nil, encErr
+	}
+
 	if !isEventStream(resp.Header.Get("Content-Type")) {
-		return adoptWholeResponse(resp, outbound, cancel, capt)
+		return adoptWholeResponse(resp, decoded, outbound, cancel, capt, notes)
 	}
 
 	return &upstream{
 		// 旁挂在 resp.Body 外面而不是改 FrameScanner：切帧属于 codec，
 		// 让它知道捕获会把一个纯函数层绑上排查设施的生命周期。
-		scanner: codec.NewFrameScanner(io.TeeReader(resp.Body, capt.Writer(capture.UpstreamResponse))),
+		scanner: codec.NewFrameScanner(io.TeeReader(decoded, capt.Writer(capture.UpstreamResponse))),
 		decoder: outbound.NewStreamDecoder(),
+		notes:   notes,
 		body:    resp.Body,
 		cancel:  cancel,
 	}, nil
@@ -145,10 +166,13 @@ func isEventStream(ct string) bool {
 const maxWholeResponseBytes = 32 << 20
 
 // adoptWholeResponse 把上游的整份响应读进来，投影成事件序列。
-func adoptWholeResponse(resp *http.Response, outbound codec.OutboundCodec,
-	cancel context.CancelFunc, capt *capture.Session) (*upstream, *ir.Error) {
+// body 是已经解过压的响应体；关闭仍用 resp.Body。
+// notes 是建流阶段已积累的说明（如被丢弃的出站头），这条分支要把自己的
+// 说明接在它后面而不是覆盖它：两类问题可以同时存在，丢一类就少一条线索。
+func adoptWholeResponse(resp *http.Response, body io.Reader, outbound codec.OutboundCodec,
+	cancel context.CancelFunc, capt *capture.Session, notes []string) (*upstream, *ir.Error) {
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxWholeResponseBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(body, maxWholeResponseBytes+1))
 	_ = resp.Body.Close()
 	// 这条分支也要捕获：上游忽略 stream:true 回整份 JSON 是常见形态，
 	// 漏掉它会让「非 SSE 上游」这一类问题恰好没有原始字节可看。
@@ -165,7 +189,7 @@ func adoptWholeResponse(resp *http.Response, outbound codec.OutboundCodec,
 	if len(bytes.TrimSpace(raw)) == 0 {
 		// 空体与「一帧都没发」同口径：都是上游在写内容之前就结束了，
 		// 可以换个目标重来。留 replay 为 nil 让 read 走那条既有路径。
-		return &upstream{cancel: cancel}, nil
+		return &upstream{notes: notes, cancel: cancel}, nil
 	}
 	decoded, decodeNotes, err := decodeWholeResponse(outbound, raw)
 	if err != nil {
@@ -175,7 +199,7 @@ func adoptWholeResponse(resp *http.Response, outbound codec.OutboundCodec,
 	}
 	return &upstream{
 		replay: ir.ResponseEvents(decoded),
-		notes:  append([]string{codec.UpstreamIgnoredStreamNote}, decodeNotes...),
+		notes:  append(append(notes, codec.UpstreamIgnoredStreamNote), decodeNotes...),
 		cancel: cancel,
 	}, nil
 }
@@ -285,4 +309,17 @@ func (p *Pipeline) idleTimeout() time.Duration {
 		return p.Opts.IdleTimeout
 	}
 	return 120 * time.Second
+}
+
+// defaultHeartbeatInterval 是保活帧间隔。
+//
+// 15s 而非参考实现的 10s，但必须显著小于中间设施最常见的 30s 空闲阈值，
+// 且必须小于首帧超时（默认 60s）——否则长思考期内一个心跳都发不出，
+// 配了等于没配。
+const defaultHeartbeatInterval = 15 * time.Second
+
+// heartbeatInterval 零值取默认、负值表示显式关闭，与连接层的
+// durationOrDefault 同口径。
+func (p *Pipeline) heartbeatInterval() time.Duration {
+	return durationOrDefault(p.Opts.HeartbeatInterval, defaultHeartbeatInterval)
 }

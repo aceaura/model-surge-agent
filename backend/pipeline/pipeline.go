@@ -181,6 +181,9 @@ type Options struct {
 	MaxAttempts       int
 	FirstTokenTimeout time.Duration
 	IdleTimeout       time.Duration
+	// HeartbeatInterval 是流式响应静默期内向客户端发保活帧的间隔。
+	// 零值取默认，负值表示显式关闭。
+	HeartbeatInterval time.Duration
 	// EstimateUsage 在上游没给 usage 时用字符数估算兜底。
 	EstimateUsage bool
 }
