@@ -137,13 +137,10 @@ func run(log *slog.Logger) error {
 		},
 	}
 
-	listener := &http.Server{
-		Addr:    cfg.Listen,
-		Handler: srv.Handler(),
-		// 不设 WriteTimeout：SSE 响应会持续数分钟，写超时会把流从中间掐断。
-		// 空闲与首字超时由 pipeline 按流的语义控制。
-		ReadHeaderTimeout: 15 * time.Second,
-	}
+	// 在途计数包在最外层：关停时要等的是 handler 还没返回，
+	// 而每请求的上报队列由 Serve 的 defer 排空。
+	tracker := &inflight{}
+	listener := newListener(cfg.Listen, srv.Handler(), tracker)
 
 	log.Info("listening",
 		"addr", cfg.Listen,
@@ -167,15 +164,11 @@ func run(log *slog.Logger) error {
 	}
 
 	log.Info("shutting down")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	if err := listener.Shutdown(shutdownCtx); err != nil {
-		log.Warn("graceful shutdown incomplete", "error", err)
-	}
-	// 退出前把队列里到期的上报冲一次：调度层的用量与冷却依赖它们。
-	if sent := worker.Drain(shutdownCtx); sent > 0 {
-		log.Info("flushed pending reports on shutdown", "count", sent)
-	}
+	shutdown(log, listener, tracker, worker, shutdownPlan{
+		Grace:  cfg.ShutdownGrace,
+		Linger: cfg.ShutdownLinger,
+		Flush:  cfg.ShutdownFlushTimeout,
+	})
 	return nil
 }
 

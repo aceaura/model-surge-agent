@@ -34,6 +34,16 @@ type Config struct {
 	OutboxInterval    time.Duration
 	OutboxMaxAttempts int
 
+	// 关停三阶段的预算。每阶段一份，且各自新建 context：
+	// 让后一阶段继承前一阶段用尽的 deadline 会使收尾变成空操作。
+	//
+	// ShutdownGrace 未显式设置时派生自流超时（取首字与空闲的较大者），
+	// 不写死常量：写死会随流超时被调大而重新变得短于它，
+	// 于是「默认配置自相矛盾」这个状态又回来了。
+	ShutdownGrace        time.Duration
+	ShutdownLinger       time.Duration
+	ShutdownFlushTimeout time.Duration
+
 	EstimateUsage bool
 	AccessLog     bool
 	LogRetention  time.Duration
@@ -109,6 +119,38 @@ func Load() (Config, error) {
 	c.HeartbeatInterval = durationOr(&errs, "MSA_HEARTBEAT_INTERVAL", 15*time.Second)
 	c.OutboxInterval = durationOr(&errs, "MSA_OUTBOX_INTERVAL", time.Second)
 	c.OutboxMaxAttempts = intOr(&errs, "MSA_OUTBOX_MAX_ATTEMPTS", 20)
+
+	// 关停宽限期的下限是流超时本身：比它小就意味着一条正当地处于静默
+	// 思考期的流每次部署都会被掐断，而客户端看到的是连接中断而非错误。
+	minGrace := c.FirstTokenTimeout
+	if c.IdleTimeout > minGrace {
+		minGrace = c.IdleTimeout
+	}
+	// 判「是否显式设置」看环境变量在不在，而不是看值是否为零：
+	// 显式写 0s 的人意图是「不等」，那应当被下面那条规则拒掉并给出理由，
+	// 而不是被当成未设置从而静默取一个很大的默认。
+	if os.Getenv("MSA_SHUTDOWN_GRACE") == "" {
+		c.ShutdownGrace = minGrace
+	} else {
+		c.ShutdownGrace = durationOr(&errs, "MSA_SHUTDOWN_GRACE", minGrace)
+		if c.ShutdownGrace < minGrace {
+			fail("MSA_SHUTDOWN_GRACE (%s) must be at least "+
+				"max(MSA_FIRST_TOKEN_TIMEOUT, MSA_IDLE_TIMEOUT) (%s): "+
+				"a smaller grace truncates streams that are legitimately still silent",
+				c.ShutdownGrace, minGrace)
+		}
+	}
+	// 这两个不接受非正值表达「关闭」：连接层那几个参数用负值关闭是因为
+	// 关掉它们是合理的运维选择，而「不等在途、不冲队列」不是——
+	// 那恰好就是本轮要修掉的那两个缺陷的样子。
+	c.ShutdownLinger = durationOr(&errs, "MSA_SHUTDOWN_LINGER", 30*time.Second)
+	if c.ShutdownLinger <= 0 {
+		fail("MSA_SHUTDOWN_LINGER must be positive")
+	}
+	c.ShutdownFlushTimeout = durationOr(&errs, "MSA_SHUTDOWN_FLUSH_TIMEOUT", 10*time.Second)
+	if c.ShutdownFlushTimeout <= 0 {
+		fail("MSA_SHUTDOWN_FLUSH_TIMEOUT must be positive")
+	}
 	c.EstimateUsage = boolOr(&errs, "MSA_ESTIMATE_USAGE", true)
 	c.AccessLog = boolOr(&errs, "MSA_ACCESS_LOG", true)
 	c.LogRetention = durationOr(&errs, "MSA_LOG_RETENTION", 14*24*time.Hour)
