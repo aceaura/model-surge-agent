@@ -35,6 +35,10 @@ func (l *RequestLog) Insert(ctx context.Context, rec pipeline.Record) error {
 	if err != nil {
 		return fmt.Errorf("encode lossy: %w", err)
 	}
+	trail, err := json.Marshal(nonNilTrail(rec.AttemptsTrail))
+	if err != nil {
+		return fmt.Errorf("encode attempts_trail: %w", err)
+	}
 	at := rec.At
 	if at.IsZero() {
 		at = time.Now()
@@ -46,8 +50,8 @@ func (l *RequestLog) Insert(ctx context.Context, rec pipeline.Record) error {
 			committed, stream, usage_estimated,
 			input_tokens, output_tokens, cache_read_tokens,
 			latency_ms, first_token_ms, error_code, error_message, sanitized, lossy,
-			retry_after, dispatch_ms, upstream_ms)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
+			retry_after, dispatch_ms, upstream_ms, attempts_trail)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
 		ON CONFLICT (request_id) DO UPDATE SET
 			at = EXCLUDED.at, outbound_protocol = EXCLUDED.outbound_protocol,
 			model_id = EXCLUDED.model_id, account = EXCLUDED.account,
@@ -60,13 +64,14 @@ func (l *RequestLog) Insert(ctx context.Context, rec pipeline.Record) error {
 			error_code = EXCLUDED.error_code, error_message = EXCLUDED.error_message,
 			sanitized = EXCLUDED.sanitized, lossy = EXCLUDED.lossy,
 			retry_after = EXCLUDED.retry_after,
-			dispatch_ms = EXCLUDED.dispatch_ms, upstream_ms = EXCLUDED.upstream_ms`,
+			dispatch_ms = EXCLUDED.dispatch_ms, upstream_ms = EXCLUDED.upstream_ms,
+			attempts_trail = EXCLUDED.attempts_trail`,
 		rec.RequestID, at, rec.InboundProtocol, rec.Path, rec.UserModel, rec.OutboundProtocol,
 		rec.ModelID, rec.Account, rec.Outcome, rec.StatusCode, rec.Attempts, tried,
 		rec.Committed, rec.Stream, rec.UsageEstimated,
 		rec.Usage.InputTokens, rec.Usage.OutputTokens, rec.Usage.CacheReadTokens,
 		rec.LatencyMS, rec.FirstTokenMS, rec.ErrorCode, rec.ErrorMessage, sanitized, lossy,
-		zeroTimeAsNull(rec.RetryAfter), rec.DispatchMS, rec.UpstreamMS)
+		zeroTimeAsNull(rec.RetryAfter), rec.DispatchMS, rec.UpstreamMS, trail)
 	return err
 }
 
@@ -201,7 +206,7 @@ const recordColumns = `request_id, at, inbound_protocol, path, user_model, outbo
 	committed, stream, usage_estimated,
 	input_tokens, output_tokens, cache_read_tokens,
 	latency_ms, first_token_ms, error_code, error_message, sanitized, lossy, retry_after,
-	dispatch_ms, upstream_ms`
+	dispatch_ms, upstream_ms, attempts_trail`
 
 func scanRecord(rows pgx.Rows) (pipeline.Record, error) {
 	var (
@@ -209,6 +214,7 @@ func scanRecord(rows pgx.Rows) (pipeline.Record, error) {
 		tried     []byte
 		sanitized []byte
 		lossy     []byte
+		trail     []byte
 		// 指针接 NULL：上游没说到期时刻时这一列为 NULL，
 		// 直接扫进 time.Time 会失败。
 		retryAfter *time.Time
@@ -218,7 +224,7 @@ func scanRecord(rows pgx.Rows) (pipeline.Record, error) {
 		&rec.Attempts, &tried, &rec.Committed, &rec.Stream, &rec.UsageEstimated,
 		&rec.Usage.InputTokens, &rec.Usage.OutputTokens, &rec.Usage.CacheReadTokens,
 		&rec.LatencyMS, &rec.FirstTokenMS, &rec.ErrorCode, &rec.ErrorMessage,
-		&sanitized, &lossy, &retryAfter, &rec.DispatchMS, &rec.UpstreamMS); err != nil {
+		&sanitized, &lossy, &retryAfter, &rec.DispatchMS, &rec.UpstreamMS, &trail); err != nil {
 		return rec, err
 	}
 	if retryAfter != nil {
@@ -239,12 +245,28 @@ func scanRecord(rows pgx.Rows) (pipeline.Record, error) {
 			return rec, fmt.Errorf("decode lossy: %w", err)
 		}
 	}
+	if len(trail) > 0 {
+		if err := json.Unmarshal(trail, &rec.AttemptsTrail); err != nil {
+			return rec, fmt.Errorf("decode attempts_trail: %w", err)
+		}
+	}
 	return rec, nil
 }
 
 func nonNil(in []string) []string {
 	if in == nil {
 		return []string{}
+	}
+	return in
+}
+
+// nonNilTrail 与 nonNil 同义，只是元素类型不同。
+//
+// 不做成泛型：调用点只有两处，而泛型版本要么让 JSONB 列有机会写进 null
+// 要么得额外约束元素类型，读起来比多写四行更绕。
+func nonNilTrail(in []pipeline.AttemptRecord) []pipeline.AttemptRecord {
+	if in == nil {
+		return []pipeline.AttemptRecord{}
 	}
 	return in
 }

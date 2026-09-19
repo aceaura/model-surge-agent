@@ -38,6 +38,17 @@ func fullRecord() pipeline.Record {
 		ErrorMessage:     "",
 		Sanitized:        []string{"dropped an orphan tool_result"},
 		Lossy:            []string{"dropped top_k (chat_completions cannot express it: no top_k parameter)"},
+		AttemptsTrail: []pipeline.AttemptRecord{
+			{
+				N: 1, ModelID: "kimi-1/k3", Account: "kimi-1", OutboundProtocol: "anthropic",
+				Outcome: relayclient.OutcomeRetrying, StatusCode: 500,
+				ErrorCode: "upstream_error", ErrorMessage: "boom",
+			},
+			{
+				N: 2, ModelID: "ark-1/ds", Account: "ark-1", OutboundProtocol: "chat_completions",
+				Outcome: relayclient.OutcomeNormal, StatusCode: 200,
+			},
+		},
 	}
 }
 

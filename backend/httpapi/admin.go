@@ -143,7 +143,7 @@ func (a *Admin) getRequest(w http.ResponseWriter, r *http.Request) {
 		adminError(w, http.StatusServiceUnavailable, agentv1.CodeUnavailable, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, summaryOf(rec))
+	writeJSON(w, http.StatusOK, detailOf(rec))
 }
 
 // live 读缓存的实时环。缓存不可用时回空集加 degraded 标记，
@@ -314,6 +314,27 @@ func summaryOf(rec pipeline.Record) agentv1.RequestSummary {
 		Sanitized:        rec.Sanitized,
 		Lossy:            rec.Lossy,
 	}
+}
+
+// detailOf 在列表项之外补上逐次尝试轨迹。
+func detailOf(rec pipeline.Record) agentv1.RequestDetail {
+	out := agentv1.RequestDetail{RequestSummary: summaryOf(rec)}
+	for _, it := range rec.AttemptsTrail {
+		out.AttemptsTrail = append(out.AttemptsTrail, agentv1.AttemptTrailItem{
+			N:                it.N,
+			ModelID:          it.ModelID,
+			Account:          it.Account,
+			OutboundProtocol: it.OutboundProtocol,
+			Outcome:          it.Outcome,
+			StatusCode:       it.StatusCode,
+			DispatchMS:       it.DispatchMS,
+			UpstreamMS:       it.UpstreamMS,
+			ErrorCode:        it.ErrorCode,
+			ErrorMessage:     it.ErrorMessage,
+			RetryAfter:       it.RetryAfter,
+		})
+	}
+	return out
 }
 
 // 游标编成一个不透明串：内部是 (at, request_id)，但让前端原样回传

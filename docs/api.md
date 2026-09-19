@@ -1673,6 +1673,43 @@ Gemini 的 `finishMessage`（上游随 `finishReason` 附的人类可读原因�
 - **不参考 kiro-gateway 的实现**。它的三态取舍值得学，但它是一个单例、每次请求清空同一个共享目录，并发请求会互相擦掉证据。本服务每个请求独占一个会话。
 - **调度层与配置中心零改动**。捕获完全是数据面自己的事。
 
+### 6.12 逐次尝试轨迹（attempts_trail）
+
+一次请求可能尝试多个目标（见 [6.2](#62-换目标重试与-tried_ids)）。流水行上的 `model_id`、`account`、`outcome`、`status_code`、`error_code`、`error_message`、`retry_after` 都只是**最后一次**尝试的值，`dispatch_ms` 与 `upstream_ms` 是全部尝试的**累计**值，`tried_ids` 只有被试过的模型 ID 而没有各自发生了什么。于是「第二个账号是 429 还是 500」「三次都慢还是只有第三次慢」这类问题在流水里查不到答案。
+
+`attempts_trail` 按尝试顺序给出每一次的身份与结果，随单条详情（[7.3](#73-get-adminrequestsrequest_id单条详情)）返回。
+
+**轨迹项字段**
+
+| 字段 | 类型 | 省略条件 | 含义 |
+|---|---|---|---|
+| `n` | int | 不省略 | 尝试序号，从 1 起。**零值也出现**：从 1 起意味着 `0` 本身就是 bug 信号 |
+| `model_id` | string | 空时省略 | 这次尝试的目标模型 ID |
+| `account` | string | 空时省略 | 这次尝试的账号名 |
+| `outbound_protocol` | string | 空时省略 | 这次尝试的出站协议 |
+| `outcome` | string | 不省略 | 这次尝试的结局，取值见[附录 B](#附录-b-请求结局outcome语义)。中途的尝试是 `retrying` |
+| `status_code` | int | `0` 时省略 | 这次尝试的上游 HTTP 状态码 |
+| `dispatch_ms` | int | 不省略 | **本次**向调度层要目标的耗时。**零值也出现**：`0` 是「快到不足 1 毫秒」这个有意义的观测值 |
+| `upstream_ms` | int | 不省略 | **本次**上游连接耗时。未连上上游的那次为 `0` |
+| `error_code` | string | 成功时省略 | 这次尝试的错误码 |
+| `error_message` | string | 成功时省略 | 上游对这次尝试的错误原文 |
+| `retry_after` | string(RFC3339) | 上游未明示时省略 | 上游对这次尝试明示的最早可重试时刻 |
+
+**不变式**：轨迹各项的 `dispatch_ms` 之和等于行上的 `dispatch_ms`，`upstream_ms` 同理。据此可以判断慢在哪一次，而不只是判断总共有多慢。
+
+**调度层没给出目标的那次尝试**也会留一项，此时 `model_id`、`account`、`outbound_protocol` 三项**同时缺省**——那次尝试确实没有目标。把它伪装成一次目标失败，会让「哪个账号总失败」的统计算进一个不存在的账号。
+
+**捕获的尝试边界**。捕获（[6.11](#611-转换四体捕获)）的 `upstream_response` 是累加的，多次尝试的上游字节首尾相接。自本版起两段之间插一行 SSE 注释形式的分隔标记 `: ---- attempt N ----`（仅第二次及之后）：SSE 注释行在语法上合法且被解析器忽略，把捕获物直接喂给 SSE 工具不会报错。
+
+#### 明确不做
+
+- **不建 per-attempt 表**。流水已是每请求一行，建表就是每请求 N 行。参考实现 sub2api 曾建过这样一张表（`033_ops_monitoring_vnext.sql` 的 `ops_retry_attempts`）、扩过一次（`038`），最终整表删掉（`136_remove_ops_retry_replay.sql`），理由原文是写入宽度、内存驻留与库体积。代价是行内 JSONB 列不便索引；收益是零新表、零新写入路径、随流水一起被保留期清理。
+- **不记 `base_url`**。它的排查价值等于 `model_id` + `account` 的组合（同一账号恒定一个 base），而它是一条带路径的 URL，一些部署会把 key 放在 query 里。
+- **不记请求头与请求体**。轨迹随流水进 PG，而凭据只在内存里活着。要看字节应开捕获。
+- **不进列表端点**。`/admin/requests` 一页最多 200 条，每条再挂 N 项会让响应随重试次数膨胀。列表上的 `attempts` 计数是入口：它不为 1 时再点详情。
+- **不做「重试链」字符串**。参考实现 new-api 把尝试过的渠道拍平成 `重试：A->B->C` 一行人读文本（`controller/relay.go`），能看出顺序但看不出各自的错误码与耗时，而那正是要查的东西。
+- **不给单次尝试省掉轨迹**。只试了一次也留一项：让「查一条流水看它每次尝试」不必先分辨有没有重试过。
+
 ---
 
 ## 7. 管理面
@@ -1761,7 +1798,7 @@ curl -s "$BASE/admin/requests?user_model=demo-pool&limit=1" \
 
 ### 7.3 GET /admin/requests/{request_id}（单条详情）
 
-**使用场景**：从流水列表点进单条，查看完整的换目标链路（`tried_ids`）与最终错误。
+**使用场景**：从流水列表点进单条，查看完整的换目标链路（`tried_ids`）、逐次尝试各自发生了什么（`attempts_trail`）与最终错误。
 
 **请求**：`GET /admin/requests/{request_id}`
 
@@ -1771,7 +1808,13 @@ curl -s "$BASE/admin/requests?user_model=demo-pool&limit=1" \
 |---|---|---|---|---|
 | `request_id` | string | 是 | 非空 | 请求 ID（流水中 `request_id` 字段），需 URL 编码（如 `/` 编成 `%2F`） |
 
-**响应** `200`：[RequestSummary](#32-requestsummary)（单对象，不是数组）。
+**响应** `200`：[RequestSummary](#32-requestsummary) 的全部字段，外加一项 `attempts_trail`（单对象，不是数组）。
+
+**详情独有字段**
+
+| 字段 | 类型 | 省略条件 | 含义 |
+|---|---|---|---|
+| `attempts_trail` | array&lt;object&gt; | 为空时省略 | 逐次尝试的轨迹，按尝试顺序。逐项字段与不变式见 [6.12](#612-逐次尝试轨迹attempts_trail)。**列表端点刻意不带这一列** |
 
 **错误**
 
@@ -1805,9 +1848,74 @@ curl -s "$BASE/admin/requests/req_fcb7839ac6c6cb8810820d35" \
   "latency_ms": 1520,
   "first_token_ms": 230,
   "dispatch_ms": 9,
-  "upstream_ms": 115
+  "upstream_ms": 115,
+  "attempts_trail": [
+    {
+      "n": 1,
+      "model_id": "kimi-k2-turbo",
+      "account": "kimi-1",
+      "outbound_protocol": "anthropic",
+      "outcome": "normal",
+      "status_code": 200,
+      "dispatch_ms": 9,
+      "upstream_ms": 115
+    }
+  ]
 }
 ```
+
+换过目标的那条形如：
+
+```json
+{
+  "request_id": "req_3f1c08b54a2e77d9",
+  "outcome": "normal",
+  "status_code": 200,
+  "attempts": 3,
+  "tried_ids": ["kimi-k2-turbo", "doubao-seed"],
+  "dispatch_ms": 24,
+  "upstream_ms": 903,
+  "attempts_trail": [
+    {
+      "n": 1,
+      "model_id": "kimi-k2-turbo",
+      "account": "kimi-1",
+      "outbound_protocol": "anthropic",
+      "outcome": "retrying",
+      "status_code": 429,
+      "dispatch_ms": 8,
+      "upstream_ms": 96,
+      "error_code": "rate_limit",
+      "error_message": "rate limit exceeded",
+      "retry_after": "2026-09-19T03:20:00Z"
+    },
+    {
+      "n": 2,
+      "model_id": "doubao-seed",
+      "account": "ark-2",
+      "outbound_protocol": "chat_completions",
+      "outcome": "retrying",
+      "status_code": 500,
+      "dispatch_ms": 7,
+      "upstream_ms": 121,
+      "error_code": "upstream",
+      "error_message": "internal error"
+    },
+    {
+      "n": 3,
+      "model_id": "kimi-k2-turbo",
+      "account": "kimi-2",
+      "outbound_protocol": "anthropic",
+      "outcome": "normal",
+      "status_code": 200,
+      "dispatch_ms": 9,
+      "upstream_ms": 686
+    }
+  ]
+}
+```
+
+三项的 `dispatch_ms` 之和 `8 + 7 + 9 = 24` 等于行上的 `dispatch_ms`，`upstream_ms` 同理 `96 + 121 + 686 = 903`。
 
 ### 7.4 GET /admin/live（实时环）
 
@@ -2227,6 +2335,7 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| 2.12 | 2026-09-19 | 逐次尝试轨迹首次成文（[6.12](#612-逐次尝试轨迹attempts_trail)）：流水新增行内 JSONB 列 `attempts_trail`（老库自动补列），随单条详情（[7.3](#73-get-adminrequestsrequest_id单条详情)）返回；捕获的 `upstream_response` 在第二次及之后的尝试前插入分隔标记 `: ---- attempt N ----`。**行为变更**：此前一次请求尝试了多个目标时，流水上的 `model_id`/`account`/`outcome`/`status_code`/`error_code`/`error_message`/`retry_after` 全都只是**最后一次**的值，`dispatch_ms`/`upstream_ms` 是累计值，`tried_ids` 只有模型 ID 而没有各自的结果——「第二个账号是 429 还是 500」「三次都慢还是只有第三次慢」在流水里无从得知，而上一版加入的捕获又把多次尝试的上游字节无边界拼在一起。**形态选择**：行内一列而不是 per-attempt 表，依据是参考实现 sub2api 曾建过 `ops_retry_attempts` 表（`033_ops_monitoring_vnext.sql`）、扩过一次（`038`）、最终整表删掉（`136_remove_ops_retry_replay.sql`），理由原文是写入宽度、内存驻留与库体积；new-api 从未建表，只把尝试过的渠道拍平成 `重试：A->B->C` 一行人读文本（`controller/relay.go`），看不出各自的错误码与耗时。**不变式**：轨迹各项耗时之和恒等于行上的累计值，因此「本次值」与「累计值」两个计时器混用会被立刻发现。**凭据边界**：轨迹随流水进 PG，因此只含标识与结果标量，绝不含请求头、`base_url`（其排查价值等于 `model_id`+`account`，而它是带路径的 URL、可能把 key 放在 query 里）或请求体。**明确不做**：不建 per-attempt 表；不进列表端点（一页 200 条会随重试次数膨胀，`attempts` 计数是入口）；不做「重试链」人读字符串；不给单次尝试省掉轨迹；调度层与配置中心零改动 |
 | 2.11 | 2026-09-19 | 转换四体捕获首次成文（[6.11](#611-转换四体捕获)）：新增 `MSA_CAPTURE_MODE` 三态开关（`off`/`errors`/`all`，默认 `off`，非法值拒绝启动）与两个上限变量，新增两个管理面端点（[7.9](#79-get-admincaptures捕获列表)、[7.10](#710-get-admincapturesrequest_id四体全文)）。**行为变更**：此前本服务**没有任何**调试捕获设施——流水只记转换层自己判断出的结论（`sanitized`/`lossy`/`error_code`），当那个判断本身错了时没有任何东西可看。上一次定位 kiro 的 `toolUse` 帧碎裂 bug 就是靠手写一段临时 tee 抓真实上游字节才找到根因，那段代码用完即弃、下一次还得重写。四体的取舍：`upstream_request` 换目标重试时覆盖（诊断对象是最终发出去的那一次），`upstream_response` 与 `client_response` 累加（同一个流的连续片段）；留/丢判据用 `error_code != ""` 而非 `outcome`，两者在「重试后成功」（不留）与「客户端取消」（要留，`outcome` 是 `normal` 但 `error_code` 是 `canceled`）两处分歧。**凭据边界**：捕获只含 body、永不含任何请求头，因此也刻意不做 body 内的正则脱敏——不存在凭据这件事由结构保证，再加一层只会给出虚假的安全感。**明确不做**：不落盘（要长期留证据应在反代层抓包）；不捕获 IR 与事件序列（可由前后两体推出）；不做采样（`errors` 档已是「常开而不撑爆内存」的形态）；不做 base64（唯一用途是人眼直接看）；不照搬 kiro-gateway 的 `debug_logger.py` 实现（它是单例、每请求 `shutil.rmtree` 同一个共享目录，并发请求互相擦掉证据）；调度层与配置中心零改动 |
 | 2.10 | 2026-09-19 | 时延分段归因与依赖饱和度首次成文（[6.10](#610-依赖饱和度与时延分段)）：流水新增 `dispatch_ms`、`upstream_ms` 两列（累计值，含全部重试），`/health` 与 `/admin/health` 新增 `pool`（五个数）与 `goroutines`。**行为变更**：此前 `latency_ms` 是一个不可拆的总数，一个 30 秒的请求分不清是调度层要目标要了很久、上游压着响应头不发、还是生成本来就长；`/health` 只对 PG 做 `Ping` 报 `ok`/`down`，连接池被占满时每个请求都慢而**每一条流水看上去都正常**——慢的那段在等连接上，那段不在任何一条请求的计时里。`upstream_ms` 的终点选在响应头到达而不是首帧，与 `MSA_RESPONSE_HEADER_TIMEOUT` 对齐；两段在重试时累加而非覆盖（与 `lossy` 的覆盖语义刻意相反）。**明确不做**：不引入 Prometheus/OpenTelemetry（四个参考仓库无一使用）；不做 sub2api 的 auth/routing/upstream/response 四段划分（本服务的入站鉴权是转发给调度层做的，没有独立的 auth 段；response 段与生成时间在 SSE 下不可分）；不加 `error_owner`/`is_business_limited`（SLA 口径的计算面在调度层）；不存请求体/响应体（sub2api 自己已把错误表里的 `request_body` 删掉）；不做 per-attempt 逐次快照（需另建表）；不起后台 goroutine 采样池指标（换来的是过时数字）；不给 `goroutines` 设阈值告警（本服务没有告警设施） |
 | 2.9 | 2026-09-19 | 死连接探测与连接层归因首次成文（[6.9](#69-死连接探测与连接层归因)）：出站 transport 配 HTTP/2 PING 健康检查（`MSA_H2_SEND_PING_TIMEOUT`、`MSA_H2_PING_TIMEOUT`，默认各 15s），新增 `transport` 错误分类（502）与同名结果上报类别，该类别**不计入目标的失败计数**、调度层运行态零变更。**行为变更**：此前所有 `Do` 失败一律归 `upstream`，经 `retrying` 累计到目标的失败计数上——一条静默半开的连接会把一个完全健康的账号推向冷却；且没有主动探测，撞上死连接的请求只能等 120s 的响应头超时，那对一次尝试是整个重试预算（本机探针实测：不配 PING 时挂到 20s ctx 超时都不失败，配了 4s 内明确失败）。**明确不做**：HTTP/1.1 正常关闭不加重放（标准库已自动换连接重放，实测确认）；不自定义 `DialContext` 设 `KeepAlive`（`DefaultTransport` 的 Dialer 已带 30s，重写还会丢掉标准库后续的默认调整）；不做 per-origin 分片 transport（PING 是直接摘掉死连接，分片只缩小爆炸半径）；连接层失败不在同一目标上就地重试（换目标已能恢复，真正的收益是不记这个目标的失败）；committed 之后读流失败仍归 `upstream`（客户端已收到部分内容，换目标会拼出两段回答） |

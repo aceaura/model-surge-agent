@@ -90,6 +90,35 @@ type RequestSummary struct {
 	Lossy []string `json:"lossy,omitempty"`
 }
 
+// AttemptTrailItem 是一次尝试的轨迹项。绝不含凭据、BaseURL 与请求体。
+type AttemptTrailItem struct {
+	// N 是尝试序号，从 1 起。不带 omitempty：零值本身就是 bug 信号。
+	N int `json:"n"`
+	// 调度层没给出目标的那次尝试，这三项为空——它确实没有目标。
+	ModelID          string `json:"model_id,omitempty"`
+	Account          string `json:"account,omitempty"`
+	OutboundProtocol string `json:"outbound_protocol,omitempty"`
+	Outcome          string `json:"outcome"`
+	StatusCode       int    `json:"status_code,omitempty"`
+	// DispatchMS、UpstreamMS 是**本次**尝试的耗时，不是累计值；
+	// 各项之和等于行上的 dispatch_ms、upstream_ms。都不带 omitempty：
+	// 0 是有意义的观测值，省掉会让「很快」与「没记」无法区分。
+	DispatchMS   int       `json:"dispatch_ms"`
+	UpstreamMS   int       `json:"upstream_ms"`
+	ErrorCode    string    `json:"error_code,omitempty"`
+	ErrorMessage string    `json:"error_message,omitempty"`
+	RetryAfter   time.Time `json:"retry_after,omitzero"`
+}
+
+// RequestDetail 是单条流水的详情，比列表项多一条逐次尝试轨迹。
+//
+// 与 RequestSummary 分型而不是给后者加字段：列表一页最多 200 条，
+// 每条再挂 N 项轨迹会让分页响应随重试次数膨胀，而列表的用途是找到那一条。
+type RequestDetail struct {
+	RequestSummary
+	AttemptsTrail []AttemptTrailItem `json:"attempts_trail,omitempty"`
+}
+
 // RequestPage 的 NextCursor 为空表示没有下一页。
 type RequestPage struct {
 	Requests   []RequestSummary `json:"requests"`

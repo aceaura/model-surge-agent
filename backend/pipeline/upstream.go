@@ -81,7 +81,10 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 	// FirstTokenMS，且首帧里含上游的思考时间——那是生成成本不是连接成本。
 	// 响应头这一刻正是 ResponseHeaderTimeout 约束的那一刻，两者对齐，
 	// 运维看到 upstream_ms 逼近那个阈值就知道该调哪个参数。
-	rec.UpstreamMS += msSince(upstreamStart, p.now())
+	upstreamMS := msSince(upstreamStart, p.now())
+	rec.UpstreamMS += upstreamMS
+	// 同一次尝试内 open 只调一次，所以本次值直接赋而不是累加。
+	rec.attemptUpstreamMS = upstreamMS
 	if err != nil {
 		cancel()
 		// 连接层与「上游明确地不行」分开归因：前者上游可能完全健康，

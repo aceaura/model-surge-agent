@@ -343,6 +343,39 @@ func TestCaptureCopiesBytes(t *testing.T) {
 	}
 }
 
+// 边界标记只落在上游响应上，且只在第二次及之后插。
+func TestMarkAttemptOnlySeparatesFromSecondAttempt(t *testing.T) {
+	st := New(Options{Mode: ModeAll})
+	sn := st.Begin("r1")
+	sn.MarkAttempt(1)
+	sn.Add(UpstreamResponse, []byte("first"))
+	sn.MarkAttempt(2)
+	sn.Add(UpstreamResponse, []byte("second"))
+	sn.Finish(true)
+
+	snap, _ := st.Get("r1")
+	got := string(snap.Bodies[UpstreamResponse].Bytes)
+	if strings.Contains(got, "attempt 1") {
+		t.Errorf("第一次尝试前面没有要分开的东西，不该插标记：%q", got)
+	}
+	if got != "first\n: ---- attempt 2 ----\nsecond" {
+		t.Errorf("边界标记的位置或形状不对：%q", got)
+	}
+	// 只污染上游响应这一体：其余三体是单次的，插标记只会让它们不再是原文。
+	for _, kind := range []Kind{ClientRequest, UpstreamRequest, ClientResponse} {
+		if len(snap.Bodies[kind].Bytes) != 0 {
+			t.Errorf("标记写进了 body %d", kind)
+		}
+	}
+}
+
+// nil 会话上调 MarkAttempt 不能崩：捕获关闭时 Call.Capture 就是 nil，
+// 而调用点在数据面主路径上。
+func TestMarkAttemptOnNilSessionIsSafe(t *testing.T) {
+	var sn *Session
+	sn.MarkAttempt(2)
+}
+
 func TestOutOfRangeKindIsIgnored(t *testing.T) {
 	st := New(Options{Mode: ModeAll})
 	sn := st.Begin("r1")

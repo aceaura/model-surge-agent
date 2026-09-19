@@ -203,6 +203,23 @@ func (sn *Session) Set(kind Kind, p []byte) {
 	b.buf = append(b.buf, p...)
 }
 
+// MarkAttempt 在上游响应体里插一条第 n 次尝试的分隔标记。
+//
+// 上游字节是累加的，换目标重试时两次的响应会直接首尾相接，读的人分不出
+// 「上游先回了 429 再回了正文」还是「一次就回了这些」。
+//
+// 标记形如 SSE 注释行（冒号开头），因为上游响应绝大多数是 SSE：注释行
+// 在 SSE 语法里合法且被解析器忽略，把捕获物直接喂给一个 SSE 工具时它不会
+// 报错。非 SSE 的整体响应同样只是多一行文本，不影响肉眼阅读。
+//
+// n <= 1 不插：第一次尝试前面没有需要分开的东西，插了只是噪音。
+func (sn *Session) MarkAttempt(n int) {
+	if sn == nil || n <= 1 {
+		return
+	}
+	sn.Add(UpstreamResponse, []byte(fmt.Sprintf("\n: ---- attempt %d ----\n", n)))
+}
+
 // Writer 把某一体包成 io.Writer，供 io.TeeReader 之类的既有管道直接用。
 //
 // nil 会话回 io.Discard 而不是 nil：调用点通常是 io.TeeReader 的第二个参数，

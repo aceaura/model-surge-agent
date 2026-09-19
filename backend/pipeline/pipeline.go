@@ -73,10 +73,25 @@ type Record struct {
 	// 不变式：DispatchMS + UpstreamMS <= LatencyMS。
 	// LatencyMS 减去两段即「本服务自身 + 上游生成」，据此回答
 	// 「慢在上游还是慢在我们」，不需要再加字段。
-	DispatchMS   int
-	UpstreamMS   int
-	ErrorCode    string
-	ErrorMessage string
+	DispatchMS int
+	UpstreamMS int
+	// AttemptsTrail 是逐次尝试的轨迹，按尝试顺序排列。
+	//
+	// 行内一列而不是另建一张 per-attempt 表：流水已是每请求一行，建表就是
+	// 每请求 N 行。参考实现 sub2api 建过那样一张表（033 迁移）又整表删掉
+	// （136 迁移），理由原文是写入宽度、内存驻留与库体积。代价是这一列
+	// 不便索引；收益是零新表、零新写入路径、随流水一起被保留期清理。
+	AttemptsTrail []AttemptRecord
+	// attemptDispatchMS/attemptUpstreamMS 是**本次**尝试各自的耗时，
+	// 与累计的 DispatchMS/UpstreamMS 并存，每次尝试开头清零。
+	//
+	// 不用「累计值做差」算本次值：做差要求追加轨迹的地方知道上一次的累计
+	// 是多少，那是一个隐式的顺序依赖，改动顺序就会静默算错。分开累加则
+	// 每次尝试的清零点在代码里直接可见。
+	attemptDispatchMS int
+	attemptUpstreamMS int
+	ErrorCode         string
+	ErrorMessage      string
 	// RetryAfter 是上游明示的该目标最早可重试时刻，零值表示上游没说。
 	// 落库供事后回答「那次为什么换了目标」。
 	RetryAfter time.Time
@@ -96,6 +111,42 @@ type Record struct {
 	// 响应侧则累加——响应侧发生在已 committed 之后，不存在换目标重试，
 	// 一个流里同类丢弃出现多次都属于同一次实际响应。
 	responseLossy []string
+}
+
+// AttemptRecord 是一次尝试的轨迹项。
+//
+// 只含标识与结果标量，绝不含凭据、BaseURL 或请求体。不记 BaseURL：它的排查
+// 价值等于 model_id+account 的组合（同一账号恒定一个 base），而它是一条带
+// 路径的 URL，一些部署会把 key 放在 query 里。
+type AttemptRecord struct {
+	// N 是尝试序号，从 1 起。
+	//
+	// 不带 omitempty：从 1 起意味着零值本身就是 bug 信号，让它消失会把
+	// 那个 bug 一起藏掉。
+	N int `json:"n"`
+	// ModelID/Account/OutboundProtocol 在调度层没给出目标时为空——
+	// 那次尝试确实没有目标，缺省比填空字符串更诚实。
+	ModelID          string `json:"model_id,omitempty"`
+	Account          string `json:"account,omitempty"`
+	OutboundProtocol string `json:"outbound_protocol,omitempty"`
+	Outcome          string `json:"outcome"`
+	StatusCode       int    `json:"status_code,omitempty"`
+	// DispatchMS/UpstreamMS 是**本次**尝试的耗时，不是累计值。
+	//
+	// 都不带 omitempty：0 是有意义的观测值（快到不足 1 毫秒），
+	// 省掉它会让读的人分不清「很快」与「没记」。
+	DispatchMS int `json:"dispatch_ms"`
+	UpstreamMS int `json:"upstream_ms"`
+	// ErrorCode/ErrorMessage 只在这次尝试失败时有值。
+	ErrorCode    string `json:"error_code,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+	// RetryAfter 是上游对这次尝试明示的最早可重试时刻。
+	RetryAfter time.Time `json:"retry_after,omitzero"`
+}
+
+// addAttempt 追加一条轨迹项。
+func (r *Record) addAttempt(item AttemptRecord) {
+	r.AttemptsTrail = append(r.AttemptsTrail, item)
 }
 
 // addResponseLossy 累加响应侧说明。合并与去重推迟到落库前统一做。
@@ -200,6 +251,10 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 	for attempt := range max(p.Opts.MaxAttempts, 1) {
 		rec.Attempts = attempt + 1
 		rec.TriedIDs = tried
+		// 本次尝试的两段耗时从零起算。放在循环体开头而不是结尾：
+		// 中途 return 的路径不会执行结尾的清零。
+		rec.attemptDispatchMS = 0
+		rec.attemptUpstreamMS = 0
 
 		dispatchStart := p.now()
 		disp, err := p.Dispatch.Dispatch(ctx, relayclient.DispatchRequest{
@@ -212,10 +267,22 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 		})
 		// 累加在判错之前：失败的那次要目标同样花了时间，而「调度层超时后
 		// 才报错」正是要看见的形态，记到 err 分支之后就会漏掉它。
-		rec.DispatchMS += msSince(dispatchStart, p.now())
+		dispatchMS := msSince(dispatchStart, p.now())
+		rec.DispatchMS += dispatchMS
+		rec.attemptDispatchMS = dispatchMS
 		if err != nil {
 			// 调度层没给出目标，没有 model_id 可上报，只能回错。
 			lastErr = dispatchError(err)
+			// 这次尝试仍要留痕，但目标三项留空：它不是「某个目标失败了」，
+			// 把它伪装成一次目标失败会让「哪个账号总失败」的排查算进一个
+			// 不存在的账号。
+			rec.addAttempt(AttemptRecord{
+				N:            attempt + 1,
+				Outcome:      relayclient.OutcomeAbnormal,
+				DispatchMS:   dispatchMS,
+				ErrorCode:    string(lastErr.Kind),
+				ErrorMessage: lastErr.Message,
+			})
 			p.fail(w, call, &rec, lastErr)
 			return
 		}
@@ -227,7 +294,7 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 
 		outcome, res := p.attempt(ctx, w, call, target, attempt, start, &rec)
 		if res.err == nil {
-			p.report(call, target, attempt, relayclient.OutcomeNormal, res.usage, nil)
+			p.report(call, target, attempt, relayclient.OutcomeNormal, res.usage, nil, &rec)
 			rec.Outcome = relayclient.OutcomeNormal
 			rec.Usage = res.usage
 			return
@@ -240,14 +307,14 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 		// committed 之后目标已锁定：响应已经开始写出，
 		// 换目标会让客户端看到两段拼接的回答。
 		if res.committed {
-			p.report(call, target, attempt, outcome, res.usage, res.err)
+			p.report(call, target, attempt, outcome, res.usage, res.err, &rec)
 			rec.Outcome = outcome
 			rec.Usage = res.usage
 			return
 		}
 		// 换目标也不会好（参数错、上下文超限），直接回错。
 		if !res.err.Retryable {
-			p.report(call, target, attempt, outcome, res.usage, res.err)
+			p.report(call, target, attempt, outcome, res.usage, res.err, &rec)
 			rec.Outcome = outcome
 			rec.Usage = res.usage
 			p.fail(w, call, &rec, res.err)
@@ -258,12 +325,12 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 		last := attempt == max(p.Opts.MaxAttempts, 1)-1
 		if last {
 			// 不再重试，所以是 abnormal 而非 retrying：后者表示还会换目标。
-			p.report(call, target, attempt, downgrade(outcome), res.usage, res.err)
+			p.report(call, target, attempt, downgrade(outcome), res.usage, res.err, &rec)
 			rec.Outcome = downgrade(outcome)
 			rec.TriedIDs = tried
 			break
 		}
-		p.report(call, target, attempt, outcome, res.usage, res.err)
+		p.report(call, target, attempt, outcome, res.usage, res.err, &rec)
 		rec.TriedIDs = tried
 	}
 
@@ -290,6 +357,10 @@ func (p *Pipeline) attempt(ctx context.Context, w http.ResponseWriter, call Call
 				fmt.Sprintf("no outbound codec for protocol %q", target.Protocol))),
 		}
 	}
+
+	// 标在编码之前：这一次尝试从此刻起写入的上游字节都归到它名下，
+	// 包括编码或建流阶段就失败时上游回的错误体。
+	call.Capture.MarkAttempt(attempt + 1)
 
 	req := call.Request.Clone()
 	// native model 在编码前替换：出站请求体里必须是上游认识的名字。
@@ -358,13 +429,39 @@ func (p *Pipeline) fail(w http.ResponseWriter, call Call, rec *Record, err *ir.E
 // 收 err 而不是单收一个 retryAfter 参数：到期时刻是错误的属性，
 // 让五处调用点各自从 res.err 里取会有人忘。
 func (p *Pipeline) report(call Call, target relayclient.Target, attempt int,
-	outcome string, usage relayclient.Usage, err *ir.Error) {
-	if p.Reporter == nil {
-		return
-	}
+	outcome string, usage relayclient.Usage, err *ir.Error, rec *Record) {
 	var retryAfter time.Time
 	if err != nil {
 		retryAfter = err.RetryAfter
+	}
+	// 轨迹与上报用同一个 outcome 变量，两处永不分歧：各算一次的话，
+	// 调度层看到 retrying 而本地记 abnormal 这类分歧会让人不知该信哪个。
+	//
+	// 追加放在这里而不是五条终止路径各写一遍：那五条路径**每一条都恰好**
+	// 调一次 report，是唯一的共同漏斗；分散写迟早漏一条，而漏掉的那条在
+	// 读代码时看不出来。也因此这一步排在 Reporter 判空之前——没装配上报
+	// 实现时轨迹照样要留。
+	item := AttemptRecord{
+		N:                attempt + 1,
+		ModelID:          target.ModelID,
+		Account:          target.Account,
+		OutboundProtocol: target.Protocol,
+		Outcome:          outcome,
+		DispatchMS:       rec.attemptDispatchMS,
+		UpstreamMS:       rec.attemptUpstreamMS,
+		RetryAfter:       retryAfter,
+	}
+	if err != nil {
+		item.ErrorCode = string(err.Kind)
+		item.ErrorMessage = err.Message
+		item.StatusCode = err.StatusCode
+	} else {
+		item.StatusCode = rec.StatusCode
+	}
+	rec.addAttempt(item)
+
+	if p.Reporter == nil {
+		return
 	}
 	p.Reporter.Report(relayclient.ResultReport{
 		// attempt 入键：同一客户端请求的多次尝试各自上报，

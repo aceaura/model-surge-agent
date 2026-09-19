@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS request_log (
   error_message     TEXT NOT NULL DEFAULT '',
   sanitized         JSONB NOT NULL DEFAULT '[]',
   lossy             JSONB NOT NULL DEFAULT '[]',
+  -- 逐次尝试的轨迹。行内一列而不是另建 per-attempt 表：流水已是每请求
+  -- 一行，建表就是每请求 N 行。代价是这一列不便索引。
+  attempts_trail    JSONB NOT NULL DEFAULT '[]',
   -- 上游明示的该目标最早可重试时刻。NULL 表示上游没说。
   retry_after       TIMESTAMPTZ
 );
@@ -41,6 +44,7 @@ ALTER TABLE request_log ADD COLUMN IF NOT EXISTS path TEXT NOT NULL DEFAULT '';
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS retry_after TIMESTAMPTZ;
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS dispatch_ms INT NOT NULL DEFAULT 0;
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS upstream_ms INT NOT NULL DEFAULT 0;
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS attempts_trail JSONB NOT NULL DEFAULT '[]';
 
 CREATE INDEX IF NOT EXISTS request_log_at_idx ON request_log(at DESC);
 CREATE INDEX IF NOT EXISTS request_log_model_idx ON request_log(model_id, at DESC);

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 管理面 DTO 的 JSON 键名是前端契约。钉死字面量：改 tag 在仓内是自洽的，
@@ -90,5 +91,54 @@ func TestCaptureWireKeys(t *testing.T) {
 	// 哪一步坏了，base64 之后要先解一层才能看。
 	if !strings.Contains(string(raw), `"body":"x"`) {
 		t.Errorf("body 不是明文：%s", raw)
+	}
+}
+
+// 轨迹的键名同样是契约。断言落在字面量上而不是往回解一遍：
+// 解码走的是同一套 tag，改名两边一起变、完全测不出来。
+func TestAttemptTrailWireKeys(t *testing.T) {
+	raw, err := json.Marshal(RequestDetail{
+		RequestSummary: RequestSummary{RequestID: "r1"},
+		AttemptsTrail: []AttemptTrailItem{{
+			N: 1, ModelID: "kimi-1/k3", Account: "acc-a", OutboundProtocol: "anthropic",
+			Outcome: "retrying", StatusCode: 429, DispatchMS: 3, UpstreamMS: 8,
+			ErrorCode: "rate_limited", ErrorMessage: "slow down",
+			RetryAfter: time.Unix(1700000000, 0).UTC(),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, key := range []string{`"attempts_trail"`, `"n":1`, `"model_id"`, `"account"`,
+		`"outbound_protocol"`, `"outcome"`, `"status_code"`, `"dispatch_ms":3`,
+		`"upstream_ms":8`, `"error_code"`, `"error_message"`, `"retry_after"`} {
+		if !strings.Contains(string(raw), key) {
+			t.Errorf("轨迹缺键 %s：%s", key, raw)
+		}
+	}
+
+	// 零值项：n 与两段耗时必须仍在，可选项必须消失。
+	raw, err = json.Marshal(AttemptTrailItem{})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, key := range []string{`"n":0`, `"dispatch_ms":0`, `"upstream_ms":0`} {
+		if !strings.Contains(string(raw), key) {
+			t.Errorf("零值时 %s 被省掉了，会让「很快」与「没记」无法区分：%s", key, raw)
+		}
+	}
+	for _, key := range []string{`"model_id"`, `"account"`, `"retry_after"`} {
+		if strings.Contains(string(raw), key) {
+			t.Errorf("零值时 %s 不该出现：%s", key, raw)
+		}
+	}
+
+	// 列表项刻意不带这一列。
+	raw, err = json.Marshal(RequestSummary{RequestID: "r1", Attempts: 3})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "attempts_trail") {
+		t.Errorf("列表项带上了轨迹：%s", raw)
 	}
 }
