@@ -18,6 +18,7 @@ import (
 
 	"github.com/aceaura/model-surge-agent/backend/capture"
 	"github.com/aceaura/model-surge-agent/backend/codec"
+	"github.com/aceaura/model-surge-agent/backend/codec/ratelimit"
 	"github.com/aceaura/model-surge-agent/backend/contract/agentv1"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 	"github.com/aceaura/model-surge-agent/backend/pipeline"
@@ -357,6 +358,9 @@ func writeIRErrorStatus(w http.ResponseWriter, inbound codec.InboundCodec, err *
 		if status == 0 {
 			status = http.StatusInternalServerError
 		}
+		// 这一支也要发退避头：连协议都没认出来的限流拒绝同样是限流，
+		// 只改有 codec 的那一支会让它静默漏掉。
+		setRetryAfter(w, err, time.Now())
 		writeJSON(w, status, map[string]string{"error": err.Message})
 		return status
 	}
@@ -365,9 +369,30 @@ func writeIRErrorStatus(w http.ResponseWriter, inbound codec.InboundCodec, err *
 		status = rendered
 	}
 	w.Header().Set("Content-Type", "application/json")
+	setRetryAfter(w, err, time.Now())
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
 	return status
+}
+
+// setRetryAfter 在错误响应上写出退避秒数，返回是否写了。
+//
+// 此前这个头一个出口都没有：上游明示的到期时刻只流向调度层，而客户端 SDK
+// 的自动退避读的正是这个头——拿不到它，429 之后它按自己的默认节奏立刻重来，
+// 把一次限流变成一场风暴。
+//
+// 必须在 WriteHeader 之前调用。写头之后设 header 是无效操作，标准库既不报错
+// 也不生效，而读代码的人会以为它生效了。
+func setRetryAfter(w http.ResponseWriter, err *ir.Error, now time.Time) bool {
+	if err == nil {
+		return false
+	}
+	v, ok := ratelimit.HeaderSeconds(err.RetryAfter, now)
+	if !ok {
+		return false
+	}
+	w.Header().Set("Retry-After", v)
+	return true
 }
 
 func asIRError(err error) *ir.Error {

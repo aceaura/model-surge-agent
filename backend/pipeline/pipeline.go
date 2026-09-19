@@ -15,6 +15,7 @@ import (
 
 	"github.com/aceaura/model-surge-agent/backend/capture"
 	"github.com/aceaura/model-surge-agent/backend/codec"
+	"github.com/aceaura/model-surge-agent/backend/codec/ratelimit"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 	"github.com/aceaura/model-surge-agent/backend/paramover"
 	"github.com/aceaura/model-surge-agent/backend/relayclient"
@@ -453,6 +454,11 @@ func (p *Pipeline) fail(w http.ResponseWriter, call Call, rec *Record, err *ir.E
 	status, body := renderErrorWithLossy(call.Inbound, err, rec)
 	rec.StatusCode = status
 	w.Header().Set("Content-Type", "application/json")
+	// 退避秒数必须在 WriteHeader 之前设：写头之后设 header 既不报错也不生效。
+	// 值从 err.RetryAfter 现算而不是转发上游那个字符串——后者可能含 CRLF。
+	if v, ok := ratelimit.HeaderSeconds(err.RetryAfter, p.now()); ok {
+		w.Header().Set("Retry-After", v)
+	}
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
 	// 错误信封也是回给客户端的字节，而且正是 errors 档要留的那一类：
