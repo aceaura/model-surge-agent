@@ -46,6 +46,9 @@ type Config struct {
 	// ResponseHeaderTimeout 只约束「发出请求到响应头到达」这一段，
 	// 头到了之后读正文不受它影响。负值表示显式不设限。
 	ResponseHeaderTimeout time.Duration
+	// H2 死连接探测的两个超时。任一为负表示显式关闭探测。
+	H2SendPingTimeout time.Duration
+	H2PingTimeout     time.Duration
 }
 
 // Load 收集所有问题一次报全，而不是逐个失败：改配置的人通常在容器日志里
@@ -105,6 +108,8 @@ func Load() (Config, error) {
 	c.MaxIdleConnsPerHost = intOr(&errs, "MSA_MAX_IDLE_CONNS_PER_HOST", 0)
 	c.IdleConnTimeout = durationOr(&errs, "MSA_IDLE_CONN_TIMEOUT", 0)
 	c.ResponseHeaderTimeout = durationOr(&errs, "MSA_RESPONSE_HEADER_TIMEOUT", 0)
+	c.H2SendPingTimeout = durationOr(&errs, "MSA_H2_SEND_PING_TIMEOUT", 0)
+	c.H2PingTimeout = durationOr(&errs, "MSA_H2_PING_TIMEOUT", 0)
 
 	if len(errs) > 0 {
 		return Config{}, errors.Join(errs...)

@@ -369,6 +369,8 @@ func outcomeFor(err *ir.Error) string {
 		return relayclient.OutcomeContextExceeded
 	case ir.ErrNotFound:
 		return relayclient.OutcomeInvalidModel
+	case ir.ErrTransport:
+		return relayclient.OutcomeTransport
 	case ir.ErrRateLimit, ir.ErrUpstream, ir.ErrTimeout:
 		return relayclient.OutcomeRetrying
 	default:

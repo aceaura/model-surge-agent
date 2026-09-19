@@ -97,12 +97,7 @@ func run(log *slog.Logger) error {
 			Dispatch: relay,
 			Reporter: worker,
 			Recorder: &recorder.Recorder{Log: requests, Cache: rdb, Logger: log},
-			HTTP: pipeline.NewHTTPClient(pipeline.TransportOptions{
-				MaxIdleConns:          cfg.MaxIdleConns,
-				MaxIdleConnsPerHost:   cfg.MaxIdleConnsPerHost,
-				IdleConnTimeout:       cfg.IdleConnTimeout,
-				ResponseHeaderTimeout: cfg.ResponseHeaderTimeout,
-			}),
+			HTTP:     pipeline.NewHTTPClient(transportOptions(cfg)),
 			Opts: pipeline.Options{
 				MaxAttempts:       cfg.MaxAttempts,
 				FirstTokenTimeout: cfg.FirstTokenTimeout,
@@ -189,5 +184,20 @@ func pruneLoop(ctx context.Context, log *slog.Logger, requests *store.RequestLog
 				log.Info("pruned request log", "rows", n)
 			}
 		}
+	}
+}
+
+// transportOptions 把配置搬到出站连接层的参数上。
+//
+// 抽成函数而不是内联在构造里：这是一层纯字段搬运，漏一个字段的症状是
+// 「运维改了环境变量毫无效果」，而内联的字面量在 main 里没法断言。
+func transportOptions(cfg config.Config) pipeline.TransportOptions {
+	return pipeline.TransportOptions{
+		MaxIdleConns:          cfg.MaxIdleConns,
+		MaxIdleConnsPerHost:   cfg.MaxIdleConnsPerHost,
+		IdleConnTimeout:       cfg.IdleConnTimeout,
+		ResponseHeaderTimeout: cfg.ResponseHeaderTimeout,
+		H2SendPingTimeout:     cfg.H2SendPingTimeout,
+		H2PingTimeout:         cfg.H2PingTimeout,
 	}
 }

@@ -125,6 +125,12 @@ const (
 	OutcomeRetrying = "retrying"
 	// OutcomeInvalidModel 目标本身不可用（上游 404、无对应出站 codec）。
 	OutcomeInvalidModel = "invalid_model"
+	// OutcomeTransport 出站连接层故障：不计入失败计数，运行态零变更。
+	//
+	// 与 context_exceeded 的零变更语义相同但刻意不复用它：一个是「请求太大」、
+	// 一个是「我们的连接坏了」，合成一类会让运维在流水里分不开两种成因
+	// 完全不同的故障。
+	OutcomeTransport = "transport"
 	// OutcomeContextExceeded 完全不改运行态：输入太长是客户端的问题，
 	// 不该记作这个目标的失败。
 	OutcomeContextExceeded = "context_exceeded"

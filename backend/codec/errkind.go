@@ -169,6 +169,10 @@ func StatusForKind(kind ir.ErrorKind) int {
 		return http.StatusTooManyRequests
 	case ir.ErrTimeout:
 		return http.StatusGatewayTimeout
+	case ir.ErrTransport:
+		// 502 而不是 ErrUpstream 的 500：500 是「上游出错了」，
+		// 502 是「没连上上游」，客户端据此能分清要不要重发。
+		return http.StatusBadGateway
 	default:
 		return http.StatusInternalServerError
 	}

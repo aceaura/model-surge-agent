@@ -221,3 +221,50 @@ func TestOverflowingDurationIsAStartupError(t *testing.T) {
 		t.Errorf("错误没指出是哪个变量：%v", err)
 	}
 }
+
+// h2 死连接探测的两个变量必须真的读进来。
+//
+// 不读的症状是运维改了环境变量却毫无效果，且静默回到内置默认——
+// 而想显式关闭探测（负值）的部署会发现关不掉。
+func TestH2PingVarsParsed(t *testing.T) {
+	setRequired(t)
+	t.Setenv("MSA_H2_SEND_PING_TIMEOUT", "7s")
+	t.Setenv("MSA_H2_PING_TIMEOUT", "8s")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.H2SendPingTimeout != 7*time.Second {
+		t.Errorf("H2SendPingTimeout = %v, want 7s", c.H2SendPingTimeout)
+	}
+	if c.H2PingTimeout != 8*time.Second {
+		t.Errorf("H2PingTimeout = %v, want 8s", c.H2PingTimeout)
+	}
+}
+
+// 负值表示显式关闭探测，必须原样透传而不是被当成非法值。
+func TestNegativeH2PingAccepted(t *testing.T) {
+	setRequired(t)
+	t.Setenv("MSA_H2_SEND_PING_TIMEOUT", "-1s")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.H2SendPingTimeout >= 0 {
+		t.Errorf("H2SendPingTimeout = %v，负值应当原样透传表示关闭探测",
+			c.H2SendPingTimeout)
+	}
+}
+
+// 不配时留零值交给 pipeline 取内置默认，不在 config 里重复一份默认值。
+func TestH2PingDefaultsStayZero(t *testing.T) {
+	setRequired(t)
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.H2SendPingTimeout != 0 || c.H2PingTimeout != 0 {
+		t.Errorf("探测超时默认应当留零值交给 pipeline：%v/%v",
+			c.H2SendPingTimeout, c.H2PingTimeout)
+	}
+}

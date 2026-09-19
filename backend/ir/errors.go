@@ -22,6 +22,12 @@ const (
 	ErrContextExceeded ErrorKind = "context_exceeded"
 	// ErrUpstream 上游 5xx 或响应无法解码。
 	ErrUpstream ErrorKind = "upstream"
+	// ErrTransport 出站连接层故障：连接被重置、h2 连接判定失联、拨号或握手失败。
+	//
+	// 与 ErrUpstream 分开：后者是「上游收到了请求并明确地不行」，而这一类里
+	// 上游可能完全健康——坏的是我们连接池里那条连接。混成一类会让一条死连接
+	// 把健康账号的失败计数推向冷却，而它本该换条连接就好。
+	ErrTransport ErrorKind = "transport"
 	// ErrTimeout 首字节或空闲超时。
 	ErrTimeout ErrorKind = "timeout"
 	// ErrInternal 本服务自身出错。
@@ -81,7 +87,7 @@ func NewError(kind ErrorKind, status int, code, message string) *Error {
 // context_exceeded 不可重试：换目标大概率同样超限，且它不该算目标的失败。
 func retryable(kind ErrorKind) bool {
 	switch kind {
-	case ErrRateLimit, ErrUpstream, ErrTimeout:
+	case ErrRateLimit, ErrUpstream, ErrTimeout, ErrTransport:
 		return true
 	default:
 		return false

@@ -234,6 +234,7 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 | `rate_limit` | 429 | 上游 429 |
 | `timeout` | 504 | 首字超时（`MSA_FIRST_TOKEN_TIMEOUT`，默认 60s）/ 空闲超时（`MSA_IDLE_TIMEOUT`，默认 120s） |
 | `upstream` | 500 | 上游 5xx / 流异常结束 / 不可解码的流 |
+| `transport` | 502 | 出站连接层故障：连接被重置、h2 连接判定失联、拨号或握手失败（见 §6.9） |
 | `internal` | 500 | 本服务内部错误 |
 
 **错误种类 → 协议错误类型名**：
@@ -503,6 +504,7 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 | `rate_limit` | 限流，换目标有意义 | 是 |
 | `context_exceeded` | 输入超出模型上下文窗口 | 否（是客户端的问题） |
 | `upstream` | 上游 5xx 或响应无法解码 | 是 |
+| `transport` | 出站连接层故障（见 §6.9） | **否（坏的是本服务的连接，不是这个目标）** |
 | `timeout` | 首字节或空闲超时 | 是 |
 | `internal` | 本服务自身出错 | 是 |
 | `incomplete_stream` | 流断在不能补闭合的位置（残缺工具入参、缺签名推理块） | 是 |
@@ -1516,6 +1518,37 @@ Gemini 的 `finishMessage`（上游随 `finishReason` 附的人类可读原因�
 
 调度层拿到它之后如何改变冷却判定（明示优先、失败计数仍递增、只向后推进、不可信则回落启发式），见 model-surge-relay 的 `POST /v1/results` 一节。
 
+### 6.9 死连接探测与连接层归因
+
+连接池里可能存在**看着活、实际已经不通**的连接：NAT 表项超时、上游 LB 静默回收、网络中途中断之后，本地内核仍认为连接可用。HTTP/2 下更严重——一条 TCP 连接承载全部多路复用的流，它死掉会拖垮所有并发请求。
+
+**主动探测**。出站 transport 配 `HTTP2.SendPingTimeout`（连接空闲多久发一个 PING）与 `HTTP2.PingTimeout`（PING 发出后多久没收到 PONG 判失联）：
+
+| 环境变量 | 默认 | 含义 |
+|---|---|---|
+| `MSA_H2_SEND_PING_TIMEOUT` | `15s` | 空闲多久后发 PING |
+| `MSA_H2_PING_TIMEOUT` | `15s` | 多久没收到 PONG 判失联 |
+
+- **最坏检出耗时是两者之和**（刚探完就变死 → 等一个发送间隔 → 再等一个失联判定）。默认值之和 30s 必须显著小于 `MSA_RESPONSE_HEADER_TIMEOUT` 的 120s，否则被动超时先触发、主动探测等于没配。
+- **任一配成负值表示显式关闭探测**，此时整个不配（只配一半是无意义的状态：光有发送间隔没有失联判定，PING 发出去永远等不到结论）。
+- 探测**不改变协议协商**：是否走 HTTP/2 仍由 TLS 决定。
+- HTTP/1.1 的正常关闭不需要额外处置——标准库检测到复用连接上的 EOF 会自动换连接重放。要挡的是**静默**半开连接。
+
+**连接层单独归因**。请求发送失败时区分两类：
+
+| 判为连接层（`transport`，502） | 判为其他 |
+|---|---|
+| socket 层读写/拨号失败（`*net.OpError`） | 客户端取消（归 `canceled`） |
+| 连接被重置/拒绝/中止、写已关闭的管道 | 请求 context 超时 |
+| 响应中途断掉（`io.ErrUnexpectedEOF`） | 裸 `io.EOF`（正常的流结束） |
+| TLS 记录头非法（`*tls.RecordHeaderError`） | **证书校验失败**（换连接换目标都一样失败，问题在证书或信任库，归 `upstream`） |
+| h2 判定连接失联 | 上游有响应（哪怕是 5xx，连上了就说明连接是好的） |
+
+- `transport` 的结果上报**不计入目标的失败计数**，运行态零变更。上游可能完全健康，坏的是本服务池里那条连接；记成目标失败会让一条死连接把健康账号推向冷却。
+- `transport` 可重试：换一个目标一定可以重来。
+- **流已经开始之后（committed）读流失败不做连接层归因**，仍归 `upstream`。此时目标已锁定、客户端已收到部分内容，换目标会拼出两段回答——归因再准也无处可用。
+- 与 `context_exceeded` 一样零变更，但**是独立的分类**：一个是「请求太大」、一个是「本服务的连接坏了」，合成一类运维就在流水里分不开这两种故障。
+
 ---
 
 ## 7. 管理面
@@ -1940,6 +1973,7 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| 2.9 | 2026-09-19 | 死连接探测与连接层归因首次成文（[6.9](#69-死连接探测与连接层归因)）：出站 transport 配 HTTP/2 PING 健康检查（`MSA_H2_SEND_PING_TIMEOUT`、`MSA_H2_PING_TIMEOUT`，默认各 15s），新增 `transport` 错误分类（502）与同名结果上报类别，该类别**不计入目标的失败计数**、调度层运行态零变更。**行为变更**：此前所有 `Do` 失败一律归 `upstream`，经 `retrying` 累计到目标的失败计数上——一条静默半开的连接会把一个完全健康的账号推向冷却；且没有主动探测，撞上死连接的请求只能等 120s 的响应头超时，那对一次尝试是整个重试预算（本机探针实测：不配 PING 时挂到 20s ctx 超时都不失败，配了 4s 内明确失败）。**明确不做**：HTTP/1.1 正常关闭不加重放（标准库已自动换连接重放，实测确认）；不自定义 `DialContext` 设 `KeepAlive`（`DefaultTransport` 的 Dialer 已带 30s，重写还会丢掉标准库后续的默认调整）；不做 per-origin 分片 transport（PING 是直接摘掉死连接，分片只缩小爆炸半径）；连接层失败不在同一目标上就地重试（换目标已能恢复，真正的收益是不记这个目标的失败）；committed 之后读流失败仍归 `upstream`（客户端已收到部分内容，换目标会拼出两段回答） |
 | 2.8 | 2026-09-19 | 上游限流到期时刻首次成文（[6.8](#68-上游限流的到期时刻)）：从六类限流响应头与 Gemini 的 `google.rpc.RetryInfo` 解出「最早可以再来」的绝对时刻，随结果上报交给调度层精确冷却，并落进请求流水的 `retry_after` 列。**行为变更**：此前 `resp.Header` 在错误路径上被整体丢弃（全仓唯一读过上游响应头的地方是判 SSE 的 `Content-Type`），限流与普通上游错、超时同为 `retrying` 一档，调度层只能按失败计数累积后冷却一个固定时长——上游说「5 小时后再来」时我们一分钟后就又去撞，在整个限流窗口里反复空转，而每次空转都是一次真实的失败上报。`DecodeError` 签名因此从 `(status, body)` 改为 `(status, header, body)`（改签名而非加可选接口：限流头是 HTTP 层的，四个协议全都可能收到，漏一个就是缺口）。**明确不做**：不在数据面为同一目标睡等退避（数据面睡等会占住入站连接）；不做账号级或 (账号,模型) 级限流（账号身份在 upstream 侧，数据面看不到）；不做 `x-ratelimit-remaining-*` 的预测性避让（需要跨请求窗口状态，那是调度层的职责）；不从错误文案里抠 `"try again in 1.5s"` 这类说法（文案一改就静默失效，而失效方向是又开始瞎猜） |
 | 2.7 | 2026-09-19 | 响应侧调参保真：`service_tier` 首次原样回显（Chat Completions 顶层、Responses 的 `response` 对象；`created` 与 `completed` 两帧任一带上都认），Anthropic 出站无此位时报 `dropped service_tier from the response`；上游回多路候选而中立表示只装得下一路时报出**实际丢弃路数**（`dropped N extra response candidate(s)`，一个流恒一条），该数字可与 `usage.output_tokens` 对账；Gemini 的 `finishMessage` 原文作为说明保留（截断 200 字节，**不改写 `stop_reason`**，枚举仍只由 `finishReason` 决定）。新增第三类说明措辞 `forwarded X but the result is not returned`——与 `dropped`（换个目标就有）、`filled in`（本服务补的值）区分开，它表示换谁都拿不到。`n` 与 `logprobs` 的请求侧/响应侧分工成文（[6.4](#64-跨协议能力差异)「调参的请求侧与响应侧分工」）。**绝不拿请求里的 `service_tier` 兜底**：点 `flex` 拿到 `default` 是被降档，兜底会把降档伪装成按要求执行，而这一维决定计费。**明确不做**（五项理由成文，见 [6.4](#64-跨协议能力差异)「响应侧明确不做的维度」）：响应 `logprobs`、`system_fingerprint`、Gemini 的 grounding/citation、`safetyRatings`、`text.format` 与 `truncation` 回显 |
 | 2.6 | 2026-09-19 | 调参字段保真：13 个采样/候选/输出格式字段（penalties、`seed`、`n`、logprobs、`logit_bias`、`service_tier`、`parallel_tool_calls`、`response_format`、`verbosity`、`include`、`truncation`、客户端 `metadata`）首次进入中立表示，承载矩阵成文（[6.4](#64-跨协议能力差异)「调参字段的承载矩阵」）；Chat Completions 与 Responses 请求字段表补齐这些字段。**行为变更**：这些字段此前在解码阶段就被丢掉，**连同协议往返也丢**（本服务无透传快路径，`chat_completions → chat_completions` 一样经中立表示重建）；`max_tokens` 缺失时 Anthropic 出站的 4096 兜底现在会报有损 `filled in max_tokens`（此前无痕）。**明确不做**：不因目标不支持某字段而拒绝请求；不对小 `max_tokens` 设下限抬高；不做 `logit_bias` 的跨协议 token id 重映射；不在本地为 `n` 做扇出 |
@@ -1979,6 +2013,8 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 | `MSA_MAX_IDLE_CONNS` | `256` | 全部 host 合计的空闲连接数上限。账号池横跨多个上游，总量卡太死会让 PerHost 白设 |
 | `MSA_IDLE_CONN_TIMEOUT` | `90s` | 空闲连接多久后回收。负值表示不回收 |
 | `MSA_RESPONSE_HEADER_TIMEOUT` | `120s` | **只**约束「请求发出 → 响应头到达」这一段；头到了之后读正文不受它影响。负值表示不设限。见 [6.7](#67-出站连接层) |
+| `MSA_H2_SEND_PING_TIMEOUT` | `15s` | HTTP/2 连接空闲多久后发一个 PING 探测健康。负值表示关闭探测。见 [6.9](#69-死连接探测与连接层归因) |
+| `MSA_H2_PING_TIMEOUT` | `15s` | PING 发出后多久没收到 PONG 判连接失联。负值表示关闭探测。见 [6.9](#69-死连接探测与连接层归因) |
 
 ---
 
@@ -1992,6 +2028,7 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 | `abnormal` | 累计失败，可能触发冷却 | 最终仍失败；committed 后失败；不再重试时 `retrying` 降级而来 |
 | `retrying` | 同 abnormal，但本次会继续换目标 | 提交前失败且可重试（`rate_limit` / `upstream` / `timeout`）；上游一帧未出即结束 |
 | `invalid_model` | 目标本身记为不可用 | 上游 404；出站协议未装配或编码失败 |
+| `transport` | **完全不改运行态** | 出站连接层故障（见 [6.9](#69-死连接探测与连接层归因)）。上游可能完全健康，坏的是本服务池里那条连接。与 `context_exceeded` 同为零变更但独立成类——两者成因完全不同，合并后运维在流水里分不开 |
 | `context_exceeded` | **完全不改运行态** | 输入太长是客户端的问题，不该记作目标的失败 |
 
 每次尝试一条上报，`report_id = request_id:attempt` 保证幂等；上报失败进 outbox 重试（见 [7.6](#76-get-adminoutbox上报队列)）。

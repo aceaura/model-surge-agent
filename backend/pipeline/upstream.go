@@ -73,6 +73,12 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 	resp, err := p.client().Do(req)
 	if err != nil {
 		cancel()
+		// 连接层与「上游明确地不行」分开归因：前者上游可能完全健康，
+		// 记成它的失败会让一条死连接把健康账号推向冷却。
+		if isTransportError(err) {
+			return nil, ir.NewError(ir.ErrTransport, 0, "",
+				fmt.Sprintf("upstream connection failed: %v", err))
+		}
 		return nil, ir.NewError(ir.ErrUpstream, 0, "", fmt.Sprintf("upstream unreachable: %v", err))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

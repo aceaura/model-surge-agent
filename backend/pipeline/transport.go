@@ -13,6 +13,11 @@ type TransportOptions struct {
 	IdleConnTimeout     time.Duration
 	// ResponseHeaderTimeout 只约束「发出请求到响应头到达」这一段。
 	ResponseHeaderTimeout time.Duration
+	// H2SendPingTimeout 是 h2 连接空闲多久之后发一个 PING 去探。
+	// H2PingTimeout 是 PING 发出后多久没收到 PONG 就判连接失联。
+	// 任一为负表示显式关闭探测。
+	H2SendPingTimeout time.Duration
+	H2PingTimeout     time.Duration
 }
 
 // 连接层默认值。
@@ -31,6 +36,18 @@ const (
 	// 而有些兼容层网关攒够一批内容才发响应头。设得比首帧超时还短，
 	// 会把本该由首帧超时报出的故障错报成连接层问题。
 	defaultResponseHeaderTimeout = 120 * time.Second
+	// h2 死连接探测。最坏检出耗时是两者之和（刚探完就变死 → 等一个
+	// SendPing 才发下一个 PING → 再等一个 Ping 判失联）。
+	//
+	// 上界：和为 30s，必须显著小于 ResponseHeaderTimeout 的 120s，
+	// 否则被动超时先触发、ping 等于没配。本机探针实测：不配 ping 时撞上
+	// 静默黑洞的请求挂到 20s 的 ctx 超时都不失败，配了则 4s 内明确失败。
+	//
+	// 下界：不取 sub2api 的 10s/5s。PING 走 h2 连接层、与流数据无关，
+	// 健康连接一定回 PONG，所以压到 5s 不会误杀长流——但一条长流的生命周期里
+	// 要发几十个 PING，换来的只是检出快十几秒。
+	defaultH2SendPingTimeout = 15 * time.Second
+	defaultH2PingTimeout     = 15 * time.Second
 )
 
 // NewHTTPClient 构造调用上游的 HTTP 客户端。
@@ -58,6 +75,21 @@ func NewHTTPClient(opts TransportOptions) *http.Client {
 	// 这正是要挡的那类故障：上游接受了连接却永不回头，既不超时也不报错，
 	// 而首帧超时的计时器要等建流之后才起，管不到这里。
 	t.ResponseHeaderTimeout = durationOrDefault(opts.ResponseHeaderTimeout, defaultResponseHeaderTimeout)
+
+	// h2 死连接探测。HTTPS 上游因 ForceAttemptHTTP2 实际走 h2，而一条 h2
+	// 连接承载全部多路复用的流，它静默死掉会拖垮所有并发请求，
+	// 且不主动探就只能等被动超时——那对一次尝试是整个重试预算。
+	//
+	// 不改 ForceAttemptHTTP2：是否走 h2 由 TLS 协商决定，
+	// 这里只管走了之后死连接能不能被探出来。
+	send := durationOrDefault(opts.H2SendPingTimeout, defaultH2SendPingTimeout)
+	pong := durationOrDefault(opts.H2PingTimeout, defaultH2PingTimeout)
+	// 任一被显式关掉（负值经 durationOrDefault 变成 0）就整个不配：
+	// 只配一半是无意义的状态——光有探测间隔没有失联判定，PING 发出去
+	// 永远等不到结论。
+	if send > 0 && pong > 0 {
+		t.HTTP2 = &http.HTTP2Config{SendPingTimeout: send, PingTimeout: pong}
+	}
 
 	// 不设 Client.Timeout：它覆盖到读完整个响应体，而 SSE 会跑几分钟。
 	// 设了就会从中间掐断，且掐断点落在已 committed 之后，
