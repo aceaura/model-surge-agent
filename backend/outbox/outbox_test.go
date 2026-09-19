@@ -21,6 +21,14 @@ type fakeQueue struct {
 	// enqueueErr 模拟落库也失败的情况。
 	enqueueErr error
 	buried     []string
+	// 租约状态，对齐 lease_until / lease_token 两列。
+	leaseUntil map[int64]time.Time
+	nextToken  byte
+}
+
+// newFakeQueue 建一个租约状态已初始化的队列。
+func newFakeQueue() *fakeQueue {
+	return &fakeQueue{leaseUntil: map[int64]time.Time{}}
 }
 
 func (q *fakeQueue) Enqueue(_ context.Context, rep relayclient.ResultReport, lastErr string) error {
@@ -42,14 +50,24 @@ func (q *fakeQueue) Enqueue(_ context.Context, rep relayclient.ResultReport, las
 	return nil
 }
 
-func (q *fakeQueue) Due(_ context.Context, now time.Time, limit int) ([]store.Entry, error) {
+// Due 认领并发一个新 token，行为对齐 store.Outbox。
+func (q *fakeQueue) Due(_ context.Context, now time.Time, limit int, lease time.Duration) ([]store.Entry, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	out := []store.Entry{}
-	for _, e := range q.entries {
-		if !e.NextAttemptAt.After(now) {
-			out = append(out, e)
+	for i, e := range q.entries {
+		if e.NextAttemptAt.After(now) {
+			continue
 		}
+		if !q.leaseUntil[e.ID].IsZero() && q.leaseUntil[e.ID].After(now) {
+			continue
+		}
+		q.nextToken++
+		tok := [16]byte{}
+		tok[0] = q.nextToken
+		q.entries[i].LeaseToken = tok
+		q.leaseUntil[e.ID] = now.Add(lease)
+		out = append(out, q.entries[i])
 		if len(out) == limit {
 			break
 		}
@@ -57,46 +75,66 @@ func (q *fakeQueue) Due(_ context.Context, now time.Time, limit int) ([]store.En
 	return out, nil
 }
 
-func (q *fakeQueue) Done(_ context.Context, id int64) error {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+// held 判 token 是否仍是这一行当前的租约。
+func (q *fakeQueue) held(id int64, token [16]byte) (int, bool) {
 	for i, e := range q.entries {
 		if e.ID == id {
-			q.entries = append(q.entries[:i], q.entries[i+1:]...)
-			return nil
+			return i, e.LeaseToken == token
 		}
 	}
-	return store.ErrNotFound
+	return -1, false
 }
 
-func (q *fakeQueue) Retry(_ context.Context, id int64, nextAt time.Time, lastErr string) error {
+func (q *fakeQueue) Done(_ context.Context, id int64, token [16]byte) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	for i, e := range q.entries {
-		if e.ID == id {
-			q.entries[i].Attempts++
-			q.entries[i].NextAttemptAt = nextAt
-			q.entries[i].LastError = lastErr
-			return nil
-		}
+	i, ok := q.held(id, token)
+	if i < 0 {
+		return store.ErrNotFound
 	}
-	return store.ErrNotFound
+	if !ok {
+		return store.ErrLeaseLost
+	}
+	q.entries = append(q.entries[:i], q.entries[i+1:]...)
+	return nil
 }
 
-func (q *fakeQueue) Bury(_ context.Context, id int64, lastErr string) error {
+func (q *fakeQueue) Retry(_ context.Context, id int64, token [16]byte, nextAt time.Time, lastErr string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	for i, e := range q.entries {
-		if e.ID == id {
-			q.entries[i].Attempts++
-			q.entries[i].LastError = lastErr
-			// 排到永远取不到的将来，但行保留。
-			q.entries[i].NextAttemptAt = time.Now().AddDate(1000, 0, 0)
-			q.buried = append(q.buried, e.ReportID)
-			return nil
-		}
+	i, ok := q.held(id, token)
+	if i < 0 {
+		return store.ErrNotFound
 	}
-	return store.ErrNotFound
+	if !ok {
+		return store.ErrLeaseLost
+	}
+	q.entries[i].Attempts++
+	q.entries[i].NextAttemptAt = nextAt
+	q.entries[i].LastError = lastErr
+	q.entries[i].LeaseToken = [16]byte{}
+	delete(q.leaseUntil, id)
+	return nil
+}
+
+func (q *fakeQueue) Bury(_ context.Context, id int64, token [16]byte, lastErr string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	i, ok := q.held(id, token)
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	if !ok {
+		return store.ErrLeaseLost
+	}
+	q.entries[i].Attempts++
+	q.entries[i].LastError = lastErr
+	// 排到永远取不到的将来，但行保留。
+	q.entries[i].NextAttemptAt = time.Now().AddDate(1000, 0, 0)
+	q.entries[i].LeaseToken = [16]byte{}
+	delete(q.leaseUntil, id)
+	q.buried = append(q.buried, q.entries[i].ReportID)
+	return nil
 }
 
 func (q *fakeQueue) size() int {
@@ -165,7 +203,7 @@ func newWorker(q *fakeQueue, s *fakeSender) *Worker {
 
 // 直报成功就不该落库：出箱只是失败兜底。
 func TestDirectReportSkipsTheQueue(t *testing.T) {
-	q, s := &fakeQueue{}, &fakeSender{}
+	q, s := newFakeQueue(), &fakeSender{}
 	newWorker(q, s).Report(report("req-1:0"))
 
 	if got := s.delivered(); len(got) != 1 || got[0].ReportID != "req-1:0" {
@@ -177,7 +215,7 @@ func TestDirectReportSkipsTheQueue(t *testing.T) {
 }
 
 func TestFailedReportIsQueuedWithTheError(t *testing.T) {
-	q, s := &fakeQueue{}, &fakeSender{always: true}
+	q, s := newFakeQueue(), &fakeSender{always: true}
 	newWorker(q, s).Report(report("req-1:0"))
 
 	if q.size() != 1 {
@@ -205,7 +243,7 @@ func TestReportSurvivesQueueFailure(t *testing.T) {
 
 // 入队后 worker 重放：先失败再成功，最终删行。
 func TestDrainReplaysUntilDelivered(t *testing.T) {
-	q := &fakeQueue{}
+	q := newFakeQueue()
 	s := &fakeSender{failN: 2} // 直报 + 第一轮重放都失败
 	w := newWorker(q, s)
 
@@ -264,7 +302,7 @@ func TestBackoffGrowsAndCaps(t *testing.T) {
 
 // 试满就转死信：保留行供管理面查看，不静默丢弃。
 func TestExhaustedEntryIsBuriedNotDeleted(t *testing.T) {
-	q := &fakeQueue{}
+	q := newFakeQueue()
 	s := &fakeSender{always: true}
 	w := newWorker(q, s)
 	w.Opts.MaxAttempts = 2
@@ -297,7 +335,7 @@ func TestExhaustedEntryIsBuriedNotDeleted(t *testing.T) {
 
 // report_id 幂等：同一份重复入队不会变成两条，重放也不会重复计数。
 func TestSameReportIDIsNotQueuedTwice(t *testing.T) {
-	q := &fakeQueue{}
+	q := newFakeQueue()
 	s := &fakeSender{always: true}
 	w := newWorker(q, s)
 
@@ -310,7 +348,7 @@ func TestSameReportIDIsNotQueuedTwice(t *testing.T) {
 }
 
 func TestDrainHandlesBatchInOnePass(t *testing.T) {
-	q := &fakeQueue{}
+	q := newFakeQueue()
 	s := &fakeSender{always: true}
 	w := newWorker(q, s)
 
@@ -336,7 +374,7 @@ func TestDrainHandlesBatchInOnePass(t *testing.T) {
 
 // ctx 取消时立刻停手，不要把剩下的批次跑完。
 func TestDrainStopsOnCancelledContext(t *testing.T) {
-	q := &fakeQueue{}
+	q := newFakeQueue()
 	s := &fakeSender{always: true}
 	w := newWorker(q, s)
 	for i := range 3 {
@@ -351,7 +389,7 @@ func TestDrainStopsOnCancelledContext(t *testing.T) {
 }
 
 func TestRunDrainsUntilContextEnds(t *testing.T) {
-	q := &fakeQueue{}
+	q := newFakeQueue()
 	s := &fakeSender{always: true}
 	w := newWorker(q, s)
 	w.Opts.Interval = 5 * time.Millisecond

@@ -84,7 +84,7 @@ func TestOutboxRetryAcceptsInvalidUTF8LastError(t *testing.T) {
 	if err := o.Enqueue(ctx, report("rep-bad-utf8"), ""); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
-	due, err := o.Due(ctx, time.Now(), 10)
+	due, err := o.Due(ctx, time.Now(), 10, time.Minute)
 	if err != nil || len(due) != 1 {
 		t.Fatalf("due = %v, err = %v", len(due), err)
 	}
@@ -92,10 +92,16 @@ func TestOutboxRetryAcceptsInvalidUTF8LastError(t *testing.T) {
 	// 坏字节必须落在上限**之内**：落在后面的话它压根到不了净化那一步，
 	// 这条用例就退化成只测截断。
 	bad := "relay returned 502: 坏\xe9字节 " + strings.Repeat("网", 400)
-	if err := o.Retry(ctx, due[0].ID, time.Now().Add(time.Minute), bad); err != nil {
+	next := time.Now().Add(time.Minute)
+	if err := o.Retry(ctx, due[0].ID, due[0].LeaseToken, next, bad); err != nil {
 		t.Fatalf("含非法字节的 last_error 写不进去: %v", err)
 	}
-	if err := o.Bury(ctx, due[0].ID, bad); err != nil {
+	// 重新认领再埋：一次裁决落地就交还租约，所以旧 token 到这里已经作废。
+	again, err := o.Due(ctx, next.Add(time.Second), 10, time.Minute)
+	if err != nil || len(again) != 1 {
+		t.Fatalf("重新认领失败: %d 条, err = %v", len(again), err)
+	}
+	if err := o.Bury(ctx, again[0].ID, again[0].LeaseToken, bad); err != nil {
 		t.Fatalf("Bury 也要能写: %v", err)
 	}
 

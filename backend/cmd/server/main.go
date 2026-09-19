@@ -54,7 +54,7 @@ func run(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	db, err := store.Open(ctx, cfg.PGDSN)
+	db, err := store.Open(ctx, cfg.PGDSN, store.Options{MaxConns: cfg.PGMaxConns})
 	if err != nil {
 		return err
 	}
@@ -90,8 +90,8 @@ func run(log *slog.Logger) error {
 	go worker.Run(ctx)
 	go pruneLoop(ctx, log, requests, cfg.LogRetention)
 
-	models := httpapi.CachedModels{Relay: relay, Cache: rdb}
-	health := httpapi.Checker{Store: db, Outbox: queue, Cache: rdb, Relay: relay}
+	models := &httpapi.CachedModels{Relay: relay, Cache: rdb}
+	health := &httpapi.Checker{Store: db, Outbox: queue, Cache: rdb, Relay: relay}
 
 	// Load 已经校验过模式合法，这里的错误不可能发生。
 	captureMode, _ := capture.ParseMode(cfg.CaptureMode)

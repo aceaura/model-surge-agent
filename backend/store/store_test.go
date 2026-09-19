@@ -20,7 +20,7 @@ func dsn(t *testing.T) string {
 func open(t *testing.T) *Store {
 	t.Helper()
 	ctx := context.Background()
-	s, err := Open(ctx, dsn(t))
+	s, err := Open(ctx, dsn(t), Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -33,13 +33,13 @@ func open(t *testing.T) *Store {
 
 func TestOpenIsIdempotent(t *testing.T) {
 	ctx := context.Background()
-	first, err := Open(ctx, dsn(t))
+	first, err := Open(ctx, dsn(t), Options{})
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
 	first.Close()
 
-	second, err := Open(ctx, dsn(t))
+	second, err := Open(ctx, dsn(t), Options{})
 	if err != nil {
 		t.Fatalf("second open must not fail on existing tables: %v", err)
 	}

@@ -59,7 +59,18 @@ CREATE TABLE IF NOT EXISTS report_outbox (
   attempts        INT NOT NULL DEFAULT 0,
   next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_error      TEXT NOT NULL DEFAULT '',
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- 认领租约。取到期项时原子地写上，处理期间这一行对其它执行流不可见。
+  -- 需要它是因为处理（一次真实 HTTP 上报）发生在事务之外：行锁随事务结束
+  -- 就释放了，而那时上报还在飞。NULL 表示没人持有。
+  lease_until     TIMESTAMPTZ,
+  -- 租约的所有权凭据。写回裁决时带上它比对，认不上就说明这一行的所有权
+  -- 已经不在调用方手里——可能是租约过期后被重新认领，也可能是管理面的
+  -- 重试按钮清掉了它。没有这个凭据，一次迟到的裁决会覆盖掉运维的操作。
+  lease_token     UUID
 );
+
+ALTER TABLE report_outbox ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ;
+ALTER TABLE report_outbox ADD COLUMN IF NOT EXISTS lease_token UUID;
 
 CREATE INDEX IF NOT EXISTS report_outbox_due_idx ON report_outbox(next_attempt_at);

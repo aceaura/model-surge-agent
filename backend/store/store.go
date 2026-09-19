@@ -16,8 +16,30 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-func Open(ctx context.Context, dsn string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+// Options 是连接池的可调参数。
+type Options struct {
+	// MaxConns 是池上限。零值沿用驱动默认（pgx 是 32）。
+	//
+	// 需要可配是因为这个池被四路共用：每请求的流水落库、outbox worker、
+	// 流水清理循环、健康检查。PG 侧 max_connections 通常是 100，而本服务、
+	// 调度层、配置中心可能共用一台。池被打满时落库只 Warn、数据面照常 200，
+	// 症状是「流水随机缺行」——一个不会触发任何告警的症状。
+	//
+	// 默认不改成某个具体值：在这里单方面抬高上限只会把耗尽点从本服务
+	// 挪到共用同一台 PG 的别人身上。可配加上 /healthz 里的 pool.max 与
+	// acquire_waiting，运维就有据可调。
+	MaxConns int
+}
+
+func Open(ctx context.Context, dsn string, opts Options) (*Store, error) {
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse postgres dsn: %w", err)
+	}
+	if opts.MaxConns > 0 {
+		cfg.MaxConns = int32(opts.MaxConns)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}

@@ -16,7 +16,9 @@ import (
 type Config struct {
 	Listen string
 
-	PGDSN         string
+	PGDSN string
+	// PGMaxConns 是连接池上限。0 表示沿用驱动默认。
+	PGMaxConns    int
 	RedisAddr     string
 	RedisPassword string
 	RedisDB       int
@@ -105,6 +107,13 @@ func Load() (Config, error) {
 	// 相同则任何能读管理面的人都能冒充本服务发调度请求。
 	if c.AdminKey != "" && c.AdminKey == c.RelayDispatchKey {
 		fail("MSA_ADMIN_KEY must differ from MSA_RELAY_DISPATCH_KEY")
+	}
+
+	// 0 表示沿用驱动默认，负值是配错了。不把负值当成「不限制」：
+	// 连接池没有「不限制」这个语义，写负数的人多半是想表达那个不存在的意思。
+	c.PGMaxConns = intOr(&errs, "MSA_PG_MAX_CONNS", 0)
+	if c.PGMaxConns < 0 {
+		fail("MSA_PG_MAX_CONNS must be positive, or 0 to use the driver default")
 	}
 
 	c.RedisDB = intOr(&errs, "MSA_REDIS_DB", 0)

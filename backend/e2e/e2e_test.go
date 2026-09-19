@@ -360,8 +360,8 @@ func newHarness(t *testing.T, opts harnessOpts) *harness {
 
 	// Cache 为 nil：Redis 的降级路径由 cache 包自己的测试覆盖，
 	// 这里不引入一个非必需依赖来门控整套端到端。
-	models := httpapi.CachedModels{Relay: relay}
-	health := httpapi.Checker{Store: db, Outbox: queue, Relay: relay}
+	models := &httpapi.CachedModels{Relay: relay}
+	health := &httpapi.Checker{Store: db, Outbox: queue, Relay: relay}
 
 	srv := &httpapi.Server{
 		Pipeline: &pipeline.Pipeline{
@@ -398,7 +398,7 @@ func openStore(t *testing.T) *store.Store {
 		t.Skip("TEST_PG_DSN not set")
 	}
 	ctx := context.Background()
-	db, err := store.Open(ctx, dsn)
+	db, err := store.Open(ctx, dsn, store.Options{})
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

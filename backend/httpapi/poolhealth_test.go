@@ -25,7 +25,7 @@ import (
 // 报零会让运维看到 total=0、max=0，以为池配崩了去查 DSN，
 // 而真相是这个部署根本没配 PG。零是「池此刻空闲」的合法状态。
 func TestHealthOmitsPoolWhenNoDatabase(t *testing.T) {
-	c := httpapi.Checker{}
+	c := &httpapi.Checker{}
 	h := c.Check(context.Background())
 
 	if h.Pool != nil {
@@ -42,7 +42,7 @@ func TestHealthOmitsPoolWhenNoDatabase(t *testing.T) {
 
 // goroutine 数永远要有，且刻意不带 omitempty——NumGoroutine() 永远 >= 1。
 func TestHealthAlwaysReportsGoroutines(t *testing.T) {
-	c := httpapi.Checker{}
+	c := &httpapi.Checker{}
 	h := c.Check(context.Background())
 
 	if h.Goroutines < 1 {
@@ -63,13 +63,13 @@ func TestHealthReportsPoolWhenDatabaseUp(t *testing.T) {
 	if dsn == "" {
 		t.Skip("TEST_PG_DSN not set")
 	}
-	db, err := store.Open(context.Background(), dsn)
+	db, err := store.Open(context.Background(), dsn, store.Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	defer db.Close()
 
-	c := httpapi.Checker{Store: db}
+	c := &httpapi.Checker{Store: db}
 	h := c.Check(context.Background())
 
 	if h.Database != "ok" {
@@ -167,14 +167,14 @@ func TestHealthOmitsPoolWhenDatabaseDown(t *testing.T) {
 	if dsn == "" {
 		t.Skip("TEST_PG_DSN not set")
 	}
-	db, err := store.Open(context.Background(), dsn)
+	db, err := store.Open(context.Background(), dsn, store.Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	// 关掉池：此后 Ping 必失败，但 Stat() 仍会返回数字。
 	db.Close()
 
-	h := httpapi.Checker{Store: db}.Check(context.Background())
+	h := (&httpapi.Checker{Store: db}).Check(context.Background())
 	if h.Database != "down" {
 		t.Fatalf("database = %q，池已关闭应当报 down", h.Database)
 	}

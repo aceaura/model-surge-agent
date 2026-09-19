@@ -33,7 +33,7 @@ func TestEnqueueAndDueRoundTrip(t *testing.T) {
 	if err := o.Enqueue(ctx, want, "relay unreachable"); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	due, err := o.Due(ctx, time.Now(), 10)
+	due, err := o.Due(ctx, time.Now(), 10, time.Minute)
 	if err != nil {
 		t.Fatalf("Due: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestEnqueueIsIdempotentOnReportID(t *testing.T) {
 			t.Fatalf("Enqueue: %v", err)
 		}
 	}
-	due, err := o.Due(ctx, time.Now(), 10)
+	due, err := o.Due(ctx, time.Now(), 10, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,23 +75,23 @@ func TestDueRespectsSchedule(t *testing.T) {
 	if err := o.Enqueue(ctx, report("req-1:0"), ""); err != nil {
 		t.Fatal(err)
 	}
-	due, err := o.Due(ctx, time.Now(), 10)
+	due, err := o.Due(ctx, time.Now(), 10, time.Minute)
 	if err != nil || len(due) != 1 {
 		t.Fatalf("Due = %d entries, %v", len(due), err)
 	}
 
 	future := time.Now().Add(time.Hour)
-	if err := o.Retry(ctx, due[0].ID, future, "still down"); err != nil {
+	if err := o.Retry(ctx, due[0].ID, due[0].LeaseToken, future, "still down"); err != nil {
 		t.Fatalf("Retry: %v", err)
 	}
-	again, err := o.Due(ctx, time.Now(), 10)
+	again, err := o.Due(ctx, time.Now(), 10, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(again) != 0 {
 		t.Fatalf("a rescheduled entry must not be due yet: %+v", again)
 	}
-	later, err := o.Due(ctx, future.Add(time.Second), 10)
+	later, err := o.Due(ctx, future.Add(time.Second), 10, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestDueOrdersByScheduleAndClampsBatch(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	due, err := o.Due(ctx, time.Now(), 3)
+	due, err := o.Due(ctx, time.Now(), 3, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,11 +129,11 @@ func TestDoneRemovesEntry(t *testing.T) {
 	if err := o.Enqueue(ctx, report("req-1:0"), ""); err != nil {
 		t.Fatal(err)
 	}
-	due, _ := o.Due(ctx, time.Now(), 10)
-	if err := o.Done(ctx, due[0].ID); err != nil {
+	due, _ := o.Due(ctx, time.Now(), 10, time.Minute)
+	if err := o.Done(ctx, due[0].ID, due[0].LeaseToken); err != nil {
 		t.Fatalf("Done: %v", err)
 	}
-	left, err := o.Due(ctx, time.Now(), 10)
+	left, err := o.Due(ctx, time.Now(), 10, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,13 +150,13 @@ func TestBuryKeepsTheRowOutOfRotation(t *testing.T) {
 	if err := o.Enqueue(ctx, report("req-1:0"), ""); err != nil {
 		t.Fatal(err)
 	}
-	due, _ := o.Due(ctx, time.Now(), 10)
-	if err := o.Bury(ctx, due[0].ID, "gave up"); err != nil {
+	due, _ := o.Due(ctx, time.Now(), 10, time.Minute)
+	if err := o.Bury(ctx, due[0].ID, due[0].LeaseToken, "gave up"); err != nil {
 		t.Fatalf("Bury: %v", err)
 	}
 
 	// worker 再也取不到它。
-	rotation, err := o.Due(ctx, time.Now().Add(365*24*time.Hour), 10)
+	rotation, err := o.Due(ctx, time.Now().Add(365*24*time.Hour), 10, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,15 +183,15 @@ func TestReviveReturnsEntryToRotation(t *testing.T) {
 	if err := o.Enqueue(ctx, report("req-1:0"), ""); err != nil {
 		t.Fatal(err)
 	}
-	due, _ := o.Due(ctx, time.Now(), 10)
-	if err := o.Bury(ctx, due[0].ID, "gave up"); err != nil {
+	due, _ := o.Due(ctx, time.Now(), 10, time.Minute)
+	if err := o.Bury(ctx, due[0].ID, due[0].LeaseToken, "gave up"); err != nil {
 		t.Fatal(err)
 	}
 	if err := o.Revive(ctx, "req-1:0"); err != nil {
 		t.Fatalf("Revive: %v", err)
 	}
 
-	back, err := o.Due(ctx, time.Now(), 10)
+	back, err := o.Due(ctx, time.Now(), 10, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,9 +215,9 @@ func TestCountsSplitPendingFromDead(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	due, _ := o.Due(ctx, time.Now(), 10)
+	due, _ := o.Due(ctx, time.Now(), 10, time.Minute)
 	for _, e := range due[:2] {
-		if err := o.Bury(ctx, e.ID, "gave up"); err != nil {
+		if err := o.Bury(ctx, e.ID, e.LeaseToken, "gave up"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -239,8 +239,8 @@ func TestListAllIncludesBothStates(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	due, _ := o.Due(ctx, time.Now(), 10)
-	if err := o.Bury(ctx, due[0].ID, "gave up"); err != nil {
+	due, _ := o.Due(ctx, time.Now(), 10, time.Minute)
+	if err := o.Bury(ctx, due[0].ID, due[0].LeaseToken, "gave up"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -261,15 +261,15 @@ func TestLastErrorIsTruncated(t *testing.T) {
 	if err := o.Enqueue(ctx, report("req-1:0"), ""); err != nil {
 		t.Fatal(err)
 	}
-	due, _ := o.Due(ctx, time.Now(), 10)
+	due, _ := o.Due(ctx, time.Now(), 10, time.Minute)
 	long := ""
 	for range 100 {
 		long += "0123456789"
 	}
-	if err := o.Retry(ctx, due[0].ID, time.Now(), long); err != nil {
+	if err := o.Retry(ctx, due[0].ID, due[0].LeaseToken, time.Now(), long); err != nil {
 		t.Fatal(err)
 	}
-	got, err := o.Due(ctx, time.Now().Add(time.Second), 10)
+	got, err := o.Due(ctx, time.Now().Add(time.Second), 10, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

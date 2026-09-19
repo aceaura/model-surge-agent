@@ -6,6 +6,7 @@ package outbox
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -15,10 +16,11 @@ import (
 
 type Queue interface {
 	Enqueue(ctx context.Context, rep relayclient.ResultReport, lastErr string) error
-	Due(ctx context.Context, now time.Time, limit int) ([]store.Entry, error)
-	Done(ctx context.Context, id int64) error
-	Retry(ctx context.Context, id int64, nextAt time.Time, lastErr string) error
-	Bury(ctx context.Context, id int64, lastErr string) error
+	// Due 认领到期项并连同所有权凭据一起返回，lease 是租约长度。
+	Due(ctx context.Context, now time.Time, limit int, lease time.Duration) ([]store.Entry, error)
+	Done(ctx context.Context, id int64, token [16]byte) error
+	Retry(ctx context.Context, id int64, token [16]byte, nextAt time.Time, lastErr string) error
+	Bury(ctx context.Context, id int64, token [16]byte, lastErr string) error
 }
 
 type Sender interface {
@@ -83,7 +85,7 @@ func (w *Worker) Run(ctx context.Context) {
 
 // Drain 处理一批到期项。返回成功送达的条数，供测试与指标使用。
 func (w *Worker) Drain(ctx context.Context) int {
-	entries, err := w.Queue.Due(ctx, w.now(), w.batchSize())
+	entries, err := w.Queue.Due(ctx, w.now(), w.batchSize(), w.lease())
 	if err != nil {
 		w.log().Error("outbox scan failed", "error", err)
 		return 0
@@ -99,9 +101,10 @@ func (w *Worker) Drain(ctx context.Context) int {
 		cancel()
 
 		if err == nil {
-			if err := w.Queue.Done(ctx, e.ID); err != nil {
-				w.log().Error("outbox delete failed", "report_id", e.ReportID, "error", err)
-				continue
+			// 报已经送达了，所以无论删行成不成都算送达。租约丢失只意味着
+			// 这一行的所有权换了手，那边会去删。
+			if err := w.Queue.Done(ctx, e.ID, e.LeaseToken); err != nil {
+				w.logLease("outbox delete", e.ReportID, err)
 			}
 			sent++
 			continue
@@ -110,18 +113,32 @@ func (w *Worker) Drain(ctx context.Context) int {
 		attempts := e.Attempts + 1
 		if attempts >= w.maxAttempts() {
 			// 转死信而非删除：运维需要看到哪些用量没能上报。
-			if err := w.Queue.Bury(ctx, e.ID, err.Error()); err != nil {
-				w.log().Error("outbox bury failed", "report_id", e.ReportID, "error", err)
+			if err := w.Queue.Bury(ctx, e.ID, e.LeaseToken, err.Error()); err != nil {
+				w.logLease("outbox bury", e.ReportID, err)
 			}
 			w.log().Error("report given up after max attempts",
 				"report_id", e.ReportID, "attempts", attempts, "error", err)
 			continue
 		}
-		if err := w.Queue.Retry(ctx, e.ID, w.now().Add(backoff(attempts)), err.Error()); err != nil {
-			w.log().Error("outbox reschedule failed", "report_id", e.ReportID, "error", err)
+		if err := w.Queue.Retry(ctx, e.ID, e.LeaseToken,
+			w.now().Add(backoff(attempts)), err.Error()); err != nil {
+			w.logLease("outbox reschedule", e.ReportID, err)
 		}
 	}
 	return sent
+}
+
+// logLease 把租约丢失与真故障分级。
+//
+// 丢租约不是故障：租约过期后这一行被另一个执行流接手了，或者管理面点了
+// 重试按钮把它收回去了。按 Error 记会让日志周期性地报一个不存在的故障，
+// 而运维会去查它。
+func (w *Worker) logLease(what, reportID string, err error) {
+	if errors.Is(err, store.ErrLeaseLost) {
+		w.log().Debug(what+" skipped: lease lost", "report_id", reportID)
+		return
+	}
+	w.log().Error(what+" failed", "report_id", reportID, "error", err)
 }
 
 // backoff 指数退避，1s 起翻倍，5min 封顶。
@@ -164,6 +181,21 @@ func (w *Worker) timeout() time.Duration {
 		return w.Opts.Timeout
 	}
 	return 10 * time.Second
+}
+
+// lease 是认领的租约长度：单条上报超时的三倍，下限 30s。
+//
+// 从上报超时派生而不是写死：过短会让一条仍在飞的上报被另一个执行流重新认领，
+// 于是同一个报发两次（幂等键顶得住，但 attempts 又开始虚涨）；过长会让进程
+// 被杀之后的那一批行长时间隐身。
+//
+// 不按批量条数放大：一批一百条会算出千秒级的租约，而那一百条里绝大多数还没
+// 开始处理，让它们背一个千秒的隐身期没有道理。
+func (w *Worker) lease() time.Duration {
+	if d := 3 * w.timeout(); d > 30*time.Second {
+		return d
+	}
+	return 30 * time.Second
 }
 
 func (w *Worker) now() time.Time {
