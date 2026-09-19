@@ -66,7 +66,11 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 
 	for _, t := range req.Tools {
 		tool := wireTool{Name: t.Name, Description: t.Description}
-		if t.Schema != "" {
+		if t.ServerType != "" {
+			// 服务端工具的 type 原样写回，不带 input_schema：参数形状由
+			// 上游那一版工具自己定义，我方给出的任何 schema 都可能与它冲突。
+			tool.Type = t.ServerType
+		} else if t.Schema != "" {
 			tool.InputSchema = json.RawMessage(t.Schema)
 		}
 		w.Tools = append(w.Tools, tool)

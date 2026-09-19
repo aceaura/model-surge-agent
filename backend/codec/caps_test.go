@@ -20,11 +20,13 @@ var structuralCaps = map[string]struct {
 	thinkingExcl      bool
 	minThinkingBudget int
 	systemAsText      bool
+	serverTools       bool
 }{
 	codec.ProtocolAnthropic: {
 		cacheBreakpoints:  4,
 		thinkingExcl:      true,
 		minThinkingBudget: 1024,
+		serverTools:       true,
 	},
 	codec.ProtocolChatCompletions: {
 		maxStopSequences: 4,
@@ -76,6 +78,9 @@ func TestEveryOutboundDeclaresStructuralCaps(t *testing.T) {
 			}
 			if got.SystemAsText != want.systemAsText {
 				t.Errorf("SystemAsText = %v，想要 %v", got.SystemAsText, want.systemAsText)
+			}
+			if got.ServerTools != want.serverTools {
+				t.Errorf("ServerTools = %v，想要 %v", got.ServerTools, want.serverTools)
 			}
 		})
 	}

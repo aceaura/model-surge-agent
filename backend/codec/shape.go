@@ -100,10 +100,42 @@ func MergeNotes(groups ...[]string) []string {
 
 // shapeTools 归一工具 schema，并把 tool_choice 校正到与最终工具集合相容。
 func shapeTools(req *ir.Request, caps Capabilities, c *noteCollector) {
+	dropServerTools(req, caps, c)
 	for i := range req.Tools {
+		if req.Tools[i].ServerType != "" {
+			// 服务端工具不带我方能理解的参数形状，schema 归一对它无意义，
+			// 走一遍只会给它塞上一个空对象 schema 发出去。
+			continue
+		}
 		shapeToolSchema(&req.Tools[i], caps, c)
 	}
 	shapeToolChoice(req, c)
+}
+
+// dropServerTools 在目标协议表达不了服务端工具时把它们整条剔除。
+//
+// 剔除而不是降级成函数工具：降级后上游会把它当成等客户端回结果的函数，
+// 而本服务永远不会回那个结果，对话就停在那里且不报错。剔除的后果是模型
+// 少一件工具可用，可见且有说明。
+//
+// 排在 shapeToolChoice 之前：tool_choice 若正指向被剔除的那一件，
+// 剔除后它就指向一个未声明的工具，须由后者降级成 auto。
+func dropServerTools(req *ir.Request, caps Capabilities, c *noteCollector) {
+	if caps.ServerTools {
+		return
+	}
+	kept := req.Tools[:0]
+	for _, t := range req.Tools {
+		if t.ServerType == "" {
+			kept = append(kept, t)
+			continue
+		}
+		// 字段名带上工具名：说明按字段去重，都写 "tools" 会让声明了两件
+		// 服务端工具的请求只报出第一件。
+		c.drop(fmt.Sprintf("tools[%s]", t.Name),
+			fmt.Sprintf("server-side tool of type %q has no equivalent here", t.ServerType))
+	}
+	req.Tools = kept
 }
 
 func shapeToolSchema(t *ir.Tool, caps Capabilities, c *noteCollector) {
@@ -213,6 +245,24 @@ func forcedToolChoice(tc *ir.ToolChoice) bool {
 // shapeParams 解开参数互斥并套上数量上限。
 func shapeParams(req *ir.Request, caps Capabilities, c *noteCollector) {
 	thinkingOn := req.Thinking.On() && caps.Thinking
+
+	// 预算必须低于 max_tokens：推理预算是从输出上限里划出来的，两者相等
+	// 意味着留给回答本身的 token 为零。客户端同时给出两个数字时它们可能
+	// 冲突（合法的入站形状），原样出站会拿到不可重试的 400——换目标也无用。
+	//
+	// 夹紧预算而不是抬 max_tokens：max_tokens 是客户端对成本与响应长度的
+	// 约束，抬它是替客户端花钱，还会让「我只要 4096 个 token」回出更长的
+	// 内容。预算只是「想多久」，调小它只降质量。
+	//
+	// 排在关掉 thinking 之前：夹后的值可能低于协议下限，那时应当落到关掉
+	// 那一支。反过来先关后夹会漏掉这条路径。
+	if thinkingOn && req.MaxTokens > 0 && req.Thinking.BudgetTokens >= req.MaxTokens {
+		was := req.Thinking.BudgetTokens
+		req.Thinking.BudgetTokens = req.MaxTokens - 1
+		c.rewrite("thinking.budget_tokens", fmt.Sprintf(
+			"%d is not below max_tokens %d, clamped to %d",
+			was, req.MaxTokens, req.Thinking.BudgetTokens))
+	}
 
 	if thinkingOn && caps.MinThinkingBudget > 0 && req.MaxTokens > 0 &&
 		req.MaxTokens-1 < caps.MinThinkingBudget {

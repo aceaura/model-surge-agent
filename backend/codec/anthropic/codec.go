@@ -79,6 +79,7 @@ func (outboundCodec) Caps() codec.Capabilities {
 		// tool_choice 'specified' is incompatible with thinking enabled。
 		ThinkingExcludesForcedTools: true,
 		// 预算低于 1024 会被拒；预算还必须小于 max_tokens。
+		ServerTools:       true,
 		MinThinkingBudget: 1024,
 		// 本协议的 max_tokens 必填，缺了直接 400。
 		RequiresMaxTokens: true,

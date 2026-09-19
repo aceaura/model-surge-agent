@@ -106,6 +106,17 @@ type Tool struct {
 	Description string `json:"description,omitempty"`
 	// Schema 是 JSON Schema 对象。各协议对它的嵌套位置不同，内容一致。
 	Schema string `json:"schema,omitempty"`
+	// ServerType 非空表示这是一个由上游自己执行的服务端工具
+	// （anthropic 的 web_search_20250305、code_execution 之类），
+	// 取值就是协议里的 type 原文。
+	//
+	// 用一个字段而不是另立类型：除了 type 这一处，服务端工具与函数工具
+	// 在本服务眼里的处理完全相同（都要参与 tool_choice 校正、都要出现在
+	// 工具集合里），分型会让每个遍历工具的地方都变成两个分支。
+	//
+	// 服务端工具不能被当成普通函数工具发出去：上游会把它当成「等客户端
+	// 回结果」的函数，而本服务永远不会回——对话就停在那里，没有报错。
+	ServerType string `json:"server_type,omitempty"`
 }
 
 type ToolChoiceMode string
@@ -159,6 +170,13 @@ type Request struct {
 
 	Tools      []Tool      `json:"tools,omitempty"`
 	ToolChoice *ToolChoice `json:"tool_choice,omitempty"`
+
+	// DecodeNotes 是入站解码阶段发现的、无法承载到 IR 的东西的说明，
+	// 由 Sanitize 取走并并入它的返回值。
+	//
+	// 挂在请求上而不是改 Inbound.DecodeRequest 的签名：这类说明只有两个
+	// 解码器会产生，改接口要动四个 codec 与全部调用点。零值即「没有」。
+	DecodeNotes []string `json:"decode_notes,omitempty"`
 
 	MaxTokens     int      `json:"max_tokens,omitempty"`
 	Temperature   *float64 `json:"temperature,omitempty"`
@@ -237,6 +255,7 @@ func (r *Request) Clone() *Request {
 	out.System = cloneBlocks(r.System)
 	out.Tools = append([]Tool(nil), r.Tools...)
 	out.StopSequences = append([]string(nil), r.StopSequences...)
+	out.DecodeNotes = append([]string(nil), r.DecodeNotes...)
 	if r.ToolChoice != nil {
 		tc := *r.ToolChoice
 		out.ToolChoice = &tc

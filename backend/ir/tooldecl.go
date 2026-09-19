@@ -94,8 +94,20 @@ func isLegalToolNameRune(r rune) bool {
 	}
 }
 
-// applyToolRenames 把改写同步到消息历史里的 tool_use 块。
+// applyToolRenames 把改写同步到 tool_choice 与消息历史里的 tool_use 块。
+//
+// 两处同在一个函数里，不拆开：漏掉任一处的症状都是「模型看到的名字与它
+// 被要求调的名字不一致」，而两处的修法完全一样，分开写只会让下一个人补了
+// 一处忘了另一处。
 func applyToolRenames(r *Request, renames map[string]string) {
+	// tool_choice 不跟着改的后果最隐蔽：出站整形随后会发现它指向一个
+	// 「未声明的工具」而降级成 auto，于是客户端的「必须调这个工具」
+	// 变成「模型自己决定」——上游正常回一段文本，没有任何报错。
+	if r.ToolChoice != nil && r.ToolChoice.Mode == ToolChoiceTool {
+		if to, ok := renames[r.ToolChoice.Name]; ok {
+			r.ToolChoice.Name = to
+		}
+	}
 	for mi := range r.Messages {
 		for bi := range r.Messages[mi].Content {
 			b := &r.Messages[mi].Content[bi]

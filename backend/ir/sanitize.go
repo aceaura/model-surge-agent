@@ -15,10 +15,22 @@ import (
 // 无畸形时不改动任何字段并返回 nil：改动会破坏上游的 prompt cache 前缀，
 // 而缓存命中对长会话的成本影响远大于这里省下的几次判断。
 func Sanitize(r *Request) []string {
-	if r == nil || len(r.Messages) == 0 {
+	if r == nil {
 		return nil
 	}
 	var notes []string
+	// 空消息列表也要走完取说明这一步：解码期的说明与消息无关，
+	// 在这里早返回等于「只声明了工具、还没说话」的第一轮请求丢掉说明。
+	if len(r.Messages) == 0 {
+		notes = append(notes, r.DecodeNotes...)
+		r.DecodeNotes = nil
+		return notes
+	}
+	// 解码阶段的说明先取走：它们描述的是「客户端发来的东西本服务承载不了」，
+	// 与后面几步的「客户端发来的东西畸形、我修了」同属对客户端的交代，
+	// 走同一个通道。取走而不是留在字段里，避免同一条说明被上报两次。
+	notes = append(notes, r.DecodeNotes...)
+	r.DecodeNotes = nil
 	// 声明治理排在配对治理之前：它会改写工具名并同步历史里的 tool_use，
 	// 后续的配对判定应该看到改写后的名字。
 	notes = append(notes, governToolDecls(r)...)

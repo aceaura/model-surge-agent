@@ -52,9 +52,13 @@ type InboundCodec interface {
 
 // Capabilities 声明出站协议能表达什么，供编码时决定丢弃哪些 IR 字段。
 type Capabilities struct {
-	Thinking      bool
-	ThinkingSig   bool
-	Tools         bool
+	Thinking    bool
+	ThinkingSig bool
+	Tools       bool
+	// ServerTools 为真表示本协议表达得了「由上游自己执行的工具」。
+	// 只有 anthropic 是这样。为假时这类声明整条丢弃并出说明，而不是
+	// 降级成函数工具：降级后上游会等一个永远不来的工具结果。
+	ServerTools   bool
 	Images        bool
 	CacheControl  bool
 	TopK          bool

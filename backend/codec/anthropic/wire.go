@@ -64,6 +64,9 @@ type wireCacheControl struct {
 }
 
 type wireTool struct {
+	// Type 空或 custom 表示普通函数工具，其余取值是上游自己执行的
+	// 服务端工具（web_search_20250305 之类）。
+	Type        string          `json:"type,omitempty"`
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	InputSchema json.RawMessage `json:"input_schema,omitempty"`

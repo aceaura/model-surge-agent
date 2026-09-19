@@ -49,7 +49,12 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	for _, t := range w.Tools {
 		// 只认函数工具：web_search 之类的内建工具在上游侧执行，
 		// 本服务无法把它们表达成 IR 的工具定义。
+		//
+		// 静默跳过的症状是「模型声称没有这个工具」，而客户端从响应里看不出
+		// 是自己声明被丢了还是模型不愿意调，因此留一条说明。
 		if t.Type != "function" {
+			out.DecodeNotes = append(out.DecodeNotes, fmt.Sprintf(
+				"skipped tool %q: unsupported type %q", t.Name, t.Type))
 			continue
 		}
 		out.Tools = append(out.Tools, ir.Tool{

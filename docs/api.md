@@ -1389,6 +1389,7 @@ curl -s $BASE/v1beta/models/models/demo-pool
 | thinking 签名 | 只在同族协议间透传：Anthropic `signature` 与 Responses `encrypted_content` 互不翻译，跨族时降级为纯文本推理（丢掉签名后仍可被接受） |
 | thinking 预算 ↔ 档位 | Anthropic 的 `budget_tokens` 转其他协议时折成 effort 档位（<4096→`low`，<16384→`medium`，否则 `high`）；反向转换按 `max_tokens` 比例折算并保证 1024 ≤ budget < max_tokens |
 | thinking 开关三态 | 见下表 |
+| 服务端工具 | 只有 Anthropic 表达得了「由上游自己执行的工具」；其他目标整条丢弃并报有损诊断，**不降级成普通函数工具**（详见 [6.13](#613-工具意图的保真)） |
 | 调参字段 | 见「调参字段的承载矩阵」 |
 
 #### 推理开关的三态
@@ -1709,6 +1710,71 @@ Gemini 的 `finishMessage`（上游随 `finishReason` 附的人类可读原因�
 - **不进列表端点**。`/admin/requests` 一页最多 200 条，每条再挂 N 项会让响应随重试次数膨胀。列表上的 `attempts` 计数是入口：它不为 1 时再点详情。
 - **不做「重试链」字符串**。参考实现 new-api 把尝试过的渠道拍平成 `重试：A->B->C` 一行人读文本（`controller/relay.go`），能看出顺序但看不出各自的错误码与耗时，而那正是要查的东西。
 - **不给单次尝试省掉轨迹**。只试了一次也留一项：让「查一条流水看它每次尝试」不必先分辨有没有重试过。
+
+### 6.13 工具意图的保真
+
+客户端对工具的声明里含着四层意图：有哪些工具、必须调哪一件、想让模型思考多久、哪些工具由上游自己执行。这四层被整形层削弱时故障都**不可见**——上游正常回一段文本，HTTP 200，客户端看不出自己的声明被改过。本节是这四层的处置规则。
+
+#### 工具改名同步到 tool_choice 与历史
+
+工具名含非法字符或超长时会被改写（见 [6.4](#64-跨协议能力差异) 之前的声明治理）。改写必须同步到另外两处：
+
+| 同步点 | 不同步的后果 |
+|---|---|
+| `tool_choice` 的具名 | 出站整形随后发现它指向一个未声明的工具，降级成 `auto`。客户端的「必须调这件工具」变成「模型自己决定」，上游正常回一段文本 |
+| 消息历史里的 `tool_use` 名字 | 上游看到一次对未声明工具的调用 |
+
+两处同步后，出站整形**不再**报 `downgraded to auto`。若确实指向一件从未声明过的工具，仍然降级并报诊断——同步不等于「凡指不着就随便对上一件」。
+
+#### 推理预算与 max_tokens 的冲突
+
+推理预算是从输出上限里划出来的，因此必须**严格低于** `max_tokens`；相等意味着留给回答本身的 token 为零。客户端同时给出两个数字时它们可能冲突，而这是一个合法的入站形状，原样出站会拿到不可重试的 400（换目标也救不回来）。
+
+| 关系 | 处置 |
+|---|---|
+| `budget < max_tokens` | 不动。碰它就是无端降低推理质量 |
+| `budget == max_tokens` | 预算夹到 `max_tokens - 1`，报 `rewrote thinking.budget_tokens` |
+| `budget > max_tokens` | 同上 |
+| `max_tokens` 缺席 | 不动。无从比较，也无冲突可解 |
+| 夹紧后低于协议下限（Anthropic 是 1024） | 落到「两个约束无解」那一支：整条关掉推理并报 `dropped thinking` |
+
+**夹预算而不是抬 `max_tokens`**。参考实现 sub2api 走的是后者（`request_transformer.go` 的 `ensureMaxTokensGreaterThanBudget`，把上限抬到 `budget + padding`），本服务刻意不照搬：`max_tokens` 是客户端对成本与响应长度的约束，抬它是替客户端花钱，还会让「我只要 4096 个 token」回出更长的内容；预算只是「想多久」，调小它只降质量。
+
+**夹紧排在关推理之前**。反过来先关后夹会漏掉最后一行那条路径。
+
+#### 服务端工具
+
+部分协议允许声明「由上游自己执行」的工具（Anthropic 的 `web_search_20250305`、`code_execution` 等，线上形态是工具对象带一个非 `custom` 的 `type` 且不带 `input_schema`）。
+
+| 目标协议 | 行为 |
+|---|---|
+| Anthropic | `type` 原样写回，**不带** `input_schema`——参数形状由上游那一版工具自己定义，我方给出的任何 schema 都可能与它冲突 |
+| Chat Completions / Responses / Gemini | 整条丢弃，报 `dropped tools[<名字>]`；同一请求里的函数工具不受牵连 |
+
+**丢弃而不是降级成函数工具**。降级后上游会把它当成「等客户端回结果」的函数，而本服务永远不会回那个结果——对话就停在那里，且不报错。丢弃的后果是模型少一件工具可用，可见且有说明。
+
+丢弃排在 `tool_choice` 校正**之前**：若 `tool_choice` 正指向被丢的那一件，校正会把它降级成 `auto`。
+
+服务端工具也**跳过** schema 归一：走一遍只会给它塞上一个空对象 schema 发出去。
+
+#### 被跳过的工具声明出说明
+
+Responses 与 Chat Completions 的入站解码只认函数工具，其余 `type` 的声明本服务表达不了。跳过时留一条说明：
+
+```
+skipped tool "ws": unsupported type "web_search"
+```
+
+说明走**入站 `sanitized` 通道**而不是出站 `lossy`：这一步发生在解码期，与最终选了哪个目标无关。Chat Completions 的 `type` 省略等同 `function`，**不出**说明——正常形状出说明会让这个字段再也指不出真问题。
+
+#### 明确不做
+
+- **不给非 Anthropic 目标合成服务端工具**。上游不执行它，合成出来的是一件永不返回结果的工具。
+- **不抬 `max_tokens` 解冲突**。理由见上。
+- **不为服务端工具另立 IR 类型**。除 `type` 一处外，它与函数工具在本服务眼里的处理完全相同（都要参与 `tool_choice` 校正、都要出现在工具集合里），分型会让每个遍历工具的地方都变成两个分支。
+- **不把跳过的声明降级成函数工具**。同上一条丢弃的理由。
+- **不在出站侧重复报「跳过」**。同一件事报两次会让诊断字段里出现重复条目。
+- **不做工具数量上限**。四家协议都没有本服务需要代为执行的硬上限，请求体字节预算（见 [6.4](#64-跨协议能力差异) 之后的说明）已经覆盖了「声明太多」这一形态。
 
 ---
 
@@ -2335,6 +2401,7 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| 2.13 | 2026-09-19 | 工具意图的保真首次成文（[6.13](#613-工具意图的保真)）：四条修复，全在转换层内，无新增字段、无新增端点、无库变更。**行为变更一**：工具名被改写（非法字符/超长）时，改写此前只同步到消息历史里的 `tool_use`，**不同步** `tool_choice` 的具名——于是出站整形随后发现它指向一个未声明的工具并降级成 `auto`，客户端的「必须调这件工具」静默变成「模型自己决定」，上游正常回一段文本。参考实现 sub2api 在改名时同步三处（`gateway_tool_rewrite.go` 的 `tool_choice.name` 重写），本服务此前只做了两处。**行为变更二**：客户端同时给出 `thinking.budget_tokens` 与 `max_tokens` 且预算不低于上限时（合法的入站形状），此前原样出站，拿到不可重试的 400——换目标也救不回来。现在把预算夹到 `max_tokens - 1`；夹后低于协议下限则落到既有的「关掉推理」那一支，因此夹紧必须排在关推理之前。**刻意不照搬 sub2api**：它抬 `max_tokens`（`request_transformer.go` 的 `ensureMaxTokensGreaterThanBudget`，抬到 `budget + padding`），而 `max_tokens` 是客户端对成本与响应长度的约束，抬它是替客户端花钱，还会让「我只要 4096 个 token」回出更长的内容；预算只是「想多久」，调小它只降质量。**行为变更三**：Anthropic 的服务端工具（`web_search_20250305` 等，带非 `custom` 的 `type`）此前在入站解码时 `type` 被整个丢掉，于是它被当成普通函数工具发给任意目标——上游会等一个永远不来的工具结果，对话停住且不报错。现在 IR 的 `Tool` 带 `ServerType`（字段而非新类型：除 `type` 一处外它与函数工具的处理完全相同），新增能力位 `ServerTools`（仅 Anthropic 为真），承载不了的目标整条丢弃并报 `dropped tools[<名字>]`，丢弃排在 `tool_choice` 校正之前，且服务端工具跳过 schema 归一。**行为变更四**：Responses 与 Chat Completions 的入站解码遇到非函数工具此前静默 `continue`，客户端从响应里分不出「自己的声明被丢了」还是「模型不愿意调」。现在留一条 `skipped tool "X": unsupported type "Y"`，走**入站 `sanitized` 通道**（发生在解码期，与选了哪个目标无关）；Chat Completions 的 `type` 省略等同 `function`，不出说明。为此 IR 的 `Request` 增设内部字段 `DecodeNotes`（不上线、由 `Sanitize` 取走并清空，避免同一条说明被上报两次），并修掉 `Sanitize` 在空消息列表时的早返回——「只声明了工具、还没说话」的第一轮请求此前会丢掉解码说明。**明确不做**：不给非 Anthropic 目标合成服务端工具；不抬 `max_tokens`；不为服务端工具另立 IR 类型；不把跳过的声明降级成函数工具；不在出站侧重复报「跳过」；不做工具数量上限（四家协议无需本服务代为执行的硬上限，请求体字节预算已覆盖「声明太多」）；调度层与配置中心零改动 |
 | 2.12 | 2026-09-19 | 逐次尝试轨迹首次成文（[6.12](#612-逐次尝试轨迹attempts_trail)）：流水新增行内 JSONB 列 `attempts_trail`（老库自动补列），随单条详情（[7.3](#73-get-adminrequestsrequest_id单条详情)）返回；捕获的 `upstream_response` 在第二次及之后的尝试前插入分隔标记 `: ---- attempt N ----`。**行为变更**：此前一次请求尝试了多个目标时，流水上的 `model_id`/`account`/`outcome`/`status_code`/`error_code`/`error_message`/`retry_after` 全都只是**最后一次**的值，`dispatch_ms`/`upstream_ms` 是累计值，`tried_ids` 只有模型 ID 而没有各自的结果——「第二个账号是 429 还是 500」「三次都慢还是只有第三次慢」在流水里无从得知，而上一版加入的捕获又把多次尝试的上游字节无边界拼在一起。**形态选择**：行内一列而不是 per-attempt 表，依据是参考实现 sub2api 曾建过 `ops_retry_attempts` 表（`033_ops_monitoring_vnext.sql`）、扩过一次（`038`）、最终整表删掉（`136_remove_ops_retry_replay.sql`），理由原文是写入宽度、内存驻留与库体积；new-api 从未建表，只把尝试过的渠道拍平成 `重试：A->B->C` 一行人读文本（`controller/relay.go`），看不出各自的错误码与耗时。**不变式**：轨迹各项耗时之和恒等于行上的累计值，因此「本次值」与「累计值」两个计时器混用会被立刻发现。**凭据边界**：轨迹随流水进 PG，因此只含标识与结果标量，绝不含请求头、`base_url`（其排查价值等于 `model_id`+`account`，而它是带路径的 URL、可能把 key 放在 query 里）或请求体。**明确不做**：不建 per-attempt 表；不进列表端点（一页 200 条会随重试次数膨胀，`attempts` 计数是入口）；不做「重试链」人读字符串；不给单次尝试省掉轨迹；调度层与配置中心零改动 |
 | 2.11 | 2026-09-19 | 转换四体捕获首次成文（[6.11](#611-转换四体捕获)）：新增 `MSA_CAPTURE_MODE` 三态开关（`off`/`errors`/`all`，默认 `off`，非法值拒绝启动）与两个上限变量，新增两个管理面端点（[7.9](#79-get-admincaptures捕获列表)、[7.10](#710-get-admincapturesrequest_id四体全文)）。**行为变更**：此前本服务**没有任何**调试捕获设施——流水只记转换层自己判断出的结论（`sanitized`/`lossy`/`error_code`），当那个判断本身错了时没有任何东西可看。上一次定位 kiro 的 `toolUse` 帧碎裂 bug 就是靠手写一段临时 tee 抓真实上游字节才找到根因，那段代码用完即弃、下一次还得重写。四体的取舍：`upstream_request` 换目标重试时覆盖（诊断对象是最终发出去的那一次），`upstream_response` 与 `client_response` 累加（同一个流的连续片段）；留/丢判据用 `error_code != ""` 而非 `outcome`，两者在「重试后成功」（不留）与「客户端取消」（要留，`outcome` 是 `normal` 但 `error_code` 是 `canceled`）两处分歧。**凭据边界**：捕获只含 body、永不含任何请求头，因此也刻意不做 body 内的正则脱敏——不存在凭据这件事由结构保证，再加一层只会给出虚假的安全感。**明确不做**：不落盘（要长期留证据应在反代层抓包）；不捕获 IR 与事件序列（可由前后两体推出）；不做采样（`errors` 档已是「常开而不撑爆内存」的形态）；不做 base64（唯一用途是人眼直接看）；不照搬 kiro-gateway 的 `debug_logger.py` 实现（它是单例、每请求 `shutil.rmtree` 同一个共享目录，并发请求互相擦掉证据）；调度层与配置中心零改动 |
 | 2.10 | 2026-09-19 | 时延分段归因与依赖饱和度首次成文（[6.10](#610-依赖饱和度与时延分段)）：流水新增 `dispatch_ms`、`upstream_ms` 两列（累计值，含全部重试），`/health` 与 `/admin/health` 新增 `pool`（五个数）与 `goroutines`。**行为变更**：此前 `latency_ms` 是一个不可拆的总数，一个 30 秒的请求分不清是调度层要目标要了很久、上游压着响应头不发、还是生成本来就长；`/health` 只对 PG 做 `Ping` 报 `ok`/`down`，连接池被占满时每个请求都慢而**每一条流水看上去都正常**——慢的那段在等连接上，那段不在任何一条请求的计时里。`upstream_ms` 的终点选在响应头到达而不是首帧，与 `MSA_RESPONSE_HEADER_TIMEOUT` 对齐；两段在重试时累加而非覆盖（与 `lossy` 的覆盖语义刻意相反）。**明确不做**：不引入 Prometheus/OpenTelemetry（四个参考仓库无一使用）；不做 sub2api 的 auth/routing/upstream/response 四段划分（本服务的入站鉴权是转发给调度层做的，没有独立的 auth 段；response 段与生成时间在 SSE 下不可分）；不加 `error_owner`/`is_business_limited`（SLA 口径的计算面在调度层）；不存请求体/响应体（sub2api 自己已把错误表里的 `request_body` 删掉）；不做 per-attempt 逐次快照（需另建表）；不起后台 goroutine 采样池指标（换来的是过时数字）；不给 `goroutines` 设阈值告警（本服务没有告警设施） |

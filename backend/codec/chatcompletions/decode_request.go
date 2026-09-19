@@ -46,6 +46,10 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 
 	for _, t := range w.Tools {
 		if t.Type != "" && t.Type != "function" {
+			// 同 responses：静默跳过让客户端无从分辨「声明被丢」与
+			// 「模型不愿调」。空 type 是省略写法，等同 function，不出说明。
+			out.DecodeNotes = append(out.DecodeNotes, fmt.Sprintf(
+				"skipped tool %q: unsupported type %q", t.Function.Name, t.Type))
 			continue
 		}
 		out.Tools = append(out.Tools, ir.Tool{
