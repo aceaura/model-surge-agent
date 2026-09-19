@@ -40,13 +40,15 @@ func (outboundCodec) Caps() codec.Capabilities {
 		// systemInstruction 是单一 Content，system 里的非文本块必须先降级成文本。
 		SystemAsText: true,
 		// 本协议在 generationConfig 下有 candidateCount、responseLogprobs
-		// 与 logprobs、responseMimeType 与 responseSchema。penalty 类、seed、
-		// logit_bias、service_tier、parallel_tool_calls 与三个 responses
-		// 专有项没有对应字段。
+		// 与 logprobs、responseMimeType 与 responseSchema、seed 与两个
+		// penalty（键名是驼峰，语义与 OpenAI 同）。logit_bias、service_tier、
+		// parallel_tool_calls 与三个 responses 专有项没有对应字段。
 		Candidates:     true,
 		LogProbs:       true,
 		ResponseFormat: true,
 		ResponseSchema: true,
+		Seed:           true,
+		Penalties:      true,
 		// functionCall / functionResponse 靠 name 配对，id 是可选字段：
 		// 本服务合成的 id 不写进请求体，交由上游按调用顺序消歧。
 		ToolIDOptional: true,

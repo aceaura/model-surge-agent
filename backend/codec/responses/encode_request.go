@@ -69,6 +69,14 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	w.ServiceTier = req.ServiceTier
 	w.ParallelToolCalls = req.ParallelToolCalls
 	w.TopLogProbs = req.TopLogProbs
+	// 本协议没有独立的 logprobs 开关，top_logprobs 兼任开关与档位。
+	// 客户端只给了开关时补一个最小档位：它表达的是「我要对数概率」，
+	// 丢掉等于让一个本协议满足得了的请求落空。取 1 而非更大值——
+	// 客户端没说要几个，多取是花上游的算力与响应体。
+	if w.TopLogProbs == nil && req.LogProbs != nil && *req.LogProbs {
+		n := defaultTopLogProbs
+		w.TopLogProbs = &n
+	}
 	w.Text = encodeText(req.ResponseFormat, req.Verbosity)
 
 	switch {
@@ -82,6 +90,10 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 		// 请求摘要，否则推理内容完全不可见，转回 Anthropic 时 thinking 块会是空的。
 		r.Summary = "auto"
 		w.Reasoning = r
+		// 索要推理签名：store 恒为假（无状态转发），此时上游只在 include
+		// 里被明确点名才回 encrypted_content。不要等于永远拿不到签名，
+		// 下一轮的推理项就接不上——而摘要不是签名，它不能回传。
+		w.Include = withIncluded(w.Include, includeReasoningSig)
 	case req.Thinking.Off():
 		// 关闭时不要 summary：没有推理内容可摘要，带着它是要求上游
 		// 为一个不存在的过程产出摘要，属于自相矛盾的请求。
@@ -225,7 +237,8 @@ func encodeMediaPart(b ir.Block) (wirePart, bool) {
 	}
 	switch {
 	case strings.HasPrefix(media, "image/"):
-		return wirePart{Type: partInputImage, ImageURL: renderImageURL(b.Media)}, true
+		return wirePart{Type: partInputImage, ImageURL: renderImageURL(b.Media),
+			Detail: b.Media.Detail}, true
 
 	case strings.HasPrefix(media, "audio/"):
 		// input_audio 只接受内联 base64 与它认得的格式名。
@@ -310,4 +323,33 @@ func encodeText(rf *ir.ResponseFormat, verbosity string) *wireText {
 		return nil
 	}
 	return out
+}
+
+// includeReasoningSig 是索要推理签名的 include 项名。
+//
+// store 为假时上游只在被点名时才回 encrypted_content，而签名是推理
+// 跨轮接续的唯一载体（摘要不是签名，它不能回传）。
+const includeReasoningSig = "reasoning.encrypted_content"
+
+// defaultTopLogProbs 是客户端只给了 logprobs 开关时补的档位。
+//
+// 取最小值：客户端说了「要对数概率」但没说要几个，多取是花上游的
+// 算力与响应体，而它没要求。
+const defaultTopLogProbs = 1
+
+// withIncluded 追加一个 include 项，已存在则原样返回。
+//
+// 追加而非替换：客户端可能给了别的项，覆盖掉是另一种丢维度。
+// 重复项本身也可能被上游拒收。
+func withIncluded(include []string, want string) []string {
+	for _, v := range include {
+		if v == want {
+			return include
+		}
+	}
+	// 返回新切片不改入参：入参来自 IR，同一份请求会被两条编码路径
+	// 各走一遍，原地追加第二遍就带两项。
+	out := make([]string, 0, len(include)+1)
+	out = append(out, include...)
+	return append(out, want)
 }

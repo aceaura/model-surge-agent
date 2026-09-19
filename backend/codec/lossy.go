@@ -273,6 +273,11 @@ func describeParamsLossy(req *ir.Request, caps Capabilities, note, filled, unret
 	if req.Seed != nil && !caps.Seed {
 		note("seed", "no seed parameter, results are not reproducible")
 	}
+	if !caps.ImageDetail && hasImageDetail(req) {
+		// 说清后果是计费：笼统的 dropped detail 读不出「账单会变」这一点。
+		note("image_url.detail",
+			"no image detail level, the upstream default applies and may be billed differently")
+	}
 	if req.Candidates != nil && !caps.Candidates {
 		// 措辞要说清后果：客户端按数组取第二个候选会越界，
 		// 笼统的 dropped n 读不出这一点。
@@ -422,6 +427,18 @@ func hasFailedToolResult(req *ir.Request) bool {
 	for _, m := range req.Messages {
 		for _, b := range m.Content {
 			if b.Type == ir.BlockToolResult && b.ToolResult != nil && b.ToolResult.IsError {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasImageDetail 判断请求里是否有客户端指定了 detail 的图片块。
+func hasImageDetail(req *ir.Request) bool {
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			if b.Type == ir.BlockImage && b.Media != nil && b.Media.Detail != "" {
 				return true
 			}
 		}

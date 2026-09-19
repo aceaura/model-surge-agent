@@ -101,6 +101,10 @@ type wireGenerateCfg struct {
 	// ResponseSchema 进一步约束结构，给了它就必须同时给 mimeType。
 	ResponseMimeType string          `json:"responseMimeType,omitempty"`
 	ResponseSchema   json.RawMessage `json:"responseSchema,omitempty"`
+	// Seed 与两个惩罚项与 OpenAI 同义、同量纲，只是键名是驼峰。
+	Seed             *int     `json:"seed,omitempty"`
+	PresencePenalty  *float64 `json:"presencePenalty,omitempty"`
+	FrequencyPenalty *float64 `json:"frequencyPenalty,omitempty"`
 }
 
 // wireThinkinCfg 的 IncludeThoughts 必须显式为真才能收到推理内容，

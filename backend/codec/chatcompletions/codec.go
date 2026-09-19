@@ -63,10 +63,12 @@ func (outboundCodec) Caps() codec.Capabilities {
 		MaxStopSequences: 4,
 		// 本协议是这批调参字段的来源协议，除三个 responses 专有项
 		// （verbosity / include / truncation）与 metadata 外全部承载。
-		Penalties:         true,
-		Seed:              true,
-		Candidates:        true,
-		LogProbs:          true,
+		Penalties:  true,
+		Seed:       true,
+		Candidates: true,
+		LogProbs:   true,
+		// image_url.detail 决定识别精度与计费档位。
+		ImageDetail:       true,
 		LogitBias:         true,
 		ServiceTier:       true,
 		ParallelToolCalls: true,

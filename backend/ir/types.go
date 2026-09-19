@@ -67,6 +67,12 @@ type Media struct {
 	// Name 是附件文件名。只有部分协议表达得了，主要用于降级成文本时
 	// 让模型知道这里本来有个什么文件。
 	Name string `json:"name,omitempty"`
+	// Detail 是图片的识别精度层级（"low"/"high"/"auto"），只有图片有，
+	// 其余三类媒体恒为零值——同 Name 只对附件有意义。
+	//
+	// 零值表示客户端没给，此时出站不合成：合成一个会把「按上游默认」
+	// 变成「按我们猜的」，而两者的计费可能不同。
+	Detail string `json:"detail,omitempty"`
 }
 
 type ToolUse struct {

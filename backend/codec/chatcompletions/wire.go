@@ -79,6 +79,8 @@ type wirePart struct {
 
 type wireImageURL struct {
 	URL string `json:"url"`
+	// Detail 决定识别精度与计费档位，不是内容。
+	Detail string `json:"detail,omitempty"`
 }
 
 type wireInputAudio struct {

@@ -70,10 +70,20 @@ type Capabilities struct {
 	// 以下是调参字段的承载能力。为假时 DescribeLossy 报丢弃，
 	// 请求照常发出——拒绝请求会把一个能用的回答换成零回答，而目标协议
 	// 是调度层按策略选的，客户端无从预知，让它为此吃 400 归因方向是错的。
-	Penalties         bool // presence_penalty / frequency_penalty
-	Seed              bool
-	Candidates        bool // n / candidateCount
-	LogProbs          bool
+	Penalties  bool // presence_penalty / frequency_penalty
+	Seed       bool
+	Candidates bool // n / candidateCount
+	LogProbs   bool
+	// LogProbsViaTopN 为真表示本协议没有独立的 logprobs 开关，
+	// top_logprobs 兼任开关与档位（responses 是这样）。此时客户端只给
+	// logprobs 会什么也拿不到，出站须补一个档位——目标协议满足得了的
+	// 请求不该因为字段形状不同而落空。
+	LogProbsViaTopN bool
+	// ImageDetail 为真表示本协议的图片块带 detail 层级
+	// （chat_completions 与 responses 的 image_url/input_image）。
+	// 为假时这一维丢弃并出说明：它决定计费与识别精度，客户端给过的
+	// 东西悄悄没了会让账单对不上。
+	ImageDetail       bool
 	LogitBias         bool
 	ServiceTier       bool
 	ParallelToolCalls bool

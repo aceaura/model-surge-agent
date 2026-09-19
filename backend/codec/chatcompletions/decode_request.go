@@ -197,7 +197,9 @@ func decodeContent(raw json.RawMessage) ([]ir.Block, error) {
 			if p.ImageURL == nil {
 				return nil, fmt.Errorf("image_url part needs a url")
 			}
-			out = append(out, ir.Block{Type: ir.BlockImage, Media: decodeImageURL(p.ImageURL.URL)})
+			media := decodeImageURL(p.ImageURL.URL)
+			media.Detail = p.ImageURL.Detail
+			out = append(out, ir.Block{Type: ir.BlockImage, Media: media})
 		case partInputAudio:
 			if p.InputAudio == nil {
 				return nil, fmt.Errorf("input_audio part needs a payload")

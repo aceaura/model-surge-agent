@@ -238,7 +238,9 @@ func encodeMediaPart(b ir.Block) (wirePart, bool) {
 	}
 	switch {
 	case strings.HasPrefix(media, "image/"):
-		return wirePart{Type: partImageURL, ImageURL: &wireImageURL{URL: renderImageURL(b.Media)}}, true
+		return wirePart{Type: partImageURL, ImageURL: &wireImageURL{
+			URL: renderImageURL(b.Media), Detail: b.Media.Detail,
+		}}, true
 
 	case strings.HasPrefix(media, "audio/"):
 		// input_audio 只接受内联 base64 与它认得的格式名，

@@ -36,7 +36,47 @@ func Sanitize(r *Request) []string {
 	notes = append(notes, governToolDecls(r)...)
 	notes = append(notes, pairTools(r)...)
 	notes = append(notes, pruneEmpty(r)...)
+	// 角色交替排在清空之后：丢掉中间一条空消息会让原本被隔开的两条
+	// 同角色消息变成相邻，反过来排会漏掉这一形态。
+	notes = append(notes, mergeAdjacentRoles(r)...)
 	return notes
+}
+
+// mergeAdjacentRoles 把相邻的同角色消息合并成一条。
+//
+// Anthropic 硬性要求 user/assistant 交替，非交替历史换来不可重试的 400；
+// 而相邻两条 user 在 Chat Completions 里完全合法，Agent 框架在一轮里连发
+// 两条也很常见。治理放在这里而不是 anthropic 出站：Gemini 的 contents
+// 同样按轮次配对，四个出站都受益于一份交替的历史。
+//
+// 只拼接，不去重也不把块并成一个：两条 user 各说一句话，合并后仍是两个
+// 文本块。并成一个需要决定用什么分隔符，而那个决定会改变模型看到的内容。
+func mergeAdjacentRoles(r *Request) []string {
+	if len(r.Messages) < 2 {
+		return nil
+	}
+	merged := []Message{r.Messages[0]}
+	count := 0
+	for _, m := range r.Messages[1:] {
+		last := &merged[len(merged)-1]
+		if last.Role == m.Role {
+			// 先拷再拼：直接 append 可能写进原切片的富余容量，
+			// 而那块内存属于调用方传进来的消息。
+			joined := make([]Block, 0, len(last.Content)+len(m.Content))
+			joined = append(joined, last.Content...)
+			last.Content = append(joined, m.Content...)
+			count++
+			continue
+		}
+		merged = append(merged, m)
+	}
+	if count == 0 {
+		return nil
+	}
+	r.Messages = merged
+	// 报出合并了几条：排查的人需要知道「我发了 5 条、上游看到 4 条」
+	// 不是丢消息。
+	return []string{fmt.Sprintf("merged %d adjacent same-role message(s)", count)}
 }
 
 // useSite 记录一个 tool_use 块的位置。

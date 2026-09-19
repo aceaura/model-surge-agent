@@ -176,6 +176,9 @@ type wirePart struct {
 	Text string `json:"text,omitempty"`
 	// ImageURL 承载 data URI 或远程链接。
 	ImageURL string `json:"image_url,omitempty"`
+	// Detail 决定识别精度与计费档位，与 chat_completions 的
+	// image_url.detail 同名同义。
+	Detail string `json:"detail,omitempty"`
 	// Refusal 是安全拒答文本，作为普通文本处理。
 	Refusal string `json:"refusal,omitempty"`
 	// InputAudio 的 format 是裸格式名（"wav"、"mp3"）而非完整 media type。

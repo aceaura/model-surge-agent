@@ -53,6 +53,7 @@ func TestDistinctToolUseIDsAcrossTurnsStayClean(t *testing.T) {
 			userText("turn 1"),
 			assistantCalls("msa_synth_aaaaaa_grep_1"),
 			userResults("msa_synth_aaaaaa_grep_1"),
+			assistantText("done 1"),
 			userText("turn 2"),
 			assistantCalls("msa_synth_bbbbbb_grep_1"),
 			userResults("msa_synth_bbbbbb_grep_1"),

@@ -1392,6 +1392,8 @@ curl -s $BASE/v1beta/models/models/demo-pool
 | 服务端工具 | 只有 Anthropic 表达得了「由上游自己执行的工具」；其他目标整条丢弃并报有损诊断，**不降级成普通函数工具**（详见 [6.13](#613-工具意图的保真)） |
 | 工具结果失败态 | Anthropic（`is_error`）与 Gemini（`error` 键）有原生表达，原样写出；Chat Completions 与 Responses 的工具消息没有可放标记的键，改写成内容前缀 `[tool error] ` 并报有损诊断（详见 [6.14](#614-响应侧语义维度的保真)） |
 | 停止序列身份 | 只有 Anthropic 的响应有 `stop_sequence` 字段；转其他入站协议时不合成、**不报有损**（客户端用的协议本来就没有这个键，那是协议差异而非损失） |
+| 图片 `detail` 层级 | Chat Completions 与 Responses 双向透传；Anthropic 与 Gemini 没有这一维，丢弃并报有损（它决定计费与识别精度）。客户端没给时**不合成**——合成会把「按上游默认」变成「按我们猜的」，两者计费可能不同（详见 [6.15](#615-目标协议承载得了却没写出去的维度)） |
+| 相邻同角色消息 | 在 IR 层合并成一条并报说明。Anthropic 硬性要求 user/assistant 交替，非交替历史换来不可重试的 400，而相邻两条 user 在 Chat Completions 里完全合法 |
 | 调参字段 | 见「调参字段的承载矩阵」 |
 
 #### 推理开关的三态
@@ -1831,6 +1833,61 @@ Responses 用一个独立的 part 类型（`refusal`）表达拒答，而响应�
 - **不把 refusal 做成一种 IR 块类型**。它与文本的唯一差别是终止原因，另立块类型会让四个出站各多一个分支。
 - **不往下游转响应内媒体**。三个下游协议的表达各不相同且都不通用，只补说明。
 - **不给 `is_error` 在 Chat Completions 里另找字段**。该协议的 `tool` 消息只有三个键，没有可用位置。
+
+### 6.15 目标协议承载得了却没写出去的维度
+
+[6.13](#613-工具意图的保真) 与 [6.14](#614-响应侧语义维度的保真) 讲的是「没有承载位置」。本节相反：位置一直都在，只是没往里写——有的是能力位声明错了，有的是线上结构缺字段，有的是两个字段间的换算没做。这类缺口比缺位更隐蔽，因为诊断会给出一条**事实错误**的说明，排查的人照着它去找一个不存在的原因。
+
+#### 相邻同角色消息的合并
+
+Anthropic 硬性要求 user/assistant 交替，非交替历史换来不可重试的 400（换目标也救不回来）。而相邻两条 user 在 Chat Completions 里完全合法，Agent 框架在一轮里连发两条很常见。
+
+治理放在 IR 的 `Sanitize` 里而非 Anthropic 出站：Gemini 的 `contents` 同样按轮次配对，四个出站都受益于一份交替的历史。合并**只拼接**，不去重也不把块并成一个——并成一个需要决定用什么分隔符，而那个决定会改变模型看到的内容。
+
+**顺序**：合并排在「丢弃空消息」之后。丢掉中间一条空消息会让原本被隔开的两条同角色消息变成相邻，反过来排会漏掉这一形态。
+
+合并会报 `merged N adjacent same-role message(s)`，条数如实——排查的人需要知道「我发了 5 条、上游看到 3 条」不是丢消息。
+
+#### Gemini 的 seed 与两个惩罚项
+
+Gemini 的 `generationConfig` 有 `seed`、`presencePenalty`、`frequencyPenalty`（键名是驼峰，语义与 OpenAI 同）。此前能力位声明为假且线上结构缺字段，于是这三维被丢弃并报出一条「本协议没有该参数」的说明——那句话是错的。
+
+现在三者照原样写出，零值（客户端未给）时键缺席。仍然确实没有对应字段的是 `logit_bias`、`service_tier`、`parallel_tool_calls` 与三个 Responses 专有项。
+
+#### Responses 的推理签名索要
+
+本服务对 Responses 恒发 `store:false`（无状态转发，既有定案）。该模式下上游**只在 `include` 里被明确点名时**才回 `reasoning.encrypted_content`，而签名是推理跨轮接续的唯一载体——摘要不是签名，它不能回传。
+
+因此请求推理时（且仅在请求推理时）向 `include` 追加 `reasoning.encrypted_content`：
+
+| 情形 | 行为 |
+|---|---|
+| 请求推理、客户端未给 `include` | 追加该项 |
+| 请求推理、客户端给了其他项 | 保留原有项并追加 |
+| 请求推理、客户端已给该项 | 不重复添加（重复项可能被上游拒收） |
+| 不请求推理 | 不追加（为不存在的过程索要签名是自相矛盾的请求） |
+
+追加**不报有损**：有损说明描述的是「你给的东西我送不到」，而这里是「为达成你的意图我多要了一样东西」。
+
+#### 只给 logprobs 时补出 top_logprobs
+
+Responses 没有独立的 `logprobs` 开关，`top_logprobs` 兼任开关与档位。客户端给 `logprobs:true` 表达的是「我要对数概率」，丢掉它等于让一个本协议满足得了的请求落空。
+
+现在在 `top_logprobs` 缺席且 `logprobs` 为真时补 `1`——客户端说了要但没说要几个，取最小值：多取是花上游的算力与响应体，而它没要求。`logprobs` 为假不补，客户端已给 `top_logprobs` 时原样用它。
+
+#### 图片的 detail 层级
+
+`detail` 决定识别精度与计费档位，不是内容。Chat Completions 的 `image_url.detail` 与 Responses 的 `input_image.detail` 同名同义，双向透传；Anthropic 与 Gemini 没有这一维，丢弃并报出带计费后果的说明（笼统的 dropped 读不出「账单会变」）。
+
+客户端没给时**不合成**。这与算价网关的做法（显式兜底 `high`）刻意不同：本服务是转发层，上游的默认才是权威，替它选一个会把「按上游默认」变成「按我们猜的」。
+
+#### 明确不做
+
+- **不给 Gemini 设 `safetySettings`**。没有入站协议有等价字段，客户端没表达过任何东西；替它选阈值是政策决定而非保真修复。
+- **不为 `logit_bias` 做跨模型 token 重映射**。词表随模型而变，没有正确答案。
+- **不把 `detail` 翻译成媒体降级文字**。它是计费与精度的开关，不是内容。
+- **不改 `store:false`**。无状态转发是既有定案。
+- **不在 `Sanitize` 里做角色交替之外的结构改写**。「首条必须是 user」那件事只有 Anthropic 需要，已在其出站按需处理。
 
 ---
 
@@ -2459,6 +2516,7 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 |---|---|---|
 | 2.13 | 2026-09-19 | 工具意图的保真首次成文（[6.13](#613-工具意图的保真)）：四条修复，全在转换层内，无新增字段、无新增端点、无库变更。**行为变更一**：工具名被改写（非法字符/超长）时，改写此前只同步到消息历史里的 `tool_use`，**不同步** `tool_choice` 的具名——于是出站整形随后发现它指向一个未声明的工具并降级成 `auto`，客户端的「必须调这件工具」静默变成「模型自己决定」，上游正常回一段文本。参考实现 sub2api 在改名时同步三处（`gateway_tool_rewrite.go` 的 `tool_choice.name` 重写），本服务此前只做了两处。**行为变更二**：客户端同时给出 `thinking.budget_tokens` 与 `max_tokens` 且预算不低于上限时（合法的入站形状），此前原样出站，拿到不可重试的 400——换目标也救不回来。现在把预算夹到 `max_tokens - 1`；夹后低于协议下限则落到既有的「关掉推理」那一支，因此夹紧必须排在关推理之前。**刻意不照搬 sub2api**：它抬 `max_tokens`（`request_transformer.go` 的 `ensureMaxTokensGreaterThanBudget`，抬到 `budget + padding`），而 `max_tokens` 是客户端对成本与响应长度的约束，抬它是替客户端花钱，还会让「我只要 4096 个 token」回出更长的内容；预算只是「想多久」，调小它只降质量。**行为变更三**：Anthropic 的服务端工具（`web_search_20250305` 等，带非 `custom` 的 `type`）此前在入站解码时 `type` 被整个丢掉，于是它被当成普通函数工具发给任意目标——上游会等一个永远不来的工具结果，对话停住且不报错。现在 IR 的 `Tool` 带 `ServerType`（字段而非新类型：除 `type` 一处外它与函数工具的处理完全相同），新增能力位 `ServerTools`（仅 Anthropic 为真），承载不了的目标整条丢弃并报 `dropped tools[<名字>]`，丢弃排在 `tool_choice` 校正之前，且服务端工具跳过 schema 归一。**行为变更四**：Responses 与 Chat Completions 的入站解码遇到非函数工具此前静默 `continue`，客户端从响应里分不出「自己的声明被丢了」还是「模型不愿意调」。现在留一条 `skipped tool "X": unsupported type "Y"`，走**入站 `sanitized` 通道**（发生在解码期，与选了哪个目标无关）；Chat Completions 的 `type` 省略等同 `function`，不出说明。为此 IR 的 `Request` 增设内部字段 `DecodeNotes`（不上线、由 `Sanitize` 取走并清空，避免同一条说明被上报两次），并修掉 `Sanitize` 在空消息列表时的早返回——「只声明了工具、还没说话」的第一轮请求此前会丢掉解码说明。**明确不做**：不给非 Anthropic 目标合成服务端工具；不抬 `max_tokens`；不为服务端工具另立 IR 类型；不把跳过的声明降级成函数工具；不在出站侧重复报「跳过」；不做工具数量上限（四家协议无需本服务代为执行的硬上限，请求体字节预算已覆盖「声明太多」）；调度层与配置中心零改动 |
 | 2.14 | 2026-09-19 | 响应侧语义维度的保真首次成文（[6.14](#614-响应侧语义维度的保真)）：四条修复，全在转换层与中立表示内，无新增端点、无库变更。四者同型——上游给出了一个语义维度，而中立表示或出站编码根本没有承载它的位置，于是它在转换途中消失，客户端收到一份 HTTP 200 却少一维的响应。**行为变更一**：`stop_reason` 为 `stop_sequence` 时，是哪一条序列触发的此前完全丢失（中立表示与 Anthropic 的线上结构都没有这个位置）。现在响应与流式收尾事件各增一维，Anthropic 双向读写；互斥约束（`stop_reason` 不匹配时必须为空）在解码与编码两侧各自执行——回填一条未触发的序列会让按它分段的客户端切错位置，比拿不到更坏。另三个协议不合成、**不报有损**：请求侧丢的是客户端给过的东西（要报），响应侧少的是客户端读不到的键（那是协议差异）。**行为变更二**：工具结果的 `is_error` 此前只被 Anthropic 与 Gemini 出站读取，Chat Completions 与 Responses 完全不读也不报——模型把一次失败的工具调用当成功，既不重试也不致歉，跨轮语义被改坏且完全不可见。现在改写成内容前缀 `[tool error] ` 并报 `rewrote tool_result.is_error`；措辞用 `rewrote` 而非 `dropped`，因为读者的下一步动作不同。前缀作为独立文本块前置而非把整段折成字符串——后者会碾平工具结果里的媒体块，而那与失败态无关。**行为变更三**：Gemini 响应里的 `inlineData`/`fileData` 此前流式路径静默跳过、非流式路径连分支都没有。现在两处都报带 media type 的说明，措辞同一出处；「不往下游转」这一决定不变。**行为变更四**：Responses 的 `refusal` part 此前被并入文本块而终止原因落到 `end_turn`，于是「模型拒答」与「模型答完了」对客户端无差别，而同一次拒答经 Anthropic 入站会得到 `refusal`——四协议间不对称。现在判 `content_filter`，优先级为 `incomplete_details` > refusal > `function_call`（判成 `tool_use` 会让客户端去执行工具，而模型实际上拒绝了）；流式在 `refusal.delta` 与 `content_part.added` 两处都记标记（上游实现不一，有的只发 delta）。拒答文字仍并入文本块。**明确不做**：不给非 Anthropic 协议合成 `stop_sequence`；不把 refusal 另立 IR 块类型；不往下游转响应内媒体；不给 `is_error` 在 Chat Completions 里另找字段；不改 Gemini 的 `functionResponse` 排序（经查「工具结果先于同条消息正文」是正确时序，不是缺陷）；调度层与配置中心零改动 |
+| 2.15 | 2026-09-19 | 目标协议承载得了却没写出去的维度首次成文（[6.15](#615-目标协议承载得了却没写出去的维度)）：五条修复，全在转换层与中立表示内，无新增端点、无库变更。与前两轮相反——位置一直都在，只是没往里写，于是诊断会给出一条**事实错误**的说明，排查的人照着它去找一个不存在的原因。**行为变更一**：相邻同角色消息此前一对一写出，而 Anthropic 硬性要求 user/assistant 交替，非交替历史换来不可重试的 400（换目标也救不回来），且相邻两条 user 在 Chat Completions 里完全合法。现在在 IR 的 `Sanitize` 里合并并报 `merged N adjacent same-role message(s)`；只拼接不并块（并块需要决定分隔符，那会改变模型看到的内容）；顺序排在「丢弃空消息」之后——丢掉中间一条空消息会**制造**新的同角色相邻。参考实现 sub2api 在配对治理前后各跑一次合并。**行为变更二**：Gemini 的 `seed`、`presencePenalty`、`frequencyPenalty` 此前能力位为假且线上结构缺字段，三维被丢弃并报出一条「本协议没有该参数」的假说明。现在三者照原样写出（键名驼峰，蛇形会被上游静默忽略）；仍确实没有的是 `logit_bias`、`service_tier`、`parallel_tool_calls`。**行为变更三**：本服务对 Responses 恒发 `store:false`，该模式下上游只在 `include` 点名时才回 `reasoning.encrypted_content`，而此前 `include` 只是客户端值的透传——签名槽的代码都在却永远收不到值，下一轮推理接不上且无诊断。现在请求推理时追加该项（追加非替换、已有不重复、不请求推理不追加、不报有损）。**行为变更四**：Responses 无独立 `logprobs` 开关，客户端只给开关时此前什么也拿不到，而诊断报的是「已转发但结果不回」——那句话暗示字段送到了。现在补 `top_logprobs:1`（取最小值，客户端没说要几个）。**行为变更五**：图片的 `detail` 此前在所有路径上被丢弃，`detail:"low"` 的请求按上游默认计费，图多的负载上是实打实的成本倍数。现在 Chat Completions 与 Responses 双向透传，另两协议丢弃并报带计费后果的说明；客户端未给时**不合成**——本服务是转发层，上游的默认才是权威。**明确不做**：不给 Gemini 设 `safetySettings`（客户端没表达过任何东西，替它选阈值是政策决定）；不为 `logit_bias` 做跨模型重映射；不把 detail 翻成降级文字；不改 `store:false`；不在 `Sanitize` 里做交替之外的结构改写。**顺带更正两处陈旧测试夹具**：两份被标为「健康请求」的历史里 `user(tool_result)` 紧跟 `user(text)`，本身就是 Anthropic 会拒的非交替形态，已补 assistant 隔开 |
 | 2.12 | 2026-09-19 | 逐次尝试轨迹首次成文（[6.12](#612-逐次尝试轨迹attempts_trail)）：流水新增行内 JSONB 列 `attempts_trail`（老库自动补列），随单条详情（[7.3](#73-get-adminrequestsrequest_id单条详情)）返回；捕获的 `upstream_response` 在第二次及之后的尝试前插入分隔标记 `: ---- attempt N ----`。**行为变更**：此前一次请求尝试了多个目标时，流水上的 `model_id`/`account`/`outcome`/`status_code`/`error_code`/`error_message`/`retry_after` 全都只是**最后一次**的值，`dispatch_ms`/`upstream_ms` 是累计值，`tried_ids` 只有模型 ID 而没有各自的结果——「第二个账号是 429 还是 500」「三次都慢还是只有第三次慢」在流水里无从得知，而上一版加入的捕获又把多次尝试的上游字节无边界拼在一起。**形态选择**：行内一列而不是 per-attempt 表，依据是参考实现 sub2api 曾建过 `ops_retry_attempts` 表（`033_ops_monitoring_vnext.sql`）、扩过一次（`038`）、最终整表删掉（`136_remove_ops_retry_replay.sql`），理由原文是写入宽度、内存驻留与库体积；new-api 从未建表，只把尝试过的渠道拍平成 `重试：A->B->C` 一行人读文本（`controller/relay.go`），看不出各自的错误码与耗时。**不变式**：轨迹各项耗时之和恒等于行上的累计值，因此「本次值」与「累计值」两个计时器混用会被立刻发现。**凭据边界**：轨迹随流水进 PG，因此只含标识与结果标量，绝不含请求头、`base_url`（其排查价值等于 `model_id`+`account`，而它是带路径的 URL、可能把 key 放在 query 里）或请求体。**明确不做**：不建 per-attempt 表；不进列表端点（一页 200 条会随重试次数膨胀，`attempts` 计数是入口）；不做「重试链」人读字符串；不给单次尝试省掉轨迹；调度层与配置中心零改动 |
 | 2.11 | 2026-09-19 | 转换四体捕获首次成文（[6.11](#611-转换四体捕获)）：新增 `MSA_CAPTURE_MODE` 三态开关（`off`/`errors`/`all`，默认 `off`，非法值拒绝启动）与两个上限变量，新增两个管理面端点（[7.9](#79-get-admincaptures捕获列表)、[7.10](#710-get-admincapturesrequest_id四体全文)）。**行为变更**：此前本服务**没有任何**调试捕获设施——流水只记转换层自己判断出的结论（`sanitized`/`lossy`/`error_code`），当那个判断本身错了时没有任何东西可看。上一次定位 kiro 的 `toolUse` 帧碎裂 bug 就是靠手写一段临时 tee 抓真实上游字节才找到根因，那段代码用完即弃、下一次还得重写。四体的取舍：`upstream_request` 换目标重试时覆盖（诊断对象是最终发出去的那一次），`upstream_response` 与 `client_response` 累加（同一个流的连续片段）；留/丢判据用 `error_code != ""` 而非 `outcome`，两者在「重试后成功」（不留）与「客户端取消」（要留，`outcome` 是 `normal` 但 `error_code` 是 `canceled`）两处分歧。**凭据边界**：捕获只含 body、永不含任何请求头，因此也刻意不做 body 内的正则脱敏——不存在凭据这件事由结构保证，再加一层只会给出虚假的安全感。**明确不做**：不落盘（要长期留证据应在反代层抓包）；不捕获 IR 与事件序列（可由前后两体推出）；不做采样（`errors` 档已是「常开而不撑爆内存」的形态）；不做 base64（唯一用途是人眼直接看）；不照搬 kiro-gateway 的 `debug_logger.py` 实现（它是单例、每请求 `shutil.rmtree` 同一个共享目录，并发请求互相擦掉证据）；调度层与配置中心零改动 |
 | 2.10 | 2026-09-19 | 时延分段归因与依赖饱和度首次成文（[6.10](#610-依赖饱和度与时延分段)）：流水新增 `dispatch_ms`、`upstream_ms` 两列（累计值，含全部重试），`/health` 与 `/admin/health` 新增 `pool`（五个数）与 `goroutines`。**行为变更**：此前 `latency_ms` 是一个不可拆的总数，一个 30 秒的请求分不清是调度层要目标要了很久、上游压着响应头不发、还是生成本来就长；`/health` 只对 PG 做 `Ping` 报 `ok`/`down`，连接池被占满时每个请求都慢而**每一条流水看上去都正常**——慢的那段在等连接上，那段不在任何一条请求的计时里。`upstream_ms` 的终点选在响应头到达而不是首帧，与 `MSA_RESPONSE_HEADER_TIMEOUT` 对齐；两段在重试时累加而非覆盖（与 `lossy` 的覆盖语义刻意相反）。**明确不做**：不引入 Prometheus/OpenTelemetry（四个参考仓库无一使用）；不做 sub2api 的 auth/routing/upstream/response 四段划分（本服务的入站鉴权是转发给调度层做的，没有独立的 auth 段；response 段与生成时间在 SSE 下不可分）；不加 `error_owner`/`is_business_limited`（SLA 口径的计算面在调度层）；不存请求体/响应体（sub2api 自己已把错误表里的 `request_body` 删掉）；不做 per-attempt 逐次快照（需另建表）；不起后台 goroutine 采样池指标（换来的是过时数字）；不给 `goroutines` 设阈值告警（本服务没有告警设施） |

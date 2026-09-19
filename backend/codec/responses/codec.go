@@ -74,8 +74,12 @@ func (outboundCodec) Caps() codec.Capabilities {
 		Truncation:        true,
 		ClientMetadata:    true,
 		// LogProbs 为真只覆盖 top_logprobs：本协议无独立的 logprobs 开关，
-		// 给了 top_logprobs 即表示要对数概率。
-		LogProbs: true,
+		// 给了 top_logprobs 即表示要对数概率。客户端只给了开关时出站补
+		// 一个档位（见 LogProbsViaTopN）。
+		LogProbs:        true,
+		LogProbsViaTopN: true,
+		// input_image 有 detail 层级，与 chat_completions 同名同义。
+		ImageDetail: true,
 		// ThinkingExcludesForcedTools 留零值：无账号、无官方文档，
 		// 推理与强制工具是否互斥**未核实**。零值不等于已确认允许，
 		// 拿到能发请求的账号后要补实测，别把它当成已有结论。

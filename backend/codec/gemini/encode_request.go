@@ -88,6 +88,9 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 		on := true
 		cfg.ResponseLogprobs = &on
 	}
+	cfg.Seed = req.Seed
+	cfg.PresencePenalty = req.PresencePenalty
+	cfg.FrequencyPenalty = req.FrequencyPenalty
 	applyResponseFormat(cfg, req.ResponseFormat)
 	w.GenerationConfig = cfg
 

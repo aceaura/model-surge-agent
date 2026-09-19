@@ -14,6 +14,10 @@ func userText(text string) Message {
 	return Message{Role: RoleUser, Content: []Block{{Type: BlockText, Text: text}}}
 }
 
+func assistantText(text string) Message {
+	return Message{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: text}}}
+}
+
 func assistantCalls(ids ...string) Message {
 	m := Message{Role: RoleAssistant}
 	for _, id := range ids {
@@ -64,6 +68,7 @@ func TestSanitizeLeavesHealthyRequestUntouched(t *testing.T) {
 				userText("find TODO"),
 				assistantCalls("call_1"),
 				userResults("call_1"),
+				assistantText("found 3"),
 				userText("thanks"),
 			},
 		}

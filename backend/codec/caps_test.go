@@ -22,6 +22,7 @@ var structuralCaps = map[string]struct {
 	systemAsText      bool
 	serverTools       bool
 	toolResultError   bool
+	imageDetail       bool
 }{
 	codec.ProtocolAnthropic: {
 		cacheBreakpoints:  4,
@@ -32,9 +33,11 @@ var structuralCaps = map[string]struct {
 	},
 	codec.ProtocolChatCompletions: {
 		maxStopSequences: 4,
+		imageDetail:      true,
 	},
 	codec.ProtocolResponses: {
 		systemAsText: true,
+		imageDetail:  true,
 	},
 	codec.ProtocolGemini: {
 		dialect: schemadialect.Dialect{
@@ -87,6 +90,9 @@ func TestEveryOutboundDeclaresStructuralCaps(t *testing.T) {
 			}
 			if got.ToolResultError != want.toolResultError {
 				t.Errorf("ToolResultError = %v，想要 %v", got.ToolResultError, want.toolResultError)
+			}
+			if got.ImageDetail != want.imageDetail {
+				t.Errorf("ImageDetail = %v，想要 %v", got.ImageDetail, want.imageDetail)
 			}
 		})
 	}
