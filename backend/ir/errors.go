@@ -60,6 +60,16 @@ type Error struct {
 	//
 	// 绝不编造：没给就是零值。编造一个时刻会把其实可用的目标锁住。
 	RetryAfter time.Time `json:"retry_after,omitzero"`
+	// SideEffectRisk 表示这次失败发生在请求已经完整交给上游之后。
+	//
+	// 与 Retryable 分开而不是直接把它压成 false：两者回答不同的问题。
+	// Retryable 是「换个目标有没有意义」，这一个是「换个目标会不会产生
+	// 第二份计费」。压成一个字段后，将来要放宽某一类（比如上游明确说了
+	// 「我没开始处理」）就没有可放宽的地方。
+	//
+	// 不进 NewError 的参数表：绝大多数错误产生在请求发出之前，
+	// 加进签名等于让四十余处调用点都跟着填一个 false。
+	SideEffectRisk bool `json:"side_effect_risk,omitempty"`
 }
 
 func (e *Error) Error() string {

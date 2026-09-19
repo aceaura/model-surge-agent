@@ -89,7 +89,7 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 				if clientCtx.Err() != nil {
 					return p.clientGone(&agg, rec)
 				}
-				return p.finish(w, call, encoder, &agg, committed, tail,
+				return p.finish(w, call, up, encoder, &agg, committed, tail,
 					ir.NewError(ir.ErrUpstream, 0, "", "upstream stream ended without a terminator"), rec)
 			}
 		case <-time.After(time.Until(deadline)):
@@ -97,7 +97,7 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 			if committed {
 				kind = "idle"
 			}
-			return p.finish(w, call, encoder, &agg, committed, tail,
+			return p.finish(w, call, up, encoder, &agg, committed, tail,
 				ir.NewError(ir.ErrTimeout, 0, "", kind+" timeout"), rec)
 		}
 
@@ -107,7 +107,7 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 			if clientCtx.Err() != nil {
 				return p.clientGone(&agg, rec)
 			}
-			return p.finish(w, call, encoder, &agg, committed, tail, f.err, rec)
+			return p.finish(w, call, up, encoder, &agg, committed, tail, f.err, rec)
 		}
 
 		for _, ev := range f.events {
@@ -126,6 +126,8 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 				timeout = p.idleTimeout()
 				if call.Stream {
 					rec.StatusCode = http.StatusOK
+					// 必须在 writeStreamHeaders 之前：它里面就 WriteHeader 了。
+					applyForwardedHeaders(w, up)
 					writeStreamHeaders(w)
 				}
 			}
@@ -152,15 +154,16 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 			if n, ok := up.decoder.(codec.StreamNotes); ok {
 				rec.addResponseLossy(n.Notes()...)
 			}
-			return p.finish(w, call, encoder, &agg, committed, tail, streamErr, rec)
+			return p.finish(w, call, up, encoder, &agg, committed, tail, streamErr, rec)
 		}
 	}
 }
 
 // finish 收尾：err 为 nil 是成功路径，否则按是否 committed 决定
 // 错误落在流内还是当作可换目标的失败回给上层。
-func (p *Pipeline) finish(w http.ResponseWriter, call Call, encoder codec.StreamEncoder,
-	agg *ir.Aggregator, committed bool, tail []ir.Event, err *ir.Error, rec *Record) (string, attemptResult) {
+func (p *Pipeline) finish(w http.ResponseWriter, call Call, up *upstream,
+	encoder codec.StreamEncoder, agg *ir.Aggregator, committed bool, tail []ir.Event,
+	err *ir.Error, rec *Record) (string, attemptResult) {
 
 	usage := usageOf(agg)
 	if p.Opts.EstimateUsage && usage.OutputTokens == 0 {
@@ -224,7 +227,7 @@ func (p *Pipeline) finish(w http.ResponseWriter, call Call, encoder codec.Stream
 			agg.Add(trunc)
 			tail = append(tail, trunc)
 		}
-		p.writeSuccess(w, call, encoder, agg, tail, rec)
+		p.writeSuccess(w, call, up, encoder, agg, tail, rec)
 		return relayclient.OutcomeNormal, attemptResult{usage: usage}
 	}
 
@@ -247,8 +250,8 @@ func (p *Pipeline) finish(w http.ResponseWriter, call Call, encoder codec.Stream
 	return relayclient.OutcomeAbnormal, attemptResult{err: err, committed: true, usage: usage}
 }
 
-func (p *Pipeline) writeSuccess(w http.ResponseWriter, call Call, encoder codec.StreamEncoder,
-	agg *ir.Aggregator, tail []ir.Event, rec *Record) {
+func (p *Pipeline) writeSuccess(w http.ResponseWriter, call Call, up *upstream,
+	encoder codec.StreamEncoder, agg *ir.Aggregator, tail []ir.Event, rec *Record) {
 	if encoder != nil {
 		// tail 是暂存的上游终止事件，确认这轮完整之后才放行。
 		for _, ev := range tail {
@@ -273,6 +276,7 @@ func (p *Pipeline) writeSuccess(w http.ResponseWriter, call Call, encoder codec.
 	}
 	rec.addResponseLossy(notes...)
 	rec.StatusCode = http.StatusOK
+	applyForwardedHeaders(w, up)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)

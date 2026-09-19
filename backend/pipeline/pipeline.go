@@ -344,6 +344,19 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 			rec.Usage = res.usage
 			return
 		}
+		// 请求已经完整交给上游：它可能已经生成完并计了费，换目标重发就是
+		// 第二份账单，带副作用的工具调用则会被执行第二次。把明确的错误交给
+		// 客户端由它决定重不重试——它知道自己这个请求有没有副作用，我们不知道。
+		//
+		// 排在 Retryable 之前：这一族失败（响应头超时、上游读完请求就断）
+		// kind 恰好都是可重试的那几个，放在后面就永远走不到。
+		if res.err.SideEffectRisk {
+			p.report(rq, call, target, attempt, outcome, res.usage, res.err, &rec)
+			rec.Outcome = outcome
+			rec.Usage = res.usage
+			p.fail(w, call, &rec, res.err)
+			return
+		}
 		// 换目标也不会好（参数错、上下文超限），直接回错。
 		if !res.err.Retryable {
 			p.report(rq, call, target, attempt, outcome, res.usage, res.err, &rec)

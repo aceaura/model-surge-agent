@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"syscall"
+
+	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
 // h2ConnLost 是 h2 探测到连接失联时的错误文本。
@@ -72,6 +74,47 @@ func isTransportError(err error) bool {
 	}
 
 	return strings.Contains(err.Error(), h2ConnLost)
+}
+
+// isUnreachableTarget 判断失败是否说明「这个目标本身不可达」。
+//
+// 与 isTransportError 的分界是持久性：连接层故障换条连接就好，而域名解析不
+// 出来、或路由上到不了那台主机，换多少条连接都一样。归到 ErrTransport 的
+// 后果是这个目标永不计失败、永不冷却，调度层会一直把流量派给它，把重试
+// 预算全烧在同一个死目标上——而运维看到的是「transport 占比升高但所有
+// 目标都健康」。
+func isUnreachableTarget(err error) bool {
+	if err == nil {
+		return false
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		// 只认 IsNotFound。DNS 超时与临时失败是解析服务的问题而不是这个
+		// 目标的问题，算成目标失败会在 DNS 抖动时把整个账号池一起冷却。
+		return dnsErr.IsNotFound
+	}
+	// ECONNREFUSED 刻意不在这里：上游滚动重启时会短暂拒连，那是瞬时的。
+	// 参考仓库 sub2api 把它归 Persistent，但它那边的处置是「临时摘出调度」，
+	// 我们这边是「计入目标失败」，代价不同，不跟。
+	for _, errno := range []syscall.Errno{
+		syscall.EHOSTUNREACH, syscall.ENETUNREACH,
+	} {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	return false
+}
+
+// withSideEffectRisk 在错误上标记「请求已经交给上游」。
+//
+// 单独一个函数而不是在每个 return 上写字段赋值：漏标一处的后果是那一处
+// 恢复成静默重发，而这种漏不会让任何测试变红——它只在真实账单上显形。
+func withSideEffectRisk(err *ir.Error, wrote bool) *ir.Error {
+	if err != nil {
+		err.SideEffectRisk = wrote
+	}
+	return err
 }
 
 // redacted 是净化掉的 URL 的占位文本。

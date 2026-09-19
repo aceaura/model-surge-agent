@@ -7,7 +7,9 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/aceaura/model-surge-agent/backend/capture"
@@ -24,9 +26,11 @@ type upstream struct {
 	// 已投影成事件序列，read 直接回放它。
 	replay []ir.Event
 	// notes 是建流阶段产生的有损说明，由调用方并进流水。
-	notes  []string
-	body   io.Closer
-	cancel context.CancelFunc
+	notes []string
+	// forwardHeaders 是允许回传给客户端的上游响应头，白名单筛过。
+	forwardHeaders http.Header
+	body           io.Closer
+	cancel         context.CancelFunc
 }
 
 func (u *upstream) Close() {
@@ -55,6 +59,18 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 	// 重定向策略的说明收集口挂在 ctx 上：客户端是进程级共享的，
 	// 策略函数不能持有本次请求的状态。
 	streamCtx, sink := withRedirectSink(streamCtx)
+
+	// 请求是否已完整交给上游。失败时它决定要不要换目标重发：已经发出去的
+	// 请求，上游可能已经生成完并计了费，重发就是第二份账单。
+	//
+	// 用 httptrace 而不是推断：标准库内部有连接复用、h2 多路复用与请求重放，
+	// 从错误文本反推「发出去了吗」每一条都是猜。探针实测这个回调在
+	// ResponseHeaderTimeout 与「上游读完请求就断」两种失败上都已触发，
+	// 而拨号被拒与 DNS 失败上没有。
+	var wroteRequest atomic.Bool
+	streamCtx = httptrace.WithClientTrace(streamCtx, &httptrace.ClientTrace{
+		WroteRequest: func(httptrace.WroteRequestInfo) { wroteRequest.Store(true) },
+	})
 
 	req, err := http.NewRequestWithContext(streamCtx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -112,6 +128,11 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 			// ErrUpstream 本身就判可重试，不再包 retryableErr：
 			// 那是一个空操作，而空操作会让读的人以为这里有一个
 			// 与 kind 无关的额外判断。
+			//
+			// 刻意不标 SideEffectRisk：请求确实已经发出去了，但上游回的是
+			// 一个重定向而不是一次生成——它没处理这个请求，也就没有计费。
+			// 与 3xx 走状态码那条路同一个道理。标上的话一个配错了 Location
+			// 的目标会让整个请求直接失败而不是换个目标，反而更糟。
 			return nil, ir.NewError(ir.ErrUpstream, 0, "", reason)
 		}
 		// 连接层与「上游明确地不行」分开归因：前者上游可能完全健康，
@@ -120,15 +141,25 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 		// 两条路径都走净化：原始 error 是 *url.Error，它内嵌完整请求 URL 含
 		// query，而这个 message 会流到客户端可见的错误体里。
 		reason := sanitizeTransportError(err)
-		if isTransportError(err) {
-			return nil, ir.NewError(ir.ErrTransport, 0, "", "upstream connection failed: "+reason)
+		risk := wroteRequest.Load()
+		// 不可达必须排在 isTransportError 之前：NXDOMAIN 是 *net.OpError 包
+		// *net.DNSError，下面那个分支会把它认下并归成「换条连接就好」，
+		// 于是一个域名写错的目标永远不计失败、永不冷却。
+		if isUnreachableTarget(err) {
+			return nil, withSideEffectRisk(ir.NewError(ir.ErrUpstream, 0, "",
+				"upstream target unreachable: "+reason), risk)
 		}
-		return nil, ir.NewError(ir.ErrUpstream, 0, "", "upstream unreachable: "+reason)
+		if isTransportError(err) {
+			return nil, withSideEffectRisk(ir.NewError(ir.ErrTransport, 0, "",
+				"upstream connection failed: "+reason), risk)
+		}
+		return nil, withSideEffectRisk(ir.NewError(ir.ErrUpstream, 0, "",
+			"upstream unreachable: "+reason), risk)
 	}
 	// 3xx 排在状态码闸门之前：闸门那一段要读体、解压、DecodeError，
 	// 而一个没有可用 Location 的 3xx 的体不值得走这一套。
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-		_ = resp.Body.Close()
+		drainAndClose(resp.Body)
 		cancel()
 		return nil, ir.NewError(ir.ErrUpstream,
 			resp.StatusCode, "", unfollowableRedirect)
@@ -143,7 +174,7 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 			errBody = dec
 		}
 		raw, _ := io.ReadAll(io.LimitReader(errBody, 64<<10))
-		_ = resp.Body.Close()
+		drainAndClose(resp.Body)
 		// 错误体也是上游回的字节，而且正是最需要看的一类：DecodeError
 		// 会把它归一化成一个 ir.Error，归错的时候只有原文能说明它到底说了什么。
 		capt.Add(capture.UpstreamResponse, raw)
@@ -166,6 +197,7 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 	}
 
 	return &upstream{
+		forwardHeaders: forwardableHeaders(resp.Header),
 		// 旁挂在 resp.Body 外面而不是改 FrameScanner：切帧属于 codec，
 		// 让它知道捕获会把一个纯函数层绑上排查设施的生命周期。
 		scanner: codec.NewFrameScanner(io.TeeReader(decoded, capt.Writer(capture.UpstreamResponse))),
@@ -192,6 +224,95 @@ func isEventStream(ct string) bool {
 	return strings.EqualFold(mt, "text/event-stream")
 }
 
+// forwardedHeaderPrefixes 是允许从上游回传给客户端的响应头前缀。
+//
+// 白名单而非黑名单。黑名单每漏一项都是一次泄露——Set-Cookie、上游的内部
+// 追踪头、以及上游将来新加的任何头；白名单漏一项只是少一个提示。
+// 参考仓库 sub2api 的 gemini handler 走的是黑名单（只跳三个 hop-by-hop
+// 头、其余全传），不跟。
+//
+// 限流头值得传：Claude Code 一类客户端靠 unified-remaining 自适应节流，
+// 拿不到就只能全速打到 429 才退避，表现为周期性硬撞限流。
+//
+// 前缀而不是全名列举：anthropic 的限流头是一族（requests-remaining、
+// tokens-remaining、unified-remaining、unified-reset……）且会增加，
+// 列举等于上游每加一个我们就要跟改一次。
+var forwardedHeaderPrefixes = []string{
+	"anthropic-ratelimit-",
+	"x-ratelimit-",
+}
+
+// forwardableHeaders 从上游响应头里筛出可以回传的那些。
+//
+// Retry-After 刻意不在白名单里：它已经由 codec/ratelimit 解析、按我们自己
+// 的口径写出，两条路都写会产生两个值。
+func forwardableHeaders(h http.Header) http.Header {
+	var out http.Header
+	for k, vs := range h {
+		lower := strings.ToLower(k)
+		for _, prefix := range forwardedHeaderPrefixes {
+			if !strings.HasPrefix(lower, prefix) {
+				continue
+			}
+			if out == nil {
+				out = make(http.Header, 4)
+			}
+			out[http.CanonicalHeaderKey(k)] = append([]string(nil), vs...)
+			break
+		}
+	}
+	return out
+}
+
+// applyForwardedHeaders 把筛过的上游头写进客户端响应。
+//
+// 必须在 WriteHeader 之前调用：之后写的头不会发出去，而且不报错——
+// 那种失效只能靠逐个字段比对响应头才看得出来。
+func applyForwardedHeaders(w http.ResponseWriter, up *upstream) {
+	if up == nil {
+		return
+	}
+	for k, vs := range up.forwardHeaders {
+		for _, v := range vs {
+			w.Header().Add(k, v)
+		}
+	}
+}
+
+// maxDrainBytes 是关闭响应体之前排空的上限。
+//
+// 必须有界：无界排空等于让上游用一个超长响应体把我们挂在这里。超过上限就
+// 直接关掉、接受丢这一条连接——那已经是异常上游，不值得为它继续读。
+const maxDrainBytes = 1 << 20
+
+// drainAndClose 把响应体剩余部分排空之后关闭。
+//
+// 不排空的话标准库不会把这条连接放回空闲池。本机探针：200KB 的错误体、
+// 连续五次同样的 429，只读前 64KB 就关的话建了五条新连接，排空后只建一条。
+// 于是上游进 429 风暴（错误体常带长 HTML）时每次失败丢一条连接，
+// MaxIdleConnsPerHost 形同未配、TLS 握手随失败率线性上涨，而池饱和指标
+// 看着正常——池里没连接不是因为满，是因为没人放回来，于是调参毫无效果。
+//
+// 读 resp.Body 而不是解压后的 reader：要放回池里的是底层字节流，
+// 读解压流在压缩比高时读不完底层那些字节。
+func drainAndClose(body io.ReadCloser) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, maxDrainBytes))
+	_ = body.Close()
+}
+
+// looksLikeHTML 判断响应体是不是一张网页。
+//
+// 只看开头的记号，不做完整解析：目的是给错误消息一个正确的归因，
+// 而不是理解这个页面。大小写都认——WAF 与门户的拦截页两种写法都有。
+func looksLikeHTML(raw []byte) bool {
+	head := bytes.ToLower(bytes.TrimSpace(raw))
+	if len(head) > 512 {
+		head = head[:512]
+	}
+	return bytes.HasPrefix(head, []byte("<!doctype html")) ||
+		bytes.HasPrefix(head, []byte("<html"))
+}
+
 // maxWholeResponseBytes 是整份响应的读取上限。
 // 与 SSE 单帧上限同量级：一份完整响应的合理上界不该比单帧宽松。
 const maxWholeResponseBytes = 32 << 20
@@ -204,6 +325,8 @@ func adoptWholeResponse(resp *http.Response, body io.Reader, outbound codec.Outb
 	cancel context.CancelFunc, capt *capture.Session, notes []string) (*upstream, *ir.Error) {
 
 	raw, err := io.ReadAll(io.LimitReader(body, maxWholeResponseBytes+1))
+	// 这条路上不排空：上面已经读到底了（超出上限那一种排 1MB 也到不了 EOF，
+	// 照样复用不了），排空在这里恒为空操作。
 	_ = resp.Body.Close()
 	// 这条分支也要捕获：上游忽略 stream:true 回整份 JSON 是常见形态，
 	// 漏掉它会让「非 SSE 上游」这一类问题恰好没有原始字节可看。
@@ -220,18 +343,32 @@ func adoptWholeResponse(resp *http.Response, body io.Reader, outbound codec.Outb
 	if len(bytes.TrimSpace(raw)) == 0 {
 		// 空体与「一帧都没发」同口径：都是上游在写内容之前就结束了，
 		// 可以换个目标重来。留 replay 为 nil 让 read 走那条既有路径。
-		return &upstream{notes: notes, cancel: cancel}, nil
+		return &upstream{notes: notes,
+			forwardHeaders: forwardableHeaders(resp.Header), cancel: cancel}, nil
 	}
 	decoded, decodeNotes, err := decodeWholeResponse(outbound, raw)
 	if err != nil {
 		cancel()
+		// HTML 单独归因。不点明的话运维在流水里看到的是
+		// `invalid character '<' looking for beginning of value`，
+		// 那句话指向「我们的解码器坏了」，而真实原因是有台中间设备在拦。
+		// kind 仍是可重试的 ErrUpstream：换个目标确实可能绕过那台设备。
+		if looksLikeHTML(raw) {
+			return nil, ir.NewError(ir.ErrUpstream, 0, "",
+				"upstream returned an HTML page instead of a response; "+
+					"a proxy or WAF is likely intercepting")
+		}
+		// 带上 Content-Type：一个头就能把「解码器坏了」与「上游回了别的
+		// 东西」分开，而这两者现在的文本一模一样。
 		return nil, ir.NewError(ir.ErrUpstream, 0, "",
-			fmt.Sprintf("decode upstream response: %v", err))
+			fmt.Sprintf("decode upstream response (content-type %q): %v",
+				resp.Header.Get("Content-Type"), err))
 	}
 	return &upstream{
-		replay: ir.ResponseEvents(decoded),
-		notes:  append(append(notes, codec.UpstreamIgnoredStreamNote), decodeNotes...),
-		cancel: cancel,
+		replay:         ir.ResponseEvents(decoded),
+		forwardHeaders: forwardableHeaders(resp.Header),
+		notes:          append(append(notes, codec.UpstreamIgnoredStreamNote), decodeNotes...),
+		cancel:         cancel,
 	}, nil
 }
 
