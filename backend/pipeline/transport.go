@@ -94,7 +94,11 @@ func NewHTTPClient(opts TransportOptions) *http.Client {
 	// 不设 Client.Timeout：它覆盖到读完整个响应体，而 SSE 会跑几分钟。
 	// 设了就会从中间掐断，且掐断点落在已 committed 之后，
 	// 客户端收到的是一个残缺的流。流的时限由首帧与空闲两个计时器负责。
-	return &http.Client{Transport: t}
+	//
+	// CheckRedirect 必须显式设：默认策略会把 302 的 POST 改写成无体的 GET，
+	// 并且跨 host 时只删它认识的那四个头名——本服务的 x-api-key 与
+	// x-goog-api-key 不在其中。
+	return &http.Client{Transport: t, CheckRedirect: checkRedirect}
 }
 
 func intOrDefault(v, def int) int {

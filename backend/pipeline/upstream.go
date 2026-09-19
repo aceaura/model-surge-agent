@@ -52,6 +52,9 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 	// 单独的 cancel：流读完或出错时要能立刻掐断连接，
 	// 不然 committed 后失败的连接会挂到客户端上下文结束。
 	streamCtx, cancel := context.WithCancel(ctx)
+	// 重定向策略的说明收集口挂在 ctx 上：客户端是进程级共享的，
+	// 策略函数不能持有本次请求的状态。
+	streamCtx, sink := withRedirectSink(streamCtx)
 
 	req, err := http.NewRequestWithContext(streamCtx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -89,8 +92,28 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 	rec.UpstreamMS += upstreamMS
 	// 同一次尝试内 open 只调一次，所以本次值直接赋而不是累加。
 	rec.attemptUpstreamMS = upstreamMS
+	// 重定向策略的说明直接并进 rec.Lossy，不搭 notes 那趟车。
+	//
+	// notes 只在 open 成功返回时才被调用方取走，而重定向的说明几乎总是产生在
+	// 失败那一侧——摘掉凭据之后这一跳就被拒了。搭 notes 的话，唯一会产生这条
+	// 说明的场景恰好是它一定丢掉的场景。
+	for _, note := range sink.drain() {
+		rec.Lossy = codec.MergeNotes(rec.Lossy, []string{note})
+	}
 	if err != nil {
 		cancel()
+		// 重定向类失败必须排在 isTransportError 之前：我们的哨兵被 *url.Error
+		// 裹着，而它不是 net.Error，当前分支会把它归到「upstream unreachable」——
+		// kind 恰好对了但文本是错的。
+		//
+		// 文本一个字都不从原始错误里取：Do 返回的错误内嵌重定向目标 URL 含
+		// query（探针实测 `Post "/next?key=sk-inquery": ...`）。
+		if reason, ok := redirectFailure(err); ok {
+			// ErrUpstream 本身就判可重试，不再包 retryableErr：
+			// 那是一个空操作，而空操作会让读的人以为这里有一个
+			// 与 kind 无关的额外判断。
+			return nil, ir.NewError(ir.ErrUpstream, 0, "", reason)
+		}
 		// 连接层与「上游明确地不行」分开归因：前者上游可能完全健康，
 		// 记成它的失败会让一条死连接把健康账号推向冷却。
 		//
@@ -101,6 +124,14 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 			return nil, ir.NewError(ir.ErrTransport, 0, "", "upstream connection failed: "+reason)
 		}
 		return nil, ir.NewError(ir.ErrUpstream, 0, "", "upstream unreachable: "+reason)
+	}
+	// 3xx 排在状态码闸门之前：闸门那一段要读体、解压、DecodeError，
+	// 而一个没有可用 Location 的 3xx 的体不值得走这一套。
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		_ = resp.Body.Close()
+		cancel()
+		return nil, ir.NewError(ir.ErrUpstream,
+			resp.StatusCode, "", unfollowableRedirect)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// 错误体同样要解压：压缩的错误体交给 DecodeError 只会解不出结构、
