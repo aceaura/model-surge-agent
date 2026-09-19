@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aceaura/model-surge-agent/backend/cache"
+	"github.com/aceaura/model-surge-agent/backend/capture"
 	"github.com/aceaura/model-surge-agent/backend/codec"
 	"github.com/aceaura/model-surge-agent/backend/contract/agentv1"
 	"github.com/aceaura/model-surge-agent/backend/pipeline"
@@ -31,6 +32,8 @@ type Admin struct {
 	Cache    *cache.Cache
 	Models   ModelLister
 	Health   HealthChecker
+	// Captures 是转换四体捕获。nil 时两个端点回空列表与 404，而不是崩。
+	Captures *capture.Store
 }
 
 // RequestStore 是流水查询。接口而非直接用 store：PG 挂了也要能起服务，
@@ -56,6 +59,8 @@ func (a *Admin) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/outbox", a.listOutbox)
 	mux.HandleFunc("POST /admin/outbox/{report_id}/retry", a.retryOutbox)
 	mux.HandleFunc("GET /admin/models", a.listModels)
+	mux.HandleFunc("GET /admin/captures", a.listCaptures)
+	mux.HandleFunc("GET /admin/captures/{request_id}", a.getCapture)
 	return a.authed(mux)
 }
 
@@ -382,4 +387,53 @@ func adminError(w http.ResponseWriter, status int, code, message string) {
 // equalKey 用固定时间比较：逐字符短路的比较能让攻击者按前缀试出密钥。
 func equalKey(got, want string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+// captureKindKeys 是四体在 JSON 里的键名，顺序与 capture.Kind 一致。
+var captureKindKeys = [...]string{
+	capture.ClientRequest:    "client_request",
+	capture.UpstreamRequest:  "upstream_request",
+	capture.UpstreamResponse: "upstream_response",
+	capture.ClientResponse:   "client_response",
+}
+
+func (a *Admin) listCaptures(w http.ResponseWriter, r *http.Request) {
+	out := agentv1.CaptureList{
+		Mode:  string(a.Captures.Mode()),
+		Items: []agentv1.CaptureSummary{},
+	}
+	for _, snap := range a.Captures.List() {
+		sizes := map[string]int{}
+		for i, key := range captureKindKeys {
+			sizes[key] = len(snap.Bodies[i].Bytes)
+		}
+		out.Items = append(out.Items, agentv1.CaptureSummary{
+			RequestID: snap.RequestID, At: snap.At, Sizes: sizes,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *Admin) getCapture(w http.ResponseWriter, r *http.Request) {
+	snap, ok := a.Captures.Get(r.PathValue("request_id"))
+	if !ok {
+		// 回 404 而不是空对象：捕获是有上限的环，那一条可能已被淘汰，
+		// 空对象会让读的人以为那次请求四体全空。
+		adminError(w, http.StatusNotFound, agentv1.CodeNotFound, "capture not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, agentv1.CaptureDetail{
+		RequestID:        snap.RequestID,
+		At:               snap.At,
+		ClientRequest:    captureBody(snap.Bodies[capture.ClientRequest]),
+		UpstreamRequest:  captureBody(snap.Bodies[capture.UpstreamRequest]),
+		UpstreamResponse: captureBody(snap.Bodies[capture.UpstreamResponse]),
+		ClientResponse:   captureBody(snap.Bodies[capture.ClientResponse]),
+	})
+}
+
+func captureBody(b capture.Body) agentv1.CaptureBody {
+	return agentv1.CaptureBody{
+		Body: string(b.Bytes), Truncated: b.Truncated, Dropped: b.Dropped,
+	}
 }

@@ -2,6 +2,7 @@ package agentv1
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -43,5 +44,51 @@ func assertKeys(t *testing.T, v any, want map[string]float64) {
 		if got != w {
 			t.Errorf("键 %q = %v，要 %v", key, got, w)
 		}
+	}
+}
+
+// 键名是前端与运维脚本读的契约，改一个字就断。断言必须落在字面量上，
+// 否则测试自己也走同一套 tag，改名两边一起变、完全测不出来。
+func TestCaptureWireKeys(t *testing.T) {
+	raw, err := json.Marshal(CaptureList{
+		Mode: "errors",
+		Items: []CaptureSummary{{
+			RequestID: "r1",
+			Sizes:     map[string]int{"client_request": 7},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, key := range []string{`"mode"`, `"items"`, `"request_id"`, `"at"`, `"sizes"`} {
+		if !strings.Contains(string(raw), key) {
+			t.Errorf("CaptureList 缺键 %s：%s", key, raw)
+		}
+	}
+
+	raw, err = json.Marshal(CaptureDetail{RequestID: "r1"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, key := range []string{`"request_id"`, `"at"`,
+		`"client_request"`, `"upstream_request"`, `"upstream_response"`, `"client_response"`} {
+		if !strings.Contains(string(raw), key) {
+			t.Errorf("CaptureDetail 缺键 %s：%s", key, raw)
+		}
+	}
+
+	raw, err = json.Marshal(CaptureBody{Body: "x", Truncated: true, Dropped: 3})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, key := range []string{`"body"`, `"truncated"`, `"dropped"`} {
+		if !strings.Contains(string(raw), key) {
+			t.Errorf("CaptureBody 缺键 %s：%s", key, raw)
+		}
+	}
+	// body 必须是明文字符串而不是 base64：这个端点唯一的用途是人眼看
+	// 哪一步坏了，base64 之后要先解一层才能看。
+	if !strings.Contains(string(raw), `"body":"x"`) {
+		t.Errorf("body 不是明文：%s", raw)
 	}
 }

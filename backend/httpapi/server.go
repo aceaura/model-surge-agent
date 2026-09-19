@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aceaura/model-surge-agent/backend/capture"
 	"github.com/aceaura/model-surge-agent/backend/codec"
 	"github.com/aceaura/model-surge-agent/backend/contract/agentv1"
 	"github.com/aceaura/model-surge-agent/backend/ir"
@@ -42,6 +43,8 @@ type Server struct {
 	// CORSOrigins 是允许的跨域来源。空或含 `*` 表示放开所有来源，
 	// 此时不发 Allow-Credentials（浏览器拒绝那个组合）。
 	CORSOrigins []string
+	// Captures 是转换四体捕获。nil 与 off 档等价，两者都不分配缓冲。
+	Captures *capture.Store
 }
 
 // ModelLister 给出用户模型清单。实现方决定是否走缓存。
@@ -124,6 +127,10 @@ func (s *Server) dataPlane(protocol string) http.HandlerFunc {
 		}
 
 		id := requestID(r)
+		// Begin 在解码成功之后：解码就失败的请求走 reject 那条路径，
+		// 它连出站协议都没选过，四体里只会有一体，留下来只是噪音。
+		capt := s.Captures.Begin(id)
+		capt.Add(capture.ClientRequest, body)
 		// 在 Serve 之前设，而不是让 pipeline 去设：http.Header 在
 		// WriteHeader 之前的修改都会生效，无论谁设的。这样 SSE 与非流式
 		// 两条路径不必各改一遍，pipeline 也不必知道这件事。
@@ -140,6 +147,7 @@ func (s *Server) dataPlane(protocol string) http.HandlerFunc {
 			// 客户端要不要 SSE 由请求体的 stream 决定；对上游一律流式，与此无关。
 			Stream:       req.Stream,
 			Declarations: readDeclarations(r),
+			Capture:      capt,
 		})
 	}
 }

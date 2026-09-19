@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aceaura/model-surge-agent/backend/capture"
 	"github.com/aceaura/model-surge-agent/backend/codec"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 	"github.com/aceaura/model-surge-agent/backend/relayclient"
@@ -44,7 +45,7 @@ func (u *upstream) Close() {
 // 那段耗时会被静默算成上游耗时，而这种漂移在读代码时看不出来。
 func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 	target relayclient.Target, body []byte, decls codec.Declarations,
-	rec *Record) (*upstream, *ir.Error) {
+	rec *Record, capt *capture.Session) (*upstream, *ir.Error) {
 
 	url, extra := outbound.Endpoint(target.BaseURL, target.NativeModel, true)
 
@@ -94,6 +95,9 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		_ = resp.Body.Close()
+		// 错误体也是上游回的字节，而且正是最需要看的一类：DecodeError
+		// 会把它归一化成一个 ir.Error，归错的时候只有原文能说明它到底说了什么。
+		capt.Add(capture.UpstreamResponse, raw)
 		cancel()
 		return nil, outbound.DecodeError(resp.StatusCode, resp.Header, raw)
 	}
@@ -101,11 +105,13 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 	// 上游是否真的在发流，与客户端要不要流无关：兼容层网关忽略
 	// stream:true 回一整份 JSON 是常见形态，按 SSE 去切它会一帧都读不出。
 	if !isEventStream(resp.Header.Get("Content-Type")) {
-		return adoptWholeResponse(resp, outbound, cancel)
+		return adoptWholeResponse(resp, outbound, cancel, capt)
 	}
 
 	return &upstream{
-		scanner: codec.NewFrameScanner(resp.Body),
+		// 旁挂在 resp.Body 外面而不是改 FrameScanner：切帧属于 codec，
+		// 让它知道捕获会把一个纯函数层绑上排查设施的生命周期。
+		scanner: codec.NewFrameScanner(io.TeeReader(resp.Body, capt.Writer(capture.UpstreamResponse))),
 		decoder: outbound.NewStreamDecoder(),
 		body:    resp.Body,
 		cancel:  cancel,
@@ -134,10 +140,13 @@ const maxWholeResponseBytes = 32 << 20
 
 // adoptWholeResponse 把上游的整份响应读进来，投影成事件序列。
 func adoptWholeResponse(resp *http.Response, outbound codec.OutboundCodec,
-	cancel context.CancelFunc) (*upstream, *ir.Error) {
+	cancel context.CancelFunc, capt *capture.Session) (*upstream, *ir.Error) {
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxWholeResponseBytes+1))
 	_ = resp.Body.Close()
+	// 这条分支也要捕获：上游忽略 stream:true 回整份 JSON 是常见形态，
+	// 漏掉它会让「非 SSE 上游」这一类问题恰好没有原始字节可看。
+	capt.Add(capture.UpstreamResponse, raw)
 	if err != nil {
 		cancel()
 		return nil, ir.NewError(ir.ErrUpstream, 0, "",

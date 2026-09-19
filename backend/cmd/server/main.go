@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/aceaura/model-surge-agent/backend/cache"
+	"github.com/aceaura/model-surge-agent/backend/capture"
 	"github.com/aceaura/model-surge-agent/backend/codec"
 	"github.com/aceaura/model-surge-agent/backend/config"
 	"github.com/aceaura/model-surge-agent/backend/httpapi"
@@ -92,6 +93,19 @@ func run(log *slog.Logger) error {
 	models := httpapi.CachedModels{Relay: relay, Cache: rdb}
 	health := httpapi.Checker{Store: db, Outbox: queue, Cache: rdb, Relay: relay}
 
+	// Load 已经校验过模式合法，这里的错误不可能发生。
+	captureMode, _ := capture.ParseMode(cfg.CaptureMode)
+	captures := capture.New(capture.Options{
+		Mode:       captureMode,
+		MaxBody:    cfg.CaptureMaxBody,
+		MaxEntries: cfg.CaptureMaxEntries,
+	})
+	if captureMode != capture.ModeOff {
+		// 开着就说一声：它按设计只存内存、只存 body，但仍会把请求全文
+		// 留在进程里，运维该知道自己现在处于这个状态。
+		log.Warn("conversion capture is on", "mode", string(captureMode))
+	}
+
 	srv := &httpapi.Server{
 		Pipeline: &pipeline.Pipeline{
 			Dispatch: relay,
@@ -107,6 +121,7 @@ func run(log *slog.Logger) error {
 		},
 		Models:      models,
 		Health:      health,
+		Captures:    captures,
 		Log:         log,
 		AccessLog:   cfg.AccessLog,
 		CORSOrigins: cfg.CORSOrigins,
@@ -117,6 +132,7 @@ func run(log *slog.Logger) error {
 			Cache:    rdb,
 			Models:   models,
 			Health:   health,
+			Captures: captures,
 		},
 	}
 

@@ -1617,6 +1617,64 @@ Gemini 的 `finishMessage`（上游随 `finishReason` 附的人类可读原因�
 
 ---
 
+### 6.11 转换四体捕获
+
+每个请求都要经历四次 wire 形态变换：客户端请求体 → 出站 wire body → 上游原始字节 → 回客户端字节。流水里记的是**结论**——`sanitized` 说修了什么、`lossy` 说丢了什么、`error_code` 说哪类错，而这些结论都是转换层自己判断出来的。当那个判断本身错了的时候，流水里没有任何东西能看。
+
+捕获保留这四段原始字节，用来回答「到底是哪一步坏的」。
+
+#### 四体的语义
+
+| 体 | 取自 | 说明 |
+|---|---|---|
+| `client_request` | 受理面读体、解压、去 BOM 之后 | 客户端实际发来的 JSON。解码就失败的请求**不开捕获**——它连出站协议都没选过，四体里只会有一体 |
+| `upstream_request` | `paramover` 应用之后、写进 `http.Request` 之前 | 真正发给上游的那份 body，含已替换的 native model 与运维配的 defaults/overrides |
+| `upstream_response` | 切帧之前，未经任何解码 | 上游回的原始字节。SSE 流旁挂在 body 上逐块累加；非 SSE 的整份响应与非 2xx 的错误体同样捕获 |
+| `client_response` | 出站编码之后、`Write` 成功之后 | 与客户端实收一致。流式是 SSE 帧、非流式是一次性 JSON、失败时是错误信封 |
+
+换目标重试时，`upstream_request` **覆盖**（诊断对象是最终发出去的那一次，累加会把一份没被采用的 body 拼在前面），`upstream_response` 与 `client_response` **累加**（同一个流的连续片段，两次尝试各自的响应都要留，否则看不出第一次是怎么坏的）。
+
+#### 三态开关
+
+`MSA_CAPTURE_MODE` 取 `off`（默认）、`errors`、`all`：
+
+- `off`：不分配任何缓冲，`Begin` 恒返回空会话，四个切点全是空操作。
+- `errors`：全程缓冲在内存里，请求收尾时按结果决定留还是丢。**建议的常开档**。
+- `all`：成功与失败都留。
+
+非法值**拒绝启动**而不是静默回落到 `off`：静默的后果是运维以为捕获开着，等出了故障才发现什么都没留，而那时故障已经过去了。
+
+留还是丢的判据是流水的 `error_code` 是否非空，不是 `outcome`。两者在两处分歧：换目标重试成功的请求中途有过 `retrying` 但整体正常，不该留；而客户端取消的请求 `outcome` 记 `normal`（客户端自己走了不是目标的故障，不该累计它的失败计数）却带着 `error_code: canceled`，要留——「客户端为什么取消」往往正是要看上游当时发了什么才能回答的。
+
+#### 凭据边界
+
+**捕获只含 body，永不含任何请求头。** 上游凭据来自调度层、只写进 `http.Request`，让它进捕获等于把一个排查设施变成凭据泄露面。
+
+因此也**不做 body 内的凭据扫描**：四体里不存在凭据这件事是由「不捕获头」这个结构保证的，再加一层正则脱敏只会给出一种虚假的安全感（它挡不住客户端自己把密钥写进 prompt，而那份内容本来就在客户端手里）。客户端转发给调度层的凭据同样只在头里，不在 body 里。
+
+两个读取端点在管理面密钥之后，与流水查询同一把密钥。
+
+#### 内存上限
+
+| 上限 | 默认 | 超出后 |
+|---|---|---|
+| 单体字节数（`MSA_CAPTURE_MAX_BODY`） | 1 MiB | 保留**前段**，标 `truncated` 并记 `dropped` 字节数 |
+| 保留条数（`MSA_CAPTURE_MAX_ENTRIES`） | 32 | 淘汰最旧的一条 |
+
+截断保留前段而不是后段：请求体的诊断价值在头部的模型名、参数与工具声明上，响应流的头部则是 `message_start` 与首个内容块，而转换 bug 绝大多数在流的开头就已显形。只留尾部会把 `message_start` 挤掉，而那一帧常常正是问题所在。
+
+#### 明确不做
+
+- **不落盘**。只在进程内存里，重启即失。要长期留证据的场景应该在反代层抓包，而不是让数据面兼任存储。
+- **不捕获请求头**，因此也不做任何脱敏（见上）。
+- **不捕获中立表示（IR）与事件序列**。那是 Go 结构体，序列化它需要一套只为调试存在的编解码，而它的内容可由前后两体推出。
+- **不做采样**。三态开关已经给出了「常开而不撑爆内存」的形态（`errors` 档），再加采样率只会让「为什么这一条没留下」多一个说不清的原因。
+- **不做 base64**。这两个端点唯一的用途是人眼看哪一步坏了，base64 之后要先解一层才能看。
+- **不参考 kiro-gateway 的实现**。它的三态取舍值得学，但它是一个单例、每次请求清空同一个共享目录，并发请求会互相擦掉证据。本服务每个请求独占一个会话。
+- **调度层与配置中心零改动**。捕获完全是数据面自己的事。
+
+---
+
 ## 7. 管理面
 
 全部挂在 `/admin` 下。除 outbox 重试外全部**只读**——管理面能改的越少，误操作的后果就越小。
@@ -1999,6 +2057,130 @@ curl -s "$BASE/admin/models" -H "Authorization: Bearer $MSA_ADMIN_KEY"
 
 ---
 
+### 7.9 GET /admin/captures（捕获列表）
+
+**使用场景**：先看有哪些捕获、四体各有多少字节，再挑出可疑的那条取全文。列表**不带字节**：一条捕获可达数 MB，列 32 条就是上百 MB 的响应。
+
+**请求**：`GET /admin/captures`
+
+**响应** `200`：
+
+| 字段 | 类型 | 允许值 | 含义 |
+|---|---|---|---|
+| `mode` | string | `off` / `errors` / `all` | 当前开关。列表为空时据此区分「捕获关着」与「开着但还没有符合条件的请求」 |
+| `items` | array | — | 捕获摘要，**最新在前** |
+| `items[].request_id` | string | — | 与响应头 `X-Request-Id`、流水的 `request_id` 同一个值 |
+| `items[].at` | string | RFC3339 | 请求开始时刻 |
+| `items[].sizes` | object | — | 四体各自已捕获的字节数，键为 `client_request`、`upstream_request`、`upstream_response`、`client_response`。某一体缺失时其值为 `0` |
+
+捕获未装配或开关为 `off` 时回 `mode: "off"` 与空数组，不是错误。
+
+**错误**
+
+| HTTP | code | 触发条件 |
+|---|---|---|
+| `401` | `unauthorized` | 密钥缺失或错误 |
+
+**示例**
+
+```bash
+curl -s "$BASE/admin/captures" -H "Authorization: Bearer $MSA_ADMIN_KEY"
+```
+
+```json
+{
+  "mode": "errors",
+  "items": [
+    {
+      "request_id": "0f3a9c1b7d5e4821",
+      "at": "2026-09-19T10:02:17.482Z",
+      "sizes": {
+        "client_request": 412,
+        "upstream_request": 486,
+        "upstream_response": 0,
+        "client_response": 137
+      }
+    }
+  ]
+}
+```
+
+上面这条的 `upstream_response` 是 `0`：上游一个字节都没回（连接层失败），而 `upstream_request` 有 486 字节——发出去的是什么可以看，回来的什么都没有。这正是四体分开记的用处。
+
+---
+
+### 7.10 GET /admin/captures/{request_id}（四体全文）
+
+**使用场景**：拿到一条可疑请求的四段原始字节，逐段比对定位是哪一次转换坏的。
+
+**请求**：`GET /admin/captures/{request_id}`
+
+**响应** `200`：
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `request_id` | string | 请求标识 |
+| `at` | string | 请求开始时刻（RFC3339） |
+| `client_request` | CaptureBody | 客户端发来的请求体 |
+| `upstream_request` | CaptureBody | 发给上游的 wire body |
+| `upstream_response` | CaptureBody | 上游回的原始字节 |
+| `client_response` | CaptureBody | 回给客户端的字节 |
+
+CaptureBody 的三个字段：
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `body` | string | 原始 wire 字节，按 UTF-8 当字符串交出，**不做 base64** |
+| `truncated` | bool | 是否超出单体上限被截断。为真时保留的是**前段** |
+| `dropped` | int | 被截断掉的字节数，让读的人知道自己少看了多少 |
+
+**绝不含任何请求头**，见 [6.11](#611-转换四体捕获) 的凭据边界。
+
+**错误**
+
+| HTTP | code | 触发条件 |
+|---|---|---|
+| `401` | `unauthorized` | 密钥缺失或错误 |
+| `404` | `not_found` | 没有这条捕获：从未捕获、已被条数上限淘汰、或开关为 `off`。回 404 而不是空对象——空对象会让读的人以为那次请求四体全空 |
+
+**示例**
+
+```bash
+curl -s "$BASE/admin/captures/0f3a9c1b7d5e4821" \
+  -H "Authorization: Bearer $MSA_ADMIN_KEY"
+```
+
+```json
+{
+  "request_id": "0f3a9c1b7d5e4821",
+  "at": "2026-09-19T10:02:17.482Z",
+  "client_request": {
+    "body": "{\"model\":\"demo-pool\",\"max_tokens\":64,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}",
+    "truncated": false,
+    "dropped": 0
+  },
+  "upstream_request": {
+    "body": "{\"model\":\"claude-sonnet-4-5\",\"max_tokens\":64,\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}]}",
+    "truncated": false,
+    "dropped": 0
+  },
+  "upstream_response": {
+    "body": "",
+    "truncated": false,
+    "dropped": 0
+  },
+  "client_response": {
+    "body": "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"upstream connection failed: dial tcp: connection refused\"}}",
+    "truncated": false,
+    "dropped": 0
+  }
+}
+```
+
+对比这四体即可定位：`upstream_request` 里 `model` 已经是 native 名字、参数也都在，说明转换本身没问题；`upstream_response` 为空、`client_response` 是连接层错误，问题在网络或上游可达性，不在编解码。
+
+---
+
 ## 8. 快速上手
 
 ### 8.1 启动
@@ -2045,6 +2227,7 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| 2.11 | 2026-09-19 | 转换四体捕获首次成文（[6.11](#611-转换四体捕获)）：新增 `MSA_CAPTURE_MODE` 三态开关（`off`/`errors`/`all`，默认 `off`，非法值拒绝启动）与两个上限变量，新增两个管理面端点（[7.9](#79-get-admincaptures捕获列表)、[7.10](#710-get-admincapturesrequest_id四体全文)）。**行为变更**：此前本服务**没有任何**调试捕获设施——流水只记转换层自己判断出的结论（`sanitized`/`lossy`/`error_code`），当那个判断本身错了时没有任何东西可看。上一次定位 kiro 的 `toolUse` 帧碎裂 bug 就是靠手写一段临时 tee 抓真实上游字节才找到根因，那段代码用完即弃、下一次还得重写。四体的取舍：`upstream_request` 换目标重试时覆盖（诊断对象是最终发出去的那一次），`upstream_response` 与 `client_response` 累加（同一个流的连续片段）；留/丢判据用 `error_code != ""` 而非 `outcome`，两者在「重试后成功」（不留）与「客户端取消」（要留，`outcome` 是 `normal` 但 `error_code` 是 `canceled`）两处分歧。**凭据边界**：捕获只含 body、永不含任何请求头，因此也刻意不做 body 内的正则脱敏——不存在凭据这件事由结构保证，再加一层只会给出虚假的安全感。**明确不做**：不落盘（要长期留证据应在反代层抓包）；不捕获 IR 与事件序列（可由前后两体推出）；不做采样（`errors` 档已是「常开而不撑爆内存」的形态）；不做 base64（唯一用途是人眼直接看）；不照搬 kiro-gateway 的 `debug_logger.py` 实现（它是单例、每请求 `shutil.rmtree` 同一个共享目录，并发请求互相擦掉证据）；调度层与配置中心零改动 |
 | 2.10 | 2026-09-19 | 时延分段归因与依赖饱和度首次成文（[6.10](#610-依赖饱和度与时延分段)）：流水新增 `dispatch_ms`、`upstream_ms` 两列（累计值，含全部重试），`/health` 与 `/admin/health` 新增 `pool`（五个数）与 `goroutines`。**行为变更**：此前 `latency_ms` 是一个不可拆的总数，一个 30 秒的请求分不清是调度层要目标要了很久、上游压着响应头不发、还是生成本来就长；`/health` 只对 PG 做 `Ping` 报 `ok`/`down`，连接池被占满时每个请求都慢而**每一条流水看上去都正常**——慢的那段在等连接上，那段不在任何一条请求的计时里。`upstream_ms` 的终点选在响应头到达而不是首帧，与 `MSA_RESPONSE_HEADER_TIMEOUT` 对齐；两段在重试时累加而非覆盖（与 `lossy` 的覆盖语义刻意相反）。**明确不做**：不引入 Prometheus/OpenTelemetry（四个参考仓库无一使用）；不做 sub2api 的 auth/routing/upstream/response 四段划分（本服务的入站鉴权是转发给调度层做的，没有独立的 auth 段；response 段与生成时间在 SSE 下不可分）；不加 `error_owner`/`is_business_limited`（SLA 口径的计算面在调度层）；不存请求体/响应体（sub2api 自己已把错误表里的 `request_body` 删掉）；不做 per-attempt 逐次快照（需另建表）；不起后台 goroutine 采样池指标（换来的是过时数字）；不给 `goroutines` 设阈值告警（本服务没有告警设施） |
 | 2.9 | 2026-09-19 | 死连接探测与连接层归因首次成文（[6.9](#69-死连接探测与连接层归因)）：出站 transport 配 HTTP/2 PING 健康检查（`MSA_H2_SEND_PING_TIMEOUT`、`MSA_H2_PING_TIMEOUT`，默认各 15s），新增 `transport` 错误分类（502）与同名结果上报类别，该类别**不计入目标的失败计数**、调度层运行态零变更。**行为变更**：此前所有 `Do` 失败一律归 `upstream`，经 `retrying` 累计到目标的失败计数上——一条静默半开的连接会把一个完全健康的账号推向冷却；且没有主动探测，撞上死连接的请求只能等 120s 的响应头超时，那对一次尝试是整个重试预算（本机探针实测：不配 PING 时挂到 20s ctx 超时都不失败，配了 4s 内明确失败）。**明确不做**：HTTP/1.1 正常关闭不加重放（标准库已自动换连接重放，实测确认）；不自定义 `DialContext` 设 `KeepAlive`（`DefaultTransport` 的 Dialer 已带 30s，重写还会丢掉标准库后续的默认调整）；不做 per-origin 分片 transport（PING 是直接摘掉死连接，分片只缩小爆炸半径）；连接层失败不在同一目标上就地重试（换目标已能恢复，真正的收益是不记这个目标的失败）；committed 之后读流失败仍归 `upstream`（客户端已收到部分内容，换目标会拼出两段回答） |
 | 2.8 | 2026-09-19 | 上游限流到期时刻首次成文（[6.8](#68-上游限流的到期时刻)）：从六类限流响应头与 Gemini 的 `google.rpc.RetryInfo` 解出「最早可以再来」的绝对时刻，随结果上报交给调度层精确冷却，并落进请求流水的 `retry_after` 列。**行为变更**：此前 `resp.Header` 在错误路径上被整体丢弃（全仓唯一读过上游响应头的地方是判 SSE 的 `Content-Type`），限流与普通上游错、超时同为 `retrying` 一档，调度层只能按失败计数累积后冷却一个固定时长——上游说「5 小时后再来」时我们一分钟后就又去撞，在整个限流窗口里反复空转，而每次空转都是一次真实的失败上报。`DecodeError` 签名因此从 `(status, body)` 改为 `(status, header, body)`（改签名而非加可选接口：限流头是 HTTP 层的，四个协议全都可能收到，漏一个就是缺口）。**明确不做**：不在数据面为同一目标睡等退避（数据面睡等会占住入站连接）；不做账号级或 (账号,模型) 级限流（账号身份在 upstream 侧，数据面看不到）；不做 `x-ratelimit-remaining-*` 的预测性避让（需要跨请求窗口状态，那是调度层的职责）；不从错误文案里抠 `"try again in 1.5s"` 这类说法（文案一改就静默失效，而失效方向是又开始瞎猜） |
@@ -2088,6 +2271,9 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 | `MSA_RESPONSE_HEADER_TIMEOUT` | `120s` | **只**约束「请求发出 → 响应头到达」这一段；头到了之后读正文不受它影响。负值表示不设限。见 [6.7](#67-出站连接层) |
 | `MSA_H2_SEND_PING_TIMEOUT` | `15s` | HTTP/2 连接空闲多久后发一个 PING 探测健康。负值表示关闭探测。见 [6.9](#69-死连接探测与连接层归因) |
 | `MSA_H2_PING_TIMEOUT` | `15s` | PING 发出后多久没收到 PONG 判连接失联。负值表示关闭探测。见 [6.9](#69-死连接探测与连接层归因) |
+| `MSA_CAPTURE_MODE` | `off` | 转换四体捕获开关，取 `off`/`errors`/`all`。**非法值拒绝启动**（静默回落会让运维以为捕获开着）。见 [6.11](#611-转换四体捕获) |
+| `MSA_CAPTURE_MAX_BODY` | `1048576`（1 MiB） | 单体字节上限，超出保留前段并标 `truncated` |
+| `MSA_CAPTURE_MAX_ENTRIES` | `32` | 保留的捕获条数上限，超出淘汰最旧 |
 
 ---
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aceaura/model-surge-agent/backend/capture"
 	"github.com/aceaura/model-surge-agent/backend/codec"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 	"github.com/aceaura/model-surge-agent/backend/relayclient"
@@ -102,7 +103,7 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 				continue
 			}
 			if encoder != nil {
-				if err := writeEvents(w, encoder, ev); err != nil {
+				if err := writeEvents(w, encoder, ev, call.Capture); err != nil {
 					// 客户端自己断开，上游一直在正常出内容。记成 abnormal 会
 					// 累计失败计数、把好目标推向冷却——客户端多按几次停止就能
 					// 拖垮账号。按已收 usage 正常记账（上游照样计费）。
@@ -179,7 +180,7 @@ func (p *Pipeline) finish(w http.ResponseWriter, call Call, encoder codec.Stream
 			err := ir.NewError(ir.ErrUpstream, 0, incompleteStream, msg)
 			rec.ErrorCode = incompleteStream
 			rec.ErrorMessage = msg
-			writeStreamErrorEnd(w, encoder, err)
+			writeStreamErrorEnd(w, encoder, err, call.Capture)
 			return relayclient.OutcomeAbnormal, attemptResult{
 				err: err, committed: true, usage: usage,
 			}
@@ -206,7 +207,7 @@ func (p *Pipeline) finish(w http.ResponseWriter, call Call, encoder codec.Stream
 	rec.ErrorCode = string(err.Kind)
 	rec.ErrorMessage = err.Message
 	if encoder != nil {
-		writeStreamErrorEnd(w, encoder, err)
+		writeStreamErrorEnd(w, encoder, err, call.Capture)
 	} else {
 		// 非流式客户端：聚合到一半断了，没有半个响应可交，只能回错。
 		// 状态码还没写出，所以这里仍能给出正确的 HTTP 错误。
@@ -220,11 +221,11 @@ func (p *Pipeline) writeSuccess(w http.ResponseWriter, call Call, encoder codec.
 	if encoder != nil {
 		// tail 是暂存的上游终止事件，确认这轮完整之后才放行。
 		for _, ev := range tail {
-			if err := writeEvents(w, encoder, ev); err != nil {
+			if err := writeEvents(w, encoder, ev, call.Capture); err != nil {
 				return
 			}
 		}
-		writeFrames(w, encoder.Finish())
+		writeFrames(w, encoder.Finish(), call.Capture)
 		flush(w)
 		// Notes 在 Finish 之后取：收尾阶段本身也可能丢弃内容。
 		if n, ok := encoder.(codec.StreamNotes); ok {
@@ -244,6 +245,7 @@ func (p *Pipeline) writeSuccess(w http.ResponseWriter, call Call, encoder codec.
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+	call.Capture.Add(capture.ClientResponse, body)
 }
 
 // clientGone 收尾客户端取消。
@@ -268,16 +270,18 @@ func (p *Pipeline) clientGone(agg *ir.Aggregator, rec *Record) (string, attemptR
 //
 // 走 encoder 而不是直接调 RenderStreamError：编码器要据此把自己标成
 // 已错误终止，Finish 才不会再补一个正常终止帧，把残缺内容伪装成完整回答。
-func writeStreamErrorEnd(w http.ResponseWriter, encoder codec.StreamEncoder, err *ir.Error) {
+func writeStreamErrorEnd(w http.ResponseWriter, encoder codec.StreamEncoder, err *ir.Error,
+	capt *capture.Session) {
 	frames, encErr := encoder.Encode(ir.Event{Type: ir.EvError, Err: err})
 	if encErr == nil {
-		writeFrames(w, frames)
+		writeFrames(w, frames, capt)
 	}
-	writeFrames(w, encoder.Finish())
+	writeFrames(w, encoder.Finish(), capt)
 	flush(w)
 }
 
-func writeEvents(w http.ResponseWriter, encoder codec.StreamEncoder, ev ir.Event) error {
+func writeEvents(w http.ResponseWriter, encoder codec.StreamEncoder, ev ir.Event,
+	capt *capture.Session) error {
 	out, err := encoder.Encode(ev)
 	if err != nil {
 		// 编码失败不该中断整个流：跳过这个事件，其余内容照发。
@@ -288,17 +292,20 @@ func writeEvents(w http.ResponseWriter, encoder codec.StreamEncoder, ev ir.Event
 		if _, err := w.Write(f); err != nil {
 			return err
 		}
+		// 捕获在写成功之后：客户端真收到的才算回给客户端的字节。
+		capt.Add(capture.ClientResponse, f)
 	}
 	flush(w)
 	return nil
 }
 
-func writeFrames(w http.ResponseWriter, frames [][]byte) {
+func writeFrames(w http.ResponseWriter, frames [][]byte, capt *capture.Session) {
 	extendWriteDeadline(w)
 	for _, f := range frames {
 		if _, err := w.Write(f); err != nil {
 			return
 		}
+		capt.Add(capture.ClientResponse, f)
 	}
 }
 

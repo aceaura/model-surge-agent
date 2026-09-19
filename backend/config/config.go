@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/aceaura/model-surge-agent/backend/capture"
 )
 
 type Config struct {
@@ -49,6 +51,13 @@ type Config struct {
 	// H2 死连接探测的两个超时。任一为负表示显式关闭探测。
 	H2SendPingTimeout time.Duration
 	H2PingTimeout     time.Duration
+
+	// 转换四体捕获。CaptureMode 为 off/errors/all 三态，非法值在启动时报错
+	// 而不是静默关闭：静默的后果是运维以为捕获开着，等出了故障才发现
+	// 什么都没留，而那时故障已经过去了。
+	CaptureMode       string
+	CaptureMaxBody    int
+	CaptureMaxEntries int
 }
 
 // Load 收集所有问题一次报全，而不是逐个失败：改配置的人通常在容器日志里
@@ -110,6 +119,13 @@ func Load() (Config, error) {
 	c.ResponseHeaderTimeout = durationOr(&errs, "MSA_RESPONSE_HEADER_TIMEOUT", 0)
 	c.H2SendPingTimeout = durationOr(&errs, "MSA_H2_SEND_PING_TIMEOUT", 0)
 	c.H2PingTimeout = durationOr(&errs, "MSA_H2_PING_TIMEOUT", 0)
+
+	c.CaptureMode = envOr("MSA_CAPTURE_MODE", string(capture.ModeOff))
+	if _, err := capture.ParseMode(c.CaptureMode); err != nil {
+		fail("MSA_CAPTURE_MODE is invalid: %v", err)
+	}
+	c.CaptureMaxBody = intOr(&errs, "MSA_CAPTURE_MAX_BODY", 0)
+	c.CaptureMaxEntries = intOr(&errs, "MSA_CAPTURE_MAX_ENTRIES", 0)
 
 	if len(errs) > 0 {
 		return Config{}, errors.Join(errs...)

@@ -315,7 +315,7 @@ func TestCredentialsNeverReachTheRecord(t *testing.T) {
 	}}
 	url := up.start(t)
 	f := newFixture(t, relaymock.Step{Target: target(url, "kimi-1/k3")})
-	f.p.HTTP = &http.Client{Transport: capture(&gotKey)}
+	f.p.HTTP = &http.Client{Transport: keySpy(&gotKey)}
 
 	f.p.Serve(context.Background(), httptest.NewRecorder(), call(t, true))
 
@@ -460,7 +460,9 @@ func (c captureTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(r)
 }
 
-func capture(key *string) http.RoundTripper { return captureTransport{key: key} }
+// keySpy 抓出站请求上的 x-api-key。
+// 不叫 capture：那个名字已经属于四体捕获包。
+func keySpy(key *string) http.RoundTripper { return captureTransport{key: key} }
 
 // ---- 换目标 ----
 

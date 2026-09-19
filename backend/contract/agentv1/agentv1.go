@@ -189,3 +189,48 @@ type ModelsPage struct {
 	// Cached 为真表示清单来自缓存而非刚从调度层取的。
 	Cached bool `json:"cached,omitempty"`
 }
+
+// CaptureSummary 是捕获列表里的一条，只给标识与四体长度，不带字节。
+//
+// 列表不回字节：一条捕获可达数 MB，列 32 条就是上百 MB 的响应。
+// 先看列表挑出可疑的那条，再单独取它的四体。
+type CaptureSummary struct {
+	RequestID string    `json:"request_id"`
+	At        time.Time `json:"at"`
+	// Sizes 是四体各自已捕获的字节数，键为 client_request、upstream_request、
+	// upstream_response、client_response。某一体缺失时它的值为 0。
+	Sizes map[string]int `json:"sizes"`
+}
+
+// CaptureBody 是四体中的一体。
+type CaptureBody struct {
+	// Body 是原始 wire 字节，按 UTF-8 当字符串交出，不做 base64。
+	//
+	// 这个端点唯一的用途是人眼看「哪一步坏了」，base64 之后要先解一层
+	// 才能看，那就把它从一个能直接用的排查设施降级成一个需要工具的。
+	Body string `json:"body"`
+	// Truncated 为真表示超出上限被截断，保留的是**前段**。
+	Truncated bool `json:"truncated"`
+	// Dropped 是被截断掉的字节数。
+	Dropped int `json:"dropped"`
+}
+
+// CaptureDetail 是一次请求的四体全文。
+//
+// 绝不含任何请求头：上游凭据只存在于 http.Request 里，
+// 让它进捕获等于把排查设施变成凭据泄露面。
+type CaptureDetail struct {
+	RequestID        string      `json:"request_id"`
+	At               time.Time   `json:"at"`
+	ClientRequest    CaptureBody `json:"client_request"`
+	UpstreamRequest  CaptureBody `json:"upstream_request"`
+	UpstreamResponse CaptureBody `json:"upstream_response"`
+	ClientResponse   CaptureBody `json:"client_response"`
+}
+
+// CaptureList 是捕获列表。Mode 一并给出，让列表为空时能区分
+// 「捕获关着」与「开着但还没有符合条件的请求」。
+type CaptureList struct {
+	Mode  string           `json:"mode"`
+	Items []CaptureSummary `json:"items"`
+}

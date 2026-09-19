@@ -13,6 +13,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/aceaura/model-surge-agent/backend/capture"
 	"github.com/aceaura/model-surge-agent/backend/codec"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 	"github.com/aceaura/model-surge-agent/backend/paramover"
@@ -160,6 +161,11 @@ type Call struct {
 	// Declarations 是客户端的协议声明（版本与 beta 特性）。
 	// 承载不了它的出站协议会把它记成有损，而不是静默丢弃。
 	Declarations codec.Declarations
+	// Capture 是这次请求的四体捕获会话，nil 表示捕获关闭。
+	//
+	// 挂在 Call 而不是 Record 上：Record 会进 PG 与 Redis，而四体是 MB 级
+	// 的字节，把它们塞进一条流水等于让每次请求都往库里写一份请求全文。
+	Capture *capture.Session
 }
 
 // Serve 处理一次客户端请求，自行把响应或错误写进 w。
@@ -181,6 +187,10 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 	}
 	defer func() {
 		rec.LatencyMS = msSince(start, p.now())
+		// 判 ErrorCode 而不是 Outcome：retrying 是中间态，而 committed 之后
+		// 的失败仍带着正常的 usage，按 outcome 判会两头都错。ErrorCode
+		// 恰好在且仅在走过错误路径时非空。
+		call.Capture.Finish(rec.ErrorCode != "")
 		p.record(rec)
 	}()
 
@@ -300,6 +310,9 @@ func (p *Pipeline) attempt(ctx context.Context, w http.ResponseWriter, call Call
 	// 参数覆盖作用在编码之后的 wire body 上，因此运维配的是**出站协议的
 	// 原生字段名**，出站协议特有的嵌套结构天然可表达。
 	body, err = paramover.Apply(body, target.Defaults, target.Overrides)
+	// 覆盖而非累加：换目标重试时要看的是最终发出去的那一份。
+	// 捕获点在 paramover 之后，因为那之后的字节才是真正写进请求的。
+	call.Capture.Set(capture.UpstreamRequest, body)
 	if err != nil {
 		return relayclient.OutcomeInvalidModel, attemptResult{
 			err: retryableErr(ir.NewError(ir.ErrInternal, 0, "",
@@ -307,7 +320,7 @@ func (p *Pipeline) attempt(ctx context.Context, w http.ResponseWriter, call Call
 		}
 	}
 
-	stream, irErr := p.open(ctx, outbound, target, body, call.Declarations, rec)
+	stream, irErr := p.open(ctx, outbound, target, body, call.Declarations, rec, call.Capture)
 	if irErr != nil {
 		return outcomeFor(irErr), attemptResult{err: irErr}
 	}
@@ -335,6 +348,9 @@ func (p *Pipeline) fail(w http.ResponseWriter, call Call, rec *Record, err *ir.E
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
+	// 错误信封也是回给客户端的字节，而且正是 errors 档要留的那一类：
+	// 漏掉它会让唯一被保留的那些捕获恰好缺第四体。
+	call.Capture.Add(capture.ClientResponse, body)
 }
 
 // report 上报一次尝试的结果。err 为 nil 表示成功。
