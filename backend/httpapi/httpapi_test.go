@@ -381,6 +381,15 @@ func newFixtureWithTarget(t *testing.T, tune func(*relayclient.Target), maxBody 
 // newFixtureTuned 同上，另外可以改服务本身的配置。
 func newFixtureTuned(t *testing.T, tune func(*relayclient.Target),
 	tuneServer func(*httpapi.Server), maxBody ...int64) *fixture {
+	return newFixtureSteps(t, 1, tune, tuneServer, maxBody...)
+}
+
+// newFixtureSteps 同上，但预设 steps 个 dispatch 答案。
+//
+// 默认只给一个：绝大多数用例只发一次请求，多给会掩盖「重试时又去要了一次目标」
+// 这类问题。需要连发多次成功请求的用例才调这个。
+func newFixtureSteps(t *testing.T, steps int, tune func(*relayclient.Target),
+	tuneServer func(*httpapi.Server), maxBody ...int64) *fixture {
 	t.Helper()
 
 	spy := &upstreamSpy{}
@@ -398,7 +407,11 @@ func newFixtureTuned(t *testing.T, tune func(*relayclient.Target),
 	if tune != nil {
 		tune(&target)
 	}
-	relay := relaymock.New(relaymock.Step{Target: target})
+	preset := make([]relaymock.Step, steps)
+	for i := range preset {
+		preset[i] = relaymock.Step{Target: target}
+	}
+	relay := relaymock.New(preset...)
 	relay.Models = []relayclient.UserModelSummary{
 		{Name: "user-model", Collection: "main", Protocol: codec.ProtocolAnthropic, Enabled: true},
 		{Name: "disabled-model", Collection: "main", Enabled: false},

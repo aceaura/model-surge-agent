@@ -38,10 +38,13 @@ func protocolForPath(path string) string {
 // 发生在 pipeline 之前，pipeline 那套记流水一条都不会触发。
 func (s *Server) reject(w http.ResponseWriter, r *http.Request, protocol string, err *ir.Error) {
 	inbound, _ := codec.Inbound(protocol)
-	requestID := requestID(r)
-	w.Header().Set(headerRequestID, requestID)
+	// 回显 id 与记录键分离，理由同数据面：这条路径也落 request_log，
+	// 撞号一样会覆盖别人那一行。
+	echo := requestID(r)
+	key, _ := s.guard().claim(echo)
+	w.Header().Set(headerRequestID, echo)
 	status := writeIRError(w, inbound, err)
-	s.recordRejection(r, requestID, protocol, status, err)
+	s.recordRejection(r, key, protocol, status, err)
 }
 
 // recordRejection 把受理面的拒绝记进流水。
@@ -150,10 +153,11 @@ func (s *Server) rejectRouting(w http.ResponseWriter, r *http.Request, status in
 
 	protocol := protocolForPath(r.URL.Path)
 	inbound, _ := codec.Inbound(protocol)
-	requestID := requestID(r)
-	w.Header().Set(headerRequestID, requestID)
+	echo := requestID(r)
+	key, _ := s.guard().claim(echo)
+	w.Header().Set(headerRequestID, echo)
 	// 用路由层给的状态码，不用信封推导出来的：Allow 头已经随 405 发出，
 	// 体里的码与头不一致会让客户端两边对不上。
 	writeIRErrorStatus(w, inbound, err, status)
-	s.recordRejection(r, requestID, protocol, status, err)
+	s.recordRejection(r, key, protocol, status, err)
 }

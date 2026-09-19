@@ -89,11 +89,14 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 		cancel()
 		// 连接层与「上游明确地不行」分开归因：前者上游可能完全健康，
 		// 记成它的失败会让一条死连接把健康账号推向冷却。
+		//
+		// 两条路径都走净化：原始 error 是 *url.Error，它内嵌完整请求 URL 含
+		// query，而这个 message 会流到客户端可见的错误体里。
+		reason := sanitizeTransportError(err)
 		if isTransportError(err) {
-			return nil, ir.NewError(ir.ErrTransport, 0, "",
-				fmt.Sprintf("upstream connection failed: %v", err))
+			return nil, ir.NewError(ir.ErrTransport, 0, "", "upstream connection failed: "+reason)
 		}
-		return nil, ir.NewError(ir.ErrUpstream, 0, "", fmt.Sprintf("upstream unreachable: %v", err))
+		return nil, ir.NewError(ir.ErrUpstream, 0, "", "upstream unreachable: "+reason)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))

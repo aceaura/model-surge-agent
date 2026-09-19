@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aceaura/model-surge-agent/backend/capture"
@@ -45,6 +46,19 @@ type Server struct {
 	CORSOrigins []string
 	// Captures 是转换四体捕获。nil 与 off 档等价，两者都不分配缓冲。
 	Captures *capture.Store
+
+	// ids 记住近期采纳过的客户端 id，用于撞号检测。
+	//
+	// 懒初始化而不是要求构造函数：Server 全仓都是结构体字面量装配的，
+	// 加一个必填的构造步骤会让每个测试都要改，而漏改的那处会在运行时 nil。
+	idsOnce sync.Once
+	ids     *idGuard
+}
+
+// guard 取撞号检测器，首次调用时初始化。
+func (s *Server) guard() *idGuard {
+	s.idsOnce.Do(func() { s.ids = newIDGuard() })
+	return s.ids
 }
 
 // ModelLister 给出用户模型清单。实现方决定是否走缓存。
@@ -95,8 +109,9 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/admin/", s.Admin.Handler())
 	}
 
-	// CORS 在最外：预检要在路由之前答掉。访问日志在它之内，预检不进日志。
-	return s.withCORS(s.withAccessLog(s.withRejectEnvelope(mux)))
+	// 恢复在最最外：CORS 与访问日志自己也可能 panic。
+	// CORS 在其内：预检要在路由之前答掉。访问日志在它之内，预检不进日志。
+	return s.withRecover(s.withCORS(s.withAccessLog(s.withRejectEnvelope(mux))))
 }
 
 // dataPlane 处理一个入站协议的对话请求。
@@ -127,9 +142,19 @@ func (s *Server) dataPlane(protocol string) http.HandlerFunc {
 		}
 
 		id := requestID(r)
+		// 记录键与回显 id 分离：id 可能来自客户端请求头，撞号时它会覆盖
+		// 别人的流水并让本次上报被当重放丢弃。回显仍用 id（下面那行），
+		// 落库、上报与捕获用 key。
+		key, collided := s.guard().claim(id)
+		if collided {
+			// 运维可见：撞号本身可能是客户端的 id 生成有 bug，
+			// 悄悄换个键会让那个 bug 永远不被发现。
+			s.log().Warn("request id collision, using a generated record key",
+				"client_request_id", id, "record_key", key)
+		}
 		// Begin 在解码成功之后：解码就失败的请求走 reject 那条路径，
 		// 它连出站协议都没选过，四体里只会有一体，留下来只是噪音。
-		capt := s.Captures.Begin(id)
+		capt := s.Captures.Begin(key)
 		capt.Add(capture.ClientRequest, body)
 		// 在 Serve 之前设，而不是让 pipeline 去设：http.Header 在
 		// WriteHeader 之前的修改都会生效，无论谁设的。这样 SSE 与非流式
@@ -138,6 +163,7 @@ func (s *Server) dataPlane(protocol string) http.HandlerFunc {
 
 		s.Pipeline.Serve(r.Context(), w, pipeline.Call{
 			RequestID: id,
+			RecordKey: key,
 			Protocol:  protocol,
 			Path:      r.URL.Path,
 			Inbound:   inbound,
@@ -295,6 +321,14 @@ func requestID(r *http.Request) string {
 			return v
 		}
 	}
+	return randomID()
+}
+
+// randomID 生成本服务自己的请求 id。
+//
+// 单独一个函数而不是内联：撞号换键那条路径也要生成，两处各写一遍会让
+// 两种 id 的形状漂移，而运维是按前缀认它们的。
+func randomID() string {
 	var b [12]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return fmt.Sprintf("req_%d", time.Now().UnixNano())

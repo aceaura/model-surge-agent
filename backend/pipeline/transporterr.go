@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/url"
 	"strings"
 	"syscall"
 )
@@ -71,4 +72,85 @@ func isTransportError(err error) bool {
 	}
 
 	return strings.Contains(err.Error(), h2ConnLost)
+}
+
+// redacted 是净化掉的 URL 的占位文本。
+const redacted = "<url redacted>"
+
+// sanitizeTransportError 把出站请求失败渲染成不含 URL 的一句话。
+//
+// 必须净化：*url.Error 的 Error() 内嵌完整请求 URL 含 query，而 BaseURL 由
+// 调度层下发，一些部署把 key 放在 query 里。这句话随后进 error_message 列、
+// Redis 实时环、管理面与**客户端可见的错误体**四个出口。同一个理由下
+// AttemptRecord 刻意不记 BaseURL，传输错误这条路不能把它放回来。
+//
+// 归因必须留住：超时、连接被拒、DNS 失败三者的处置完全不同，只回一句
+// 「连接失败」等于把这一轮排查推给抓包。归因全在 *url.Error 的内层，
+// 剥掉外层刚好既去 URL 又留归因。
+func sanitizeTransportError(err error) string {
+	if err == nil {
+		return ""
+	}
+	// 先精确剥已知含 URL 的那一层，而不是直接上文本扫描：这一层还带着
+	// op（"Post "），扫描去不掉它。
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		err = urlErr.Err
+	}
+	msg := redactURLs(err.Error())
+	if msg == "" {
+		// 不允许空 message：它在客户端那边表现成「未知错误」，
+		// 比一个笼统但确定的说法更难查。
+		return "upstream request failed"
+	}
+	return msg
+}
+
+// redactURLs 把文本里的 URL 换成占位符。
+//
+// 这是兜底而非主手段：上游库换错误类型、或自己把 URL 拼进消息时，
+// 剥 *url.Error 那一步就不生效了。只认 "://" 这个记号，不做内容黑名单——
+// 后者会误伤正常内容且给人虚假的安全感。
+func redactURLs(s string) string {
+	for {
+		i := strings.Index(s, "://")
+		if i < 0 {
+			return s
+		}
+		// 向前吃掉 scheme：scheme 只含字母、数字、+、-、.
+		start := i
+		for start > 0 && isSchemeByte(s[start-1]) {
+			start--
+		}
+		// 向后吃到分隔符为止。引号与空白之外不切：URL 里的 / ? & = 都要一起去掉，
+		// 留下半截 query 等于没净化。
+		end := i + len("://")
+		for end < len(s) && !isURLEndByte(s[end]) {
+			end++
+		}
+		s = s[:start] + redacted + s[end:]
+	}
+}
+
+func isSchemeByte(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	case c == '+', c == '-', c == '.':
+		return true
+	}
+	return false
+}
+
+// isURLEndByte 判断一个字节是否终止 URL。
+//
+// 逗号与分号在 URL 里合法，但错误文本几乎总用它们分隔子句
+// （`dial tcp 1.2.3.4:443: connect: connection refused`），
+// 不切会把后面的归因一起吞掉。
+func isURLEndByte(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', '"', '\'', '`', ',', ';', '<', '>':
+		return true
+	}
+	return false
 }

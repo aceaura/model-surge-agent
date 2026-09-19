@@ -71,8 +71,9 @@ type Record struct {
 	// 20 秒的请求，而那正是最需要被看见的那种慢。
 	//
 	// 不变式：DispatchMS + UpstreamMS <= LatencyMS。
-	// LatencyMS 减去两段即「本服务自身 + 上游生成」，据此回答
-	// 「慢在上游还是慢在我们」，不需要再加字段。
+	// 差额里含三样：本服务自身的编解码、上游的生成时间、以及终态上报的
+	// 一次往返。不写成「= 本服务 + 上游生成」这个等式——重试路径上的上报
+	// 已经异步化不占等待，终态那次仍在客户端等待之内。
 	DispatchMS int
 	UpstreamMS int
 	// AttemptsTrail 是逐次尝试的轨迹，按尝试顺序排列。
@@ -196,7 +197,15 @@ type Pipeline struct {
 
 // Call 是一次已解码的客户端请求。
 type Call struct {
+	// RequestID 是回显给客户端的那个 id，可能来自客户端自己的请求头。
 	RequestID string
+	// RecordKey 是本服务自己的记录键，空表示与 RequestID 相同。
+	//
+	// 两者分列是因为 RequestID 可能撞号：它会成为 request_log 的主键
+	// （ON CONFLICT DO UPDATE，撞号即覆盖别人那一行）与上报幂等键
+	// （ON CONFLICT DO NOTHING，撞号即整条上报被当重放丢弃）。而回显仍必须
+	// 是客户端给的那个值，否则客户端对不上自己的日志。
+	RecordKey string
 	// Protocol 是入站协议名，转发给调度层供策略脚本参考。
 	Protocol string
 	// Path 是客户端打的请求路径，只进流水，不参与任何判定。
@@ -219,6 +228,17 @@ type Call struct {
 	Capture *capture.Session
 }
 
+// RecordID 是本服务落库与上报该用的键。
+//
+// 回落到 RequestID 而不是要求调用方必填：绝大多数请求不撞号，两者相同，
+// 要求必填只会让每个构造点多写一行重复赋值，而漏写的那处会静默换形态。
+func (c Call) RecordID() string {
+	if c.RecordKey != "" {
+		return c.RecordKey
+	}
+	return c.RequestID
+}
+
 // Serve 处理一次客户端请求，自行把响应或错误写进 w。
 func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) {
 	start := p.now()
@@ -228,7 +248,8 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 	est := int(ir.EstimateRequest(call.Request))
 
 	rec := Record{
-		RequestID:       call.RequestID,
+		// 落库用记录键而非回显 id：撞号时后者会覆盖别人那一行。
+		RequestID:       call.RecordID(),
 		At:              start,
 		InboundProtocol: call.Protocol,
 		Path:            call.Path,
@@ -244,6 +265,11 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 		call.Capture.Finish(rec.ErrorCode != "")
 		p.record(rec)
 	}()
+
+	// 上报队列：重试路径把投递交给它，终态路径等它排空后同步投递。
+	// 收尾时 close 并等排空，确保 Serve 返回时这次请求的全部上报已投出。
+	rq := newReportQueue(p.Reporter, max(p.Opts.MaxAttempts, 1))
+	defer rq.close()
 
 	var tried []string
 	var lastErr *ir.Error
@@ -261,9 +287,11 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 			Model:           call.UserModel,
 			InboundProtocol: call.Protocol,
 			ClientKey:       call.ClientKey,
-			RequestID:       call.RequestID,
-			TriedIDs:        tried,
-			EstTokens:       est,
+			// 给调度层的也是记录键：它那边的记录要能与本服务的流水对上，
+			// 用会撞号的回显 id 就对不上。
+			RequestID: call.RecordID(),
+			TriedIDs:  tried,
+			EstTokens: est,
 		})
 		// 累加在判错之前：失败的那次要目标同样花了时间，而「调度层超时后
 		// 才报错」正是要看见的形态，记到 err 分支之后就会漏掉它。
@@ -294,7 +322,7 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 
 		outcome, res := p.attempt(ctx, w, call, target, attempt, start, &rec)
 		if res.err == nil {
-			p.report(call, target, attempt, relayclient.OutcomeNormal, res.usage, nil, &rec)
+			p.report(rq, call, target, attempt, relayclient.OutcomeNormal, res.usage, nil, &rec)
 			rec.Outcome = relayclient.OutcomeNormal
 			rec.Usage = res.usage
 			return
@@ -307,14 +335,14 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 		// committed 之后目标已锁定：响应已经开始写出，
 		// 换目标会让客户端看到两段拼接的回答。
 		if res.committed {
-			p.report(call, target, attempt, outcome, res.usage, res.err, &rec)
+			p.report(rq, call, target, attempt, outcome, res.usage, res.err, &rec)
 			rec.Outcome = outcome
 			rec.Usage = res.usage
 			return
 		}
 		// 换目标也不会好（参数错、上下文超限），直接回错。
 		if !res.err.Retryable {
-			p.report(call, target, attempt, outcome, res.usage, res.err, &rec)
+			p.report(rq, call, target, attempt, outcome, res.usage, res.err, &rec)
 			rec.Outcome = outcome
 			rec.Usage = res.usage
 			p.fail(w, call, &rec, res.err)
@@ -325,12 +353,17 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 		last := attempt == max(p.Opts.MaxAttempts, 1)-1
 		if last {
 			// 不再重试，所以是 abnormal 而非 retrying：后者表示还会换目标。
-			p.report(call, target, attempt, downgrade(outcome), res.usage, res.err, &rec)
+			p.report(rq, call, target, attempt, downgrade(outcome), res.usage, res.err, &rec)
 			rec.Outcome = downgrade(outcome)
+			// 与其余三个终态分支一致地设 usage：重试耗尽的请求上游照样计了费，
+			// 不设会让流水记 0 token 而调度层记非零，事后无法判断哪边错。
+			rec.Usage = res.usage
 			rec.TriedIDs = tried
 			break
 		}
-		p.report(call, target, attempt, outcome, res.usage, res.err, &rec)
+		// 这条路径还要再试一次，上报走异步：report 的投递是一次阻塞 HTTP POST
+		// （默认 10s 超时），同步做等于让客户端为每次重试白等一个上报往返。
+		p.report(rq, call, target, attempt, outcome, res.usage, res.err, &rec)
 		rec.TriedIDs = tried
 	}
 
@@ -424,12 +457,18 @@ func (p *Pipeline) fail(w http.ResponseWriter, call Call, rec *Record, err *ir.E
 	call.Capture.Add(capture.ClientResponse, body)
 }
 
-// report 上报一次尝试的结果。err 为 nil 表示成功。
+// recordAttempt 追加本次尝试的轨迹，并给出该投递的上报（没装配上报实现时
+// 第二个返回值为假）。err 为 nil 表示成功。
+//
+// 拆成「记轨迹」与「投递」两步：轨迹必须同步（它写 rec，而 Serve 的 defer
+// 会读同一个 rec），投递则不一定。合成一个函数的话重试路径想异步就只能连
+// 轨迹一起异步。
 //
 // 收 err 而不是单收一个 retryAfter 参数：到期时刻是错误的属性，
-// 让五处调用点各自从 res.err 里取会有人忘。
-func (p *Pipeline) report(call Call, target relayclient.Target, attempt int,
-	outcome string, usage relayclient.Usage, err *ir.Error, rec *Record) {
+// 让六处调用点各自从 res.err 里取会有人忘。
+func (p *Pipeline) recordAttempt(call Call, target relayclient.Target, attempt int,
+	outcome string, usage relayclient.Usage, err *ir.Error,
+	rec *Record) (relayclient.ResultReport, bool) {
 	var retryAfter time.Time
 	if err != nil {
 		retryAfter = err.RetryAfter
@@ -461,19 +500,94 @@ func (p *Pipeline) report(call Call, target relayclient.Target, attempt int,
 	rec.addAttempt(item)
 
 	if p.Reporter == nil {
-		return
+		return relayclient.ResultReport{}, false
 	}
-	p.Reporter.Report(relayclient.ResultReport{
+	return relayclient.ResultReport{
 		// attempt 入键：同一客户端请求的多次尝试各自上报，
 		// 而重放同一份不会被重复计数。
-		ReportID:  fmt.Sprintf("%s:%d", call.RequestID, attempt),
-		RequestID: call.RequestID,
+		ReportID: fmt.Sprintf("%s:%d", call.RecordID(), attempt),
+		// 与 ReportID、流水主键、以及给调度层的 dispatch 用同一个键：
+		// 四处只要有一处用会撞号的回显 id，事后就串不起同一次请求。
+		RequestID: call.RecordID(),
 		ModelID:   target.ModelID,
 		Outcome:   outcome,
 		Usage:     usage,
 		// 零值时 omitzero 让它不出现在 JSON 里，调度层据此回落启发式。
 		RetryAfter: retryAfter,
-	})
+	}, true
+}
+
+// report 记轨迹并把投递交给队列。
+//
+// 全部六条路径都走队列，终态那几条也不例外：调度层按到达顺序解释这些上报
+// （retrying 之后才是终态），一条绕过队列直投就会插到还没投出的那条前面。
+// Serve 的 defer 等队列排空，所以 Serve 返回时这次请求的上报都已投出。
+//
+// 轨迹仍同步追加：它写 rec，而 Serve 的 defer 会读同一个 rec 落库，
+// 异步写就是数据竞争。异步的只有投递，而投递拿的是一份值拷贝。
+func (p *Pipeline) report(rq *reportQueue, call Call, target relayclient.Target,
+	attempt int, outcome string, usage relayclient.Usage, err *ir.Error, rec *Record) {
+	rep, ok := p.recordAttempt(call, target, attempt, outcome, usage, err, rec)
+	if ok {
+		rq.enqueue(rep)
+	}
+}
+
+// reportQueue 按入队顺序串行投递一次请求的上报。
+//
+// 存在的理由是重试路径上的上报不能占客户端的等待时间：投递是一次阻塞
+// HTTP POST（默认 10s 超时），三次尝试串着做客户端要白等约两个上报往返，
+// 而这段时间落在 latency_ms 里却不在 dispatch_ms 或 upstream_ms 里。
+//
+// 串行而不是每条一个 goroutine：调度层按到达顺序解释这些上报（retrying
+// 之后才是终态），并发投递会让顺序随机。
+//
+// 每次请求一个队列而不是进程级的一个：进程级的会让一次请求等上别的请求
+// 的在途投递，而那与它毫无关系。
+type reportQueue struct {
+	reporter Reporter
+	ch       chan relayclient.ResultReport
+	done     chan struct{}
+}
+
+func newReportQueue(reporter Reporter, cap int) *reportQueue {
+	if reporter == nil {
+		// 没装配上报实现时不起 goroutine：enqueue 那边判 nil 直接丢。
+		return &reportQueue{}
+	}
+	q := &reportQueue{
+		reporter: reporter,
+		// 容量给满尝试次数：enqueue 因此永不阻塞调用方，
+		// 而「不阻塞客户端」正是这个队列存在的全部理由。
+		ch:   make(chan relayclient.ResultReport, cap),
+		done: make(chan struct{}),
+	}
+	go func() {
+		defer close(q.done)
+		for rep := range q.ch {
+			q.reporter.Report(rep)
+		}
+	}()
+	return q
+}
+
+func (q *reportQueue) enqueue(rep relayclient.ResultReport) {
+	if q.ch == nil {
+		return
+	}
+	q.ch <- rep
+}
+
+// close 关队列并等在途投递做完。
+//
+// 必须等：不等就在进程忙时留下一批连入队都还没走完的上报，而那批就是
+// 凭空缺掉的用量。等的位置在响应写完之后，所以不占客户端等待时间。
+func (q *reportQueue) close() {
+	if q.ch == nil {
+		return
+	}
+	close(q.ch)
+	<-q.done
 }
 
 func (p *Pipeline) record(rec Record) {

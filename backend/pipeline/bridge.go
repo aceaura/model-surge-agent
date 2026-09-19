@@ -103,7 +103,7 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 				continue
 			}
 			if encoder != nil {
-				if err := writeEvents(w, encoder, ev, call.Capture); err != nil {
+				if err := writeEvents(w, encoder, ev, call.Capture, rec); err != nil {
 					// 客户端自己断开，上游一直在正常出内容。记成 abnormal 会
 					// 累计失败计数、把好目标推向冷却——客户端多按几次停止就能
 					// 拖垮账号。按已收 usage 正常记账（上游照样计费）。
@@ -221,7 +221,7 @@ func (p *Pipeline) writeSuccess(w http.ResponseWriter, call Call, encoder codec.
 	if encoder != nil {
 		// tail 是暂存的上游终止事件，确认这轮完整之后才放行。
 		for _, ev := range tail {
-			if err := writeEvents(w, encoder, ev, call.Capture); err != nil {
+			if err := writeEvents(w, encoder, ev, call.Capture, rec); err != nil {
 				return
 			}
 		}
@@ -281,10 +281,19 @@ func writeStreamErrorEnd(w http.ResponseWriter, encoder codec.StreamEncoder, err
 }
 
 func writeEvents(w http.ResponseWriter, encoder codec.StreamEncoder, ev ir.Event,
-	capt *capture.Session) error {
+	capt *capture.Session, rec *Record) error {
 	out, err := encoder.Encode(ev)
 	if err != nil {
 		// 编码失败不该中断整个流：跳过这个事件，其余内容照发。
+		//
+		// 但必须留说明：客户端收到的内容缺了一块，而流正常收束，不留说明的
+		// 话这件事在诊断里完全不存在。带事件类型——跳掉一段文本与跳掉一次
+		// 工具调用的后果差得远。
+		//
+		// 刻意不拼 err 的文本：mergedLossy 会去重，而错误措辞一变同一类
+		// 跳过就会散成多条。
+		rec.addResponseLossy("skipped response event " + string(ev.Type) +
+			" (the client protocol could not encode it)")
 		return nil
 	}
 	extendWriteDeadline(w)
