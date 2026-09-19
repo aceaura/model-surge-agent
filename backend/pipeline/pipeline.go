@@ -187,6 +187,12 @@ type Options struct {
 	HeartbeatInterval time.Duration
 	// EstimateUsage 在上游没给 usage 时用字符数估算兜底。
 	EstimateUsage bool
+	// MaxRequestDuration 是一次请求从受理到收尾的总时长上限，含全部重试。
+	// 0 表示不限（既有行为）。
+	//
+	// 与首字/空闲两个超时不同：那两个各自只管一次尝试，MaxAttempts 次尝试
+	// 累起来的最坏情形是它们的倍数，而客户端与反代看到的是那个总数。
+	MaxRequestDuration time.Duration
 }
 
 type Pipeline struct {
@@ -246,6 +252,13 @@ func (c Call) RecordID() string {
 // Serve 处理一次客户端请求，自行把响应或错误写进 w。
 func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) {
 	start := p.now()
+	// 总时长上限：派生而不是另起一个 context，否则客户端断开不再传导到
+	// 上游读取，一个已经没人要的请求会把重试跑完。
+	if d := p.Opts.MaxRequestDuration; d > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d)
+		defer cancel()
+	}
 	// 先修畸形再估算：sanitize 会增删块，而 est_tokens 只算一次并在重试间复用。
 	sanitized := ir.Sanitize(call.Request)
 	// est_tokens 只在首次 dispatch 前算一次，重试复用：请求没变，重算没意义。

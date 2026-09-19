@@ -24,7 +24,15 @@ func (inboundCodec) DecodeRequest(body []byte) (*ir.Request, error) {
 	return DecodeRequest(body)
 }
 
-func (inboundCodec) NewStreamEncoder() codec.StreamEncoder { return newStreamEncoder() }
+// NewStreamEncoder 读客户端对单独 usage 帧的表态。
+// 只有明确的 false 才不发：没给与明确 true 都发（本服务的既有行为）。
+func (inboundCodec) NewStreamEncoder(req *ir.Request) codec.StreamEncoder {
+	e := newStreamEncoder()
+	if req != nil && req.IncludeUsage != nil && !*req.IncludeUsage {
+		e.suppressUsageFrame = true
+	}
+	return e
+}
 
 // EncodeResponse 是 EncodeResponseLossy 的包装：两条路径共用同一编码，
 // 响应体逐字节相同，否则客户端看到的内容会因诊断开关而漂移。

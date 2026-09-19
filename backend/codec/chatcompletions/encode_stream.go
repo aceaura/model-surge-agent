@@ -38,6 +38,13 @@ type streamEncoder struct {
 	usage ir.Usage
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
+	// suppressUsageFrame 为真表示客户端明确说了不要那一帧单独的 usage
+	// （stream_options 给了但 include_usage 是 false）。
+	//
+	// 只压这一帧，finish_reason 的空 delta 与 [DONE] 照发：那两个是协议
+	// 终止形状，压掉会让客户端等一个永不到来的结束。也不记有损——
+	// 这是照客户端的要求执行，不是丢了它要的东西。
+	suppressUsageFrame bool
 }
 
 // Notes 实现 codec.StreamNotes。
@@ -167,16 +174,18 @@ func (e *streamEncoder) finish() ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	u := renderUsage(e.usage)
-	frame, err := e.marshal(wireResponse{
-		ID: e.messageID(), Object: chunkObject, Created: e.created,
-		Model: e.model, Choices: []wireChoice{}, Usage: &u,
-		ServiceTier: e.serviceTier,
-	})
-	if err != nil {
-		return nil, err
+	if !e.suppressUsageFrame {
+		u := renderUsage(e.usage)
+		frame, err := e.marshal(wireResponse{
+			ID: e.messageID(), Object: chunkObject, Created: e.created,
+			Model: e.model, Choices: []wireChoice{}, Usage: &u,
+			ServiceTier: e.serviceTier,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, frame)
 	}
-	out = append(out, frame)
 	return append(out, codec.EncodeFrame("", []byte(doneSentinel))), nil
 }
 

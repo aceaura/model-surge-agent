@@ -12,7 +12,7 @@ import (
 // 编给 anthropic 客户端必须剥离，否则客户端把它存进历史，
 // 下一轮带着别家密文回来会被 anthropic 上游整轮拒收。
 func TestStreamEncoderStripsForeignSignature(t *testing.T) {
-	enc := inboundCodec{}.NewStreamEncoder()
+	enc := inboundCodec{}.NewStreamEncoder(nil)
 	encodeEvent(t, enc, ir.Event{Type: ir.EvBlockStart, Index: 0, Block: &ir.Block{
 		Type: ir.BlockThinking, Thinking: &ir.Thinking{},
 	}})
@@ -32,7 +32,7 @@ func TestStreamEncoderStripsForeignSignature(t *testing.T) {
 // 同族签名必须保留：丢掉它会让客户端下一轮回传一个无签名的推理块，
 // anthropic 上游同样拒收。
 func TestStreamEncoderKeepsSameFamilySignature(t *testing.T) {
-	enc := inboundCodec{}.NewStreamEncoder()
+	enc := inboundCodec{}.NewStreamEncoder(nil)
 	encodeEvent(t, enc, ir.Event{Type: ir.EvBlockStart, Index: 0, Block: &ir.Block{
 		Type: ir.BlockThinking, Thinking: &ir.Thinking{},
 	}})
@@ -51,7 +51,7 @@ func TestStreamEncoderKeepsSameFamilySignature(t *testing.T) {
 // 来源为空按异族处理：签名无从验证时放行的代价是客户端把一段验不了的
 // 密文存进历史，下一轮整个请求被拒。
 func TestStreamEncoderStripsSignatureWithoutSource(t *testing.T) {
-	enc := inboundCodec{}.NewStreamEncoder()
+	enc := inboundCodec{}.NewStreamEncoder(nil)
 	encodeEvent(t, enc, ir.Event{Type: ir.EvBlockStart, Index: 0, Block: &ir.Block{
 		Type: ir.BlockThinking, Thinking: &ir.Thinking{},
 	}})

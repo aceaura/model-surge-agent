@@ -13,7 +13,7 @@ import (
 // 而不是上游没给。
 func TestStreamEncoderReportsUnsupportedSignature(t *testing.T) {
 	for _, from := range []string{"anthropic", "responses", Name, ""} {
-		enc := inboundCodec{}.NewStreamEncoder()
+		enc := inboundCodec{}.NewStreamEncoder(nil)
 		out := encodeEvent(t, enc, ir.Event{
 			Type: ir.EvSigDelta, Index: 0, Text: "sig", SignatureFrom: from,
 		})
@@ -29,7 +29,7 @@ func TestStreamEncoderReportsUnsupportedSignature(t *testing.T) {
 
 // 没有签名就没有说明：无损的流水不该多出一条空洞的诊断。
 func TestStreamEncoderSilentWithoutSignature(t *testing.T) {
-	enc := inboundCodec{}.NewStreamEncoder()
+	enc := inboundCodec{}.NewStreamEncoder(nil)
 	encodeEvent(t, enc, ir.Event{Type: ir.EvThinkingDelta, Index: 0, Text: "reasoned"})
 	if notes := encoderNotes(t, enc); len(notes) != 0 {
 		t.Errorf("notes = %#v, want none", notes)

@@ -32,6 +32,8 @@ type Config struct {
 	FirstTokenTimeout time.Duration
 	IdleTimeout       time.Duration
 	HeartbeatInterval time.Duration
+	// MaxRequestDuration 是一次请求的总时长上限（含全部重试）。0 表示不限。
+	MaxRequestDuration time.Duration
 
 	OutboxInterval    time.Duration
 	OutboxMaxAttempts int
@@ -126,6 +128,24 @@ func Load() (Config, error) {
 	c.IdleTimeout = durationOr(&errs, "MSA_IDLE_TIMEOUT", 120*time.Second)
 	// 负值表示显式关闭保活，所以这里不做 > 0 校验。
 	c.HeartbeatInterval = durationOr(&errs, "MSA_HEARTBEAT_INTERVAL", 15*time.Second)
+	c.MaxRequestDuration = durationOr(&errs, "MSA_MAX_REQUEST_DURATION", 0)
+	if c.MaxRequestDuration < 0 {
+		fail("MSA_MAX_REQUEST_DURATION must not be negative; use 0 to disable the limit")
+	}
+	// 总上限至少要放得下一次完整的尝试：比单次尝试的超时还小的话，
+	// 每个请求都会在同一时刻被总上限掐断，重试与单次超时全部失效，
+	// 而失效方式是「所有请求都在 N 秒时失败」这种看上去像上游故障的形状。
+	if c.MaxRequestDuration > 0 {
+		minTotal := c.FirstTokenTimeout
+		if c.IdleTimeout > minTotal {
+			minTotal = c.IdleTimeout
+		}
+		if c.MaxRequestDuration < minTotal {
+			fail("MSA_MAX_REQUEST_DURATION (%s) must be at least "+
+				"max(MSA_FIRST_TOKEN_TIMEOUT, MSA_IDLE_TIMEOUT) (%s)",
+				c.MaxRequestDuration, minTotal)
+		}
+	}
 	c.OutboxInterval = durationOr(&errs, "MSA_OUTBOX_INTERVAL", time.Second)
 	c.OutboxMaxAttempts = intOr(&errs, "MSA_OUTBOX_MAX_ATTEMPTS", 20)
 

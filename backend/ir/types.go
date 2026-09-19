@@ -226,6 +226,17 @@ type Request struct {
 	// user_id 且被翻译成各协议的用户标识字段，混在一起会让 user_id
 	// 既作为用户标识、又作为一条普通元数据发出去两次。
 	ClientMetadata map[string]string `json:"client_metadata,omitempty"`
+	// IncludeUsage 是客户端对「要不要那一帧单独的 usage」的表态。
+	//
+	// 与「向上游要不要 usage」是两件事：对上游一律要（记账要用），
+	// 这一维只管转不转给客户端。三态指针而不是 bool：没给与明确 true
+	// 在当前行为上相同（都发），但合并后就没有位置表达「客户端明确要」，
+	// 将来若要把默认改成不发，那两种必须分开。
+	//
+	// 只有 Chat Completions 有这个开关。Anthropic 的 message_delta 带 usage
+	// 与 Responses 的 response.completed 带 usage 都是协议固有形状，
+	// 不是可选帧。
+	IncludeUsage *bool `json:"include_usage,omitempty"`
 }
 
 // ResponseFormatKind 是结构化输出的形态。

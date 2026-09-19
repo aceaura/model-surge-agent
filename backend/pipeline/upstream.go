@@ -52,6 +52,13 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 	rec *Record, capt *capture.Session) (*upstream, *ir.Error) {
 
 	url, extra := outbound.Endpoint(target.BaseURL, target.NativeModel, true)
+	// 空串是出站 codec 说「这个模型名拼不出安全的 URL」。归 upstream 而不是
+	// internal：这是目标配置的问题，而换目标会换模型名，下一个可能是好的。
+	// 不带模型名进错误文案——它由调度层给，流水里的 model_id 已经记了它。
+	if url == "" {
+		return nil, ir.NewError(ir.ErrUpstream, 0, "",
+			"target model name cannot be placed in the upstream URL")
+	}
 
 	// 单独的 cancel：流读完或出错时要能立刻掐断连接，
 	// 不然 committed 后失败的连接会挂到客户端上下文结束。

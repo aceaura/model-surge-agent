@@ -243,7 +243,7 @@ func errorStreamOf(t *testing.T, inbound string) string {
 	if !ok {
 		t.Fatalf("取不出入站 codec %s", inbound)
 	}
-	enc := in.NewStreamEncoder()
+	enc := in.NewStreamEncoder(nil)
 	var joined string
 	for _, ev := range []ir.Event{
 		{Type: ir.EvMessageStart, MessageID: "m_1", Model: "native"},

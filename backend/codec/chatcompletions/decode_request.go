@@ -25,6 +25,13 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 		TopP:        w.TopP,
 		Stream:      w.Stream,
 	}
+	// 客户端要不要那一帧单独的 usage。给了 stream_options 但没写
+	// include_usage 是明确的 false（JSON 零值就是它的语义），
+	// 与压根没给 stream_options 不同。
+	if w.StreamOptions != nil {
+		inc := w.StreamOptions.IncludeUsage
+		out.IncludeUsage = &inc
+	}
 	// max_completion_tokens 是新写法，同时出现时以它为准。
 	if w.MaxCompletionTokens != nil {
 		out.MaxTokens = *w.MaxCompletionTokens

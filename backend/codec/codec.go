@@ -59,7 +59,13 @@ type StreamDecoder interface {
 type InboundCodec interface {
 	Name() string
 	DecodeRequest(body []byte) (*ir.Request, error)
-	NewStreamEncoder() StreamEncoder
+	// NewStreamEncoder 建这次请求的流式编码器。
+	//
+	// 带上请求而不是无参：客户端的部分表态只在流式编码时才用得到
+	// （chat_completions 的 stream_options.include_usage 就是一例），
+	// 编码器拿不到请求就只能按协议默认走，把明确的表态当没提。
+	// req 可为 nil，表示没有请求上下文（各协议按默认形状编码）。
+	NewStreamEncoder(req *ir.Request) StreamEncoder
 	EncodeResponse(resp *ir.Response) ([]byte, error)
 	// RenderError 编码非流式错误响应，返回 HTTP 状态码与响应体。
 	RenderError(err *ir.Error) (int, []byte)

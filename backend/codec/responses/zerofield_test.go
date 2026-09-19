@@ -11,7 +11,7 @@ import (
 // 第一个条目的序号是 0，omitempty 会把它整个吞掉，客户端按缺席处理时
 // 会把后续 delta 归错条目。
 func TestFirstBlockFramesCarryZeroIndexes(t *testing.T) {
-	enc := inboundCodec{}.NewStreamEncoder()
+	enc := inboundCodec{}.NewStreamEncoder(nil)
 	frames := encodeEvent(t, enc, ir.Event{Type: ir.EvBlockStart, Index: 0, Block: &ir.Block{
 		Type: ir.BlockText,
 	}})
@@ -61,7 +61,7 @@ func TestErrorFrameHasNoIndexFields(t *testing.T) {
 // function_call 条目的 arguments 为空时也必须写出：客户端按键存在与否
 // 判断条目是否完整，缺键会被当成解析失败。
 func TestFunctionCallItemCarriesEmptyArguments(t *testing.T) {
-	enc := inboundCodec{}.NewStreamEncoder()
+	enc := inboundCodec{}.NewStreamEncoder(nil)
 	frames := encodeEvent(t, enc, ir.Event{Type: ir.EvBlockStart, Index: 0, Block: &ir.Block{
 		Type:    ir.BlockToolUse,
 		ToolUse: &ir.ToolUse{ID: "call_1", Name: "search"},
@@ -108,7 +108,7 @@ func TestMessageItemContentIsArrayNotNull(t *testing.T) {
 
 // reasoning 条目不该带 function_call 的必填键：那是本协议里不存在的形状。
 func TestReasoningItemHasNoCallFields(t *testing.T) {
-	enc := inboundCodec{}.NewStreamEncoder()
+	enc := inboundCodec{}.NewStreamEncoder(nil)
 	frames := encodeEvent(t, enc, ir.Event{Type: ir.EvBlockStart, Index: 0, Block: &ir.Block{
 		Type: ir.BlockThinking, Thinking: &ir.Thinking{},
 	}})

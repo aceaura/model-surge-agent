@@ -12,7 +12,7 @@ import (
 // 会被塞进 encrypted_content，而 OpenAI 侧只能解自己的密文，
 // 客户端回传时整轮被拒。
 func TestStreamEncoderDoesNotAccumulateForeignSignature(t *testing.T) {
-	enc := inboundCodec{}.NewStreamEncoder()
+	enc := inboundCodec{}.NewStreamEncoder(nil)
 	encodeEvent(t, enc, ir.Event{Type: ir.EvBlockStart, Index: 0, Block: &ir.Block{
 		Type: ir.BlockThinking, Thinking: &ir.Thinking{},
 	}})
@@ -34,7 +34,7 @@ func TestStreamEncoderDoesNotAccumulateForeignSignature(t *testing.T) {
 // 同族签名必须攒进 encrypted_content：丢掉它会让客户端下一轮回传
 // 一个无密文的 reasoning 条目，上游同样拒收。
 func TestStreamEncoderKeepsSameFamilySignature(t *testing.T) {
-	enc := inboundCodec{}.NewStreamEncoder()
+	enc := inboundCodec{}.NewStreamEncoder(nil)
 	encodeEvent(t, enc, ir.Event{Type: ir.EvBlockStart, Index: 0, Block: &ir.Block{
 		Type: ir.BlockThinking, Thinking: &ir.Thinking{},
 	}})

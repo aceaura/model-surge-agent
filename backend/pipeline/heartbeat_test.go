@@ -383,7 +383,7 @@ func TestHeartbeatFallsBackToCommentForOtherProtocols(t *testing.T) {
 			if !ok {
 				t.Skipf("%s 没注册入站 codec", proto)
 			}
-			enc := in.NewStreamEncoder()
+			enc := in.NewStreamEncoder(nil)
 			if h, isHB := enc.(codec.StreamHeartbeat); isHB {
 				t.Fatalf("%s 自己实现了 StreamHeartbeat，这条回落用例的前提不成立"+
 					"（帧 = %q）", proto, h.HeartbeatFrame())
@@ -402,7 +402,7 @@ func TestAnthropicHeartbeatIsPingEvent(t *testing.T) {
 	if !ok {
 		t.Fatal("anthropic 入站 codec 没注册")
 	}
-	h, isHB := in.NewStreamEncoder().(codec.StreamHeartbeat)
+	h, isHB := in.NewStreamEncoder(nil).(codec.StreamHeartbeat)
 	if !isHB {
 		t.Fatal("anthropic 编码器没实现 StreamHeartbeat")
 	}

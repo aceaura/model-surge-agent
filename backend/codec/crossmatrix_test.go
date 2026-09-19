@@ -724,7 +724,7 @@ func renderStream(t *testing.T, protocol string, events []ir.Event) string {
 	if !ok {
 		t.Fatalf("inbound %q not registered", protocol)
 	}
-	enc := c.NewStreamEncoder()
+	enc := c.NewStreamEncoder(nil)
 	var b strings.Builder
 	for _, ev := range events {
 		frames, err := enc.Encode(ev)

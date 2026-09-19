@@ -391,7 +391,7 @@ func TestAnthropicReportsDroppedServiceTier(t *testing.T) {
 	})
 
 	t.Run("stream", func(t *testing.T) {
-		enc := c.NewStreamEncoder()
+		enc := c.NewStreamEncoder(nil)
 		for _, ev := range []ir.Event{
 			{Type: ir.EvMessageStart, MessageID: "m1", Model: "m", ServiceTier: "default"},
 			{Type: ir.EvMessageDelta, StopReason: ir.StopEndTurn},
@@ -414,7 +414,7 @@ func TestAnthropicReportsDroppedServiceTier(t *testing.T) {
 	// 收尾帧才带档位的形态（非流式响应投影成事件时就是这样）：
 	// 只在 message_start 判会漏掉它。
 	t.Run("stream/only-on-delta", func(t *testing.T) {
-		enc := c.NewStreamEncoder()
+		enc := c.NewStreamEncoder(nil)
 		for _, ev := range []ir.Event{
 			{Type: ir.EvMessageStart, MessageID: "m1", Model: "m"},
 			{Type: ir.EvMessageDelta, StopReason: ir.StopEndTurn, ServiceTier: "default"},

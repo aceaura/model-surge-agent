@@ -26,7 +26,9 @@ func (inboundCodec) DecodeRequest(body []byte) (*ir.Request, error) {
 	return DecodeRequest(body)
 }
 
-func (inboundCodec) NewStreamEncoder() codec.StreamEncoder { return newStreamEncoder() }
+// NewStreamEncoder 忽略请求：本协议的 usage 挂在 message_delta 上，
+// 是协议固有形状而不是可选帧，没有对应的客户端开关可读。
+func (inboundCodec) NewStreamEncoder(*ir.Request) codec.StreamEncoder { return newStreamEncoder() }
 
 // EncodeResponse 是 EncodeResponseLossy 的包装：两条路径共用同一编码，
 // 响应体逐字节相同，否则客户端看到的内容会因诊断开关而漂移。

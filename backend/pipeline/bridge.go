@@ -42,7 +42,7 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 		tail []ir.Event
 	)
 	if call.Stream {
-		encoder = call.Inbound.NewStreamEncoder()
+		encoder = call.Inbound.NewStreamEncoder(call.Request)
 	}
 
 	timeout := p.firstTokenTimeout()

@@ -10,7 +10,9 @@
 package gemini
 
 import (
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/aceaura/model-surge-agent/backend/codec"
@@ -110,12 +112,53 @@ func (outboundCodec) EncodeRequestLossy(req *ir.Request) ([]byte, []string, erro
 
 // Endpoint 与另外三个协议不同：模型名进路径，流式换方法名并加 alt=sse。
 // 所以这里的两个参数都不能忽略。
+//
+// 返回空串表示这个模型名拼不出一个安全的 URL（见 modelPathSegment），
+// 由调用方把它变成一次可重试的失败：换目标会换 nativeModel。
 func (outboundCodec) Endpoint(baseURL, nativeModel string, stream bool) (string, map[string]string) {
-	base := strings.TrimRight(baseURL, "/") + "/models/" + nativeModel
+	seg, err := modelPathSegment(nativeModel)
+	if err != nil {
+		return "", nil
+	}
+	base := normalizeBaseURL(baseURL) + "/models/" + seg
 	if stream {
 		return base + ":streamGenerateContent?alt=sse", nil
 	}
 	return base + ":generateContent", nil
+}
+
+// normalizeBaseURL 去掉尾斜杠，并容忍配置里已经带上 /models 的 base_url。
+//
+// 只削一层：配成 /v1beta/models/models 的人要的就是那个路径，
+// 循环削到没有会把一个可能合法的上游路径改掉。
+func normalizeBaseURL(baseURL string) string {
+	base := strings.TrimRight(baseURL, "/")
+	return strings.TrimSuffix(base, "/models")
+}
+
+// modelPathSegment 把模型名变成一个安全的路径段。
+//
+// 转义而不是校验字符集：模型名的合法取值由上游定义，本服务列白名单只会在
+// 上游上新模型时误拒。而 ? # 空格这些字符直接拼进 URL 会被 URL 解析吃掉——
+// 探针实测 `m#x` 让整个 alt=sse 查询串消失，于是上游回整份 JSON 而不是 SSE，
+// 三个同名目标会连挂三次。
+//
+// 但路径分隔语义必须拒绝而不是转义：PathEscape 不编码 . 与 /，
+// 一个含 ../ 的模型名能把请求打到另一个端点上去。
+func modelPathSegment(nativeModel string) (string, error) {
+	if nativeModel == "" {
+		return "", fmt.Errorf("empty model name")
+	}
+	// 斜杠一律拒绝而不是逐段检查 . 与 ..：Gemini 的模型名里从来没有斜杠，
+	// 逐段放行等于替上游发明一套路径语法，而放行的每一段都得再回答一次
+	// 「这一段会不会改变端点」。
+	if strings.ContainsAny(nativeModel, `/\`) {
+		return "", fmt.Errorf("model name contains a path separator: %q", nativeModel)
+	}
+	if nativeModel == "." || nativeModel == ".." {
+		return "", fmt.Errorf("model name is a path traversal segment: %q", nativeModel)
+	}
+	return url.PathEscape(nativeModel), nil
 }
 
 func (outboundCodec) NewStreamDecoder() codec.StreamDecoder { return newStreamDecoder() }

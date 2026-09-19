@@ -118,6 +118,8 @@ func run(log *slog.Logger) error {
 				IdleTimeout:       cfg.IdleTimeout,
 				HeartbeatInterval: cfg.HeartbeatInterval,
 				EstimateUsage:     cfg.EstimateUsage,
+
+				MaxRequestDuration: cfg.MaxRequestDuration,
 			},
 		},
 		Models:      models,
