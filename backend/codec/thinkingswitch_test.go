@@ -267,7 +267,7 @@ func TestDefaultsDoNotFlipExplicitDisable(t *testing.T) {
 		t.Run(proto, func(t *testing.T) {
 			req := baseReq()
 			req.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOff()}
-			merged, err := paramover.Apply(encodeOut(t, proto, req), []byte(defaults), nil)
+			merged, _, err := paramover.Apply(encodeOut(t, proto, req), []byte(defaults), nil)
 			if err != nil {
 				t.Fatalf("paramover: %v", err)
 			}
@@ -280,7 +280,7 @@ func TestDefaultsDoNotFlipExplicitDisable(t *testing.T) {
 // defaults 必须照常生效，否则修 bug 修成了把参数层整个废掉。
 func TestDefaultsStillApplyWhenClientSilent(t *testing.T) {
 	body := encodeOut(t, codec.ProtocolAnthropic, baseReq())
-	merged, err := paramover.Apply(body, []byte(`{"thinking":{"type":"enabled","budget_tokens":8192}}`), nil)
+	merged, _, err := paramover.Apply(body, []byte(`{"thinking":{"type":"enabled","budget_tokens":8192}}`), nil)
 	if err != nil {
 		t.Fatalf("paramover: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestDefaultsStillApplyWhenClientSilent(t *testing.T) {
 func TestOverridesStillBeatExplicitDisable(t *testing.T) {
 	req := baseReq()
 	req.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOff()}
-	merged, err := paramover.Apply(encodeOut(t, codec.ProtocolAnthropic, req), nil,
+	merged, _, err := paramover.Apply(encodeOut(t, codec.ProtocolAnthropic, req), nil,
 		[]byte(`{"thinking":{"type":"enabled","budget_tokens":8192}}`))
 	if err != nil {
 		t.Fatalf("paramover: %v", err)

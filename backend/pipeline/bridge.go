@@ -86,11 +86,12 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 				// channel 关了却没收到 done：读协程被 ctx 掐断了。
 				// 先分清是谁断的——客户端自己走了就不是这个目标的故障，
 				// 记成 abnormal 会累计失败计数把健康账号推向冷却。
-				if clientCtx.Err() != nil {
+				cause, gone := teardownCause(clientCtx,
+					ir.NewError(ir.ErrUpstream, 0, "", "upstream stream ended without a terminator"))
+				if gone {
 					return p.clientGone(&agg, rec)
 				}
-				return p.finish(w, call, up, encoder, &agg, committed, tail,
-					ir.NewError(ir.ErrUpstream, 0, "", "upstream stream ended without a terminator"), rec)
+				return p.finish(w, call, up, encoder, &agg, committed, tail, cause, rec)
 			}
 		case <-time.After(time.Until(deadline)):
 			kind := "first token"
@@ -103,11 +104,14 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 
 		if f.err != nil {
 			// 客户端取消会先让上游连接断开，于是 scanner 报一个读错误，
-			// 而不是 channel 干净关闭。两条路径都要先分清是谁断的。
-			if clientCtx.Err() != nil {
+			// 而不是 channel 干净关闭。两条路径都要先分清是谁断的，
+			// 而且必须用同一个决策点——走哪条是竞态，两处各判一遍的话
+			// 其中一处判错只在另一次运行里才看得见。
+			cause, gone := teardownCause(clientCtx, f.err)
+			if gone {
 				return p.clientGone(&agg, rec)
 			}
-			return p.finish(w, call, up, encoder, &agg, committed, tail, f.err, rec)
+			return p.finish(w, call, up, encoder, &agg, committed, tail, cause, rec)
 		}
 
 		for _, ev := range f.events {

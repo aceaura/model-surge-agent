@@ -8,7 +8,7 @@ import (
 // apply 是测试辅助：跑一遍 Apply 并把结果解成 map 方便断言。
 func apply(t *testing.T, body, defaults, overrides string) map[string]any {
 	t.Helper()
-	out, err := Apply(json.RawMessage(body), raw(defaults), raw(overrides))
+	out, _, err := Apply(json.RawMessage(body), raw(defaults), raw(overrides))
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestEmptyLayersReturnBodyUntouched(t *testing.T) {
 		{"", "{}"},
 		{"{}", ""},
 	} {
-		out, err := Apply(body, raw(tc.defaults), raw(tc.overrides))
+		out, _, err := Apply(body, raw(tc.defaults), raw(tc.overrides))
 		if err != nil {
 			t.Fatalf("Apply(%q,%q): %v", tc.defaults, tc.overrides, err)
 		}
@@ -157,7 +157,7 @@ func TestRejectsNonObjectInputs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := Apply(json.RawMessage(tc.body), raw(tc.defaults), raw(tc.overrid)); err == nil {
+			if _, _, err := Apply(json.RawMessage(tc.body), raw(tc.defaults), raw(tc.overrid)); err == nil {
 				t.Error("want an error, config problems must not be swallowed")
 			}
 		})

@@ -149,6 +149,12 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 		// query，而这个 message 会流到客户端可见的错误体里。
 		reason := sanitizeTransportError(err)
 		risk := wroteRequest.Load()
+		// 预算到期排在所有归因之前：它的底层错误是 DeadlineExceeded，
+		// 会落到下面的 upstream 兜底分支上，于是一个本服务主动放弃的请求
+		// 被记成「上游不可达」并累计那个目标的失败计数——目标没有任何问题。
+		if budgetExceeded(streamCtx) {
+			return nil, withSideEffectRisk(budgetError(), risk)
+		}
 		// 不可达必须排在 isTransportError 之前：NXDOMAIN 是 *net.OpError 包
 		// *net.DNSError，下面那个分支会把它认下并归成「换条连接就好」，
 		// 于是一个域名写错的目标永远不计失败、永不冷却。
@@ -186,7 +192,13 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 		// 会把它归一化成一个 ir.Error，归错的时候只有原文能说明它到底说了什么。
 		capt.Add(capture.UpstreamResponse, raw)
 		cancel()
-		return nil, outbound.DecodeError(resp.StatusCode, resp.Header, raw)
+		decoded := outbound.DecodeError(resp.StatusCode, resp.Header, raw)
+		// 限流头在错误终态上最有用而此前恰好缺席：429 的时候客户端拿不到
+		// 剩余量，只能靠 Retry-After 硬等，而上游沉默时那个头也不发。
+		if decoded != nil {
+			decoded.ForwardHeaders = forwardableHeaders(resp.Header)
+		}
+		return nil, decoded
 	}
 
 	// 解压挂在捕获的里侧：捕获要留的是能读的字节。存压缩字节等于把
@@ -279,7 +291,12 @@ func applyForwardedHeaders(w http.ResponseWriter, up *upstream) {
 	if up == nil {
 		return
 	}
-	for k, vs := range up.forwardHeaders {
+	writeForwardedHeaders(w, up.forwardHeaders)
+}
+
+// writeForwardedHeaders 逐个 Add：限流头族里有多值形态，Set 会只留最后一个。
+func writeForwardedHeaders(w http.ResponseWriter, h http.Header) {
+	for k, vs := range h {
 		for _, v := range vs {
 			w.Header().Add(k, v)
 		}

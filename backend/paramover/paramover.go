@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 )
 
 // Apply 依次作用 defaults 与 overrides，返回新的请求体。
@@ -24,38 +25,80 @@ import (
 //
 // 两者都只在 object 层递归下钻；数组与标量整体替换，因为数组做元素级合并
 // 没有可预测语义。这与配置中心对参数层的定义一致。
-func Apply(body, defaults, overrides json.RawMessage) (json.RawMessage, error) {
+func Apply(body, defaults, overrides json.RawMessage) (json.RawMessage, []string, error) {
 	if len(defaults) == 0 && len(overrides) == 0 {
-		return body, nil
+		return body, nil, nil
 	}
 
 	root, err := decodeObject(body, "request body")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if root == nil {
 		// 请求体不是 object 就无处叠加参数。这只可能是出站 codec 的 bug，
 		// 让它显式失败而不是静默丢弃配置。
-		return nil, fmt.Errorf("paramover: request body must be a json object")
+		return nil, nil, fmt.Errorf("paramover: request body must be a json object")
 	}
 
 	def, err := decodeObject(defaults, "defaults")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	over, err := decodeObject(overrides, "overrides")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
+	notes := dropReserved(over)
 	applyDefaults(root, def)
 	applyOverrides(root, over)
 
 	out, err := encodeObject(root)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return out, nil
+	return out, notes, nil
+}
+
+// reservedKeys 是 overrides 不得压盖的顶层键。
+//
+// 它们不是客户端的调参，而是本服务自己算出来的值：model 在编码前被换成了
+// target.NativeModel，stream 由三个出站编码器写死为 true（对上游一律流式是
+// 整个桥接层与聚合器的前提），stream_options 承载记账要用的 usage 请求，
+// alt 是 Gemini 的 SSE 开关。被压掉的症状都不在本次请求上——改 model 会让
+// 请求打到另一个模型并按那个模型计费，而流水、上报与轨迹三处记的都是调度层
+// 派的 model_id，事后对不出账；改 stream 会让上游回整份 JSON，逐字输出消失
+// 而诊断里只有一句「上游忽略了流式请求」，把配置错误归因给了上游。
+//
+// 只挡顶层：这四个键在四个协议里都在顶层，下钻挡会误伤嵌套对象里的同名键。
+// 不做成可配置：能配就能关，而关掉它就回到现状。
+var reservedKeys = map[string]string{
+	"model":          "the target's native model name",
+	"stream":         "the upstream streaming mode",
+	"stream_options": "the upstream usage request",
+	"alt":            "the Gemini SSE switch",
+}
+
+// dropReserved 从 overrides 里摘掉保留键，返回说明。
+//
+// 跳过而不是报错：报错会让一个配错的键把整个目标变成死路，而 overrides 里
+// 绝大多数键是正当的。说明点名键与后果——运维唯一的线索就是这条说明，
+// 症状本身不在这次请求上。说明里**不拼值**（与出站请求头黑名单同口径）。
+func dropReserved(over map[string]any) []string {
+	if len(over) == 0 {
+		return nil
+	}
+	var notes []string
+	for k, what := range reservedKeys {
+		if _, ok := over[k]; !ok {
+			continue
+		}
+		delete(over, k)
+		notes = append(notes, "ignored override of "+k+": it is "+what+
+			", not a client parameter")
+	}
+	sort.Strings(notes)
+	return notes
 }
 
 // encodeObject 把合并后的对象编回请求体字节。

@@ -2,6 +2,7 @@ package ir
 
 import (
 	"fmt"
+	"net/http"
 	"time"
 )
 
@@ -70,6 +71,15 @@ type Error struct {
 	// 不进 NewError 的参数表：绝大多数错误产生在请求发出之前，
 	// 加进签名等于让四十余处调用点都跟着填一个 false。
 	SideEffectRisk bool `json:"side_effect_risk,omitempty"`
+	// ForwardHeaders 是这次失败的上游响应里可以回传给客户端的那些头
+	// （限流剩余量那一族）。不序列化：它只在进程内从建流点传到终态写出点，
+	// 既不进流水也不进上报——那两处要的是标量结论，不是一份响应头副本。
+	//
+	// 挂在错误上而不是给终态写出函数多传一个上游句柄：错误值本身已经贯穿
+	// 建流到终态的全程（RetryAfter 与 SideEffectRisk 走的就是这条路），
+	// 而中间隔着三层调用与五条终止分支，多传一个参数意味着五条分支都要
+	// 跟改，漏一条不会变红。
+	ForwardHeaders http.Header `json:"-"`
 }
 
 func (e *Error) Error() string {

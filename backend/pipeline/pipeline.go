@@ -256,7 +256,11 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 	// 上游读取，一个已经没人要的请求会把重试跑完。
 	if d := p.Opts.MaxRequestDuration; d > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, d)
+		// 带 Cause：到期后 ctx.Err() 与客户端取消完全同形，光看 Err 分不出
+		// 「客户端按了停止」与「本服务自己的预算到了」。前者不计目标失败也
+		// 不算异常，后者是本服务主动放弃，两者归一处会把一个配得过紧的预算
+		// 伪装成用户爱按停止键——而那种形态在所有指标上都正常。
+		ctx, cancel = context.WithTimeoutCause(ctx, d, errRequestBudget)
 		defer cancel()
 	}
 	// 先修畸形再估算：sanitize 会增删块，而 est_tokens 只算一次并在重试间复用。
@@ -443,7 +447,12 @@ func (p *Pipeline) attempt(ctx context.Context, w http.ResponseWriter, call Call
 	rec.Lossy = lossy
 	// 参数覆盖作用在编码之后的 wire body 上，因此运维配的是**出站协议的
 	// 原生字段名**，出站协议特有的嵌套结构天然可表达。
-	body, err = paramover.Apply(body, target.Defaults, target.Overrides)
+	body, overNotes, err := paramover.Apply(body, target.Defaults, target.Overrides)
+	// 保留键被跳过的说明并进本次尝试的 lossy：症状不在这次请求上，
+	// 这条说明是运维唯一的线索。
+	if len(overNotes) > 0 {
+		rec.Lossy = codec.MergeNotes(rec.Lossy, overNotes)
+	}
 	// 覆盖而非累加：换目标重试时要看的是最终发出去的那一份。
 	// 捕获点在 paramover 之后，因为那之后的字节才是真正写进请求的。
 	call.Capture.Set(capture.UpstreamRequest, body)
@@ -480,6 +489,9 @@ func (p *Pipeline) fail(w http.ResponseWriter, call Call, rec *Record, err *ir.E
 	status, body := renderErrorWithLossy(call.Inbound, err, rec)
 	rec.StatusCode = status
 	w.Header().Set("Content-Type", "application/json")
+	// 同样必须在 WriteHeader 之前：之后设既不报错也不生效。
+	// 排在 Retry-After 之前无所谓——白名单里没有它，两者不会互相覆盖。
+	writeForwardedHeaders(w, err.ForwardHeaders)
 	// 退避秒数必须在 WriteHeader 之前设：写头之后设 header 既不报错也不生效。
 	// 值从 err.RetryAfter 现算而不是转发上游那个字符串——后者可能含 CRLF。
 	if v, ok := ratelimit.HeaderSeconds(err.RetryAfter, p.now()); ok {

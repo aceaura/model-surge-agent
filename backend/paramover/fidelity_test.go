@@ -25,7 +25,7 @@ func TestLargeIntegersSurviveVerbatim(t *testing.T) {
 	for _, num := range cases {
 		t.Run(num, func(t *testing.T) {
 			body := json.RawMessage(`{"model":"m","seed":` + num + `}`)
-			out, err := Apply(body, json.RawMessage(`{"temperature":0.6}`), nil)
+			out, _, err := Apply(body, json.RawMessage(`{"temperature":0.6}`), nil)
 			if err != nil {
 				t.Fatalf("apply: %v", err)
 			}
@@ -43,7 +43,7 @@ func TestLargeIntegersSurviveVerbatim(t *testing.T) {
 // 与没配，量出来的字节数和抓到的上游请求体就不一样。
 func TestHTMLCharactersAreNotEscaped(t *testing.T) {
 	body := json.RawMessage(`{"model":"m","system":"if a<b && c>d"}`)
-	out, err := Apply(body, json.RawMessage(`{"temperature":0.6}`), nil)
+	out, _, err := Apply(body, json.RawMessage(`{"temperature":0.6}`), nil)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestHTMLCharactersAreNotEscaped(t *testing.T) {
 
 // 返回值要能直接当请求体发出去：Encoder 追加的换行必须去掉。
 func TestOutputHasNoTrailingNewline(t *testing.T) {
-	out, err := Apply(json.RawMessage(`{"model":"m"}`),
+	out, _, err := Apply(json.RawMessage(`{"model":"m"}`),
 		json.RawMessage(`{"temperature":0.6}`), nil)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
@@ -83,11 +83,11 @@ func TestTrailingDocumentIsRejected(t *testing.T) {
 			var err error
 			switch name {
 			case "body":
-				_, err = Apply(raw, json.RawMessage(`{"t":1}`), nil)
+				_, _, err = Apply(raw, json.RawMessage(`{"t":1}`), nil)
 			case "defaults":
-				_, err = Apply(json.RawMessage(`{"model":"m"}`), raw, nil)
+				_, _, err = Apply(json.RawMessage(`{"model":"m"}`), raw, nil)
 			case "overrides":
-				_, err = Apply(json.RawMessage(`{"model":"m"}`), nil, raw)
+				_, _, err = Apply(json.RawMessage(`{"model":"m"}`), nil, raw)
 			}
 			if err == nil {
 				t.Error("尾随文档被静默接受了")
@@ -105,7 +105,7 @@ func TestNonObjectIsStillRejected(t *testing.T) {
 	}
 	for name, raw := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := Apply(raw, json.RawMessage(`{"t":1}`), nil); err == nil {
+			if _, _, err := Apply(raw, json.RawMessage(`{"t":1}`), nil); err == nil {
 				t.Errorf("%s 形态的 body 被接受了", name)
 			}
 		})
@@ -118,7 +118,7 @@ func TestNonObjectIsStillRejected(t *testing.T) {
 func TestMergeSemanticsUnchanged(t *testing.T) {
 	body := json.RawMessage(
 		`{"model":"m","temperature":0.2,"generationConfig":{"topK":40}}`)
-	out, err := Apply(body,
+	out, _, err := Apply(body,
 		json.RawMessage(`{"temperature":0.9,"max_tokens":1024}`),
 		json.RawMessage(`{"generationConfig":{"topP":0.95}}`))
 	if err != nil {
@@ -156,7 +156,7 @@ func TestMergeSemanticsUnchanged(t *testing.T) {
 // 「两条路字节一致」就无从判断。
 func TestNoConfigReturnsBodyVerbatim(t *testing.T) {
 	body := json.RawMessage(`{"seed":13835058055282163712,"s":"a<b"}`)
-	out, err := Apply(body, nil, nil)
+	out, _, err := Apply(body, nil, nil)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestNoConfigReturnsBodyVerbatim(t *testing.T) {
 // 「同一个请求在两个目标上量出不同字节数」这件事钉住的形式。
 func TestConfiguredAndUnconfiguredAgreeOnOriginalBytes(t *testing.T) {
 	body := json.RawMessage(`{"seed":13835058055282163712,"s":"a<b && c>d"}`)
-	withCfg, err := Apply(body, json.RawMessage(`{"temperature":0.6}`), nil)
+	withCfg, _, err := Apply(body, json.RawMessage(`{"temperature":0.6}`), nil)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}

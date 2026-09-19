@@ -48,8 +48,8 @@ func TestRateLimitResponseCarriesRetryAfterHeader(t *testing.T) {
 func TestRetryAfterHeaderIsNotForwardedFromUpstream(t *testing.T) {
 	// 一个语义上无效、但如果被原样转发就能看出来的值。
 	url := rateLimitedUpstream(t, map[string]string{
-		"Retry-After":                "99999999",
-		"anthropic-ratelimit-status": "exceeded",
+		"Retry-After":         "99999999",
+		"X-Upstream-Internal": "leaked",
 	})
 	f := newFixture(t,
 		relaymock.Step{Target: target(url, "kimi-1/k3")},
@@ -64,9 +64,11 @@ func TestRetryAfterHeaderIsNotForwardedFromUpstream(t *testing.T) {
 	if got, _ := sentRetryAfter(rec); got == "99999999" {
 		t.Errorf("Retry-After = %q，这是上游字符串被原样转发了", got)
 	}
-	// 上游的其它限流头不该出现在下游响应上。
-	if got := rec.Result().Header.Get("anthropic-ratelimit-status"); got != "" {
-		t.Errorf("上游限流头 anthropic-ratelimit-status 漏到了客户端: %q", got)
+	// 白名单外的上游头不该出现在下游响应上。判的是白名单外而不是
+	// 「上游的头一个都不传」：限流头族本来就在白名单里，错误终态上
+	// 也照样回传（那正是客户端最需要剩余量的时刻）。
+	if got := rec.Result().Header.Get("X-Upstream-Internal"); got != "" {
+		t.Errorf("白名单外的上游头漏到了客户端: %q", got)
 	}
 }
 
