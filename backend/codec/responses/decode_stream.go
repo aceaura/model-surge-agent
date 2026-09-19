@@ -43,6 +43,10 @@ type streamDecoder struct {
 type slot struct {
 	key   string
 	index int
+	// sig 记住这个块已经拿到过的推理签名。多数上游只在 output_item.done 上
+	// 挂 encrypted_content，少数在 added 上就给；两处都给时不能都发——聚合器
+	// 对签名增量是累加的，第二条会把两份密文拼成一段无法解密的垃圾。
+	sig string
 }
 
 func newStreamDecoder() *streamDecoder { return &streamDecoder{} }
@@ -195,6 +199,7 @@ func (d *streamDecoder) itemAdded(ev wireStreamEvent) ([]ir.Event, error) {
 		block := ir.Block{Type: ir.BlockThinking, Thinking: &ir.Thinking{SignatureFrom: Name}}
 		if ev.Item.EncryptedContent != "" {
 			block.Thinking.Signature = ev.Item.EncryptedContent
+			d.rememberSig(key, ev.Item.EncryptedContent)
 		}
 		return append(out, ir.Event{Type: ir.EvBlockStart, Index: idx, Block: &block}), nil
 	default:
@@ -207,14 +212,41 @@ func (d *streamDecoder) itemAdded(ev wireStreamEvent) ([]ir.Event, error) {
 // itemDone 闭合该条目下的全部块。
 func (d *streamDecoder) itemDone(ev wireStreamEvent) []ir.Event {
 	prefix := fmt.Sprintf("%d:", ev.OutputIndex)
+	reasoning := reasoningKey(ev.OutputIndex)
 	var out []ir.Event
 	for _, s := range d.open {
-		if strings.HasPrefix(s.key, prefix) {
-			out = append(out, ir.Event{Type: ir.EvBlockStop, Index: s.index})
+		if !strings.HasPrefix(s.key, prefix) {
+			continue
 		}
+		// 签名排在闭块之前：之后到的签名增量聚合器不收（那个块已经不在
+		// open 列里），会静默丢掉。
+		if s.key == reasoning && ev.Item.EncryptedContent != "" {
+			switch {
+			case s.sig == "":
+				out = append(out, ir.Event{Type: ir.EvSigDelta, Index: s.index,
+					Text: ev.Item.EncryptedContent, SignatureFrom: Name})
+			case s.sig != ev.Item.EncryptedContent:
+				// 两帧给了不同的密文。不发第二条（会拼成垃圾）也不静默取一份：
+				// 这种形态说明上游行为超出预期，运维得看见它。
+				d.notes = append(d.notes,
+					"upstream gave two different reasoning signatures for "+
+						"the same item; kept the first one")
+			}
+		}
+		out = append(out, ir.Event{Type: ir.EvBlockStop, Index: s.index})
 	}
 	d.forget(prefix)
 	return out
+}
+
+// rememberSig 记下某个块已经拿到的签名，供 itemDone 判是否需要补发。
+func (d *streamDecoder) rememberSig(key, sig string) {
+	for i := range d.open {
+		if d.open[i].key == key {
+			d.open[i].sig = sig
+			return
+		}
+	}
 }
 
 // complete 收尾：闭合残留块，发 message_delta 与 message_stop。

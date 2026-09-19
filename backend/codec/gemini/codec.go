@@ -33,6 +33,7 @@ func (outboundCodec) Caps() codec.Capabilities {
 	return codec.Capabilities{
 		Thinking:      true,
 		ThinkingSig:   true,
+		ToolCallSig:   true,
 		Tools:         true,
 		Images:        true,
 		TopK:          true,

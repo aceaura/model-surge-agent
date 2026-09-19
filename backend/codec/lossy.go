@@ -139,6 +139,9 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 			if !caps.Tools {
 				note("tool blocks", "no tool calling")
 			}
+			if why, drop := toolSigDropReason(b.ToolUse, name, caps); drop {
+				note("tool call signature", why)
+			}
 			if b.ToolResult != nil {
 				describeBlocksLossy(b.ToolResult.Content, name, caps, note)
 			}
@@ -185,6 +188,54 @@ func responseSigNote(name, why string) string {
 	return fmt.Sprintf("dropped thinking signature from the response (%s cannot express it: %s)", name, why)
 }
 
+// toolSigDropReason 是请求侧的判据，与 sigDropReason 平行。
+//
+// 返回的 why 是裸理由（由 note 加前缀），而 ForeignToolSignature 返回的是
+// 完整的响应侧说明——两侧格式不同但判据同一处，改一边不会漏另一边。
+func toolSigDropReason(use *ir.ToolUse, name string, caps Capabilities) (string, bool) {
+	if use == nil || use.Signature == "" {
+		return "", false
+	}
+	if !caps.ToolCallSig {
+		return "no signature field on function calls", true
+	}
+	if prefixSaysForeign(use.Signature, name) {
+		return "signature carries another vendor's ciphertext", true
+	}
+	if use.SignatureFrom != name {
+		return "signature is only valid within its own protocol family", true
+	}
+	return "", false
+}
+
+// ForeignToolSignature 判断一次工具调用附带的推理签名是否要剥离。
+//
+// 与 ForeignEventSignature 同一套判据（前缀说异族、或来源不是本协议），
+// 但说明里点明丢的是工具调用那一处：一条响应里可以既有思考块的签名又有
+// 若干次调用各自的签名，措辞不分开的话运维看不出丢的是哪个。
+//
+// sigSupported 为假表示本协议的函数调用根本没有签名字段（除 gemini 外
+// 其余三家都是），此时与来源无关一律剥离。
+func ForeignToolSignature(signature, from, name string, sigSupported bool) (string, bool) {
+	if signature == "" {
+		return "", false
+	}
+	if !sigSupported {
+		return toolSigNote(name, "no signature field on function calls"), true
+	}
+	if prefixSaysForeign(signature, name) {
+		return toolSigNote(name, "signature carries another vendor's ciphertext"), true
+	}
+	if from != name {
+		return toolSigNote(name, "signature is only valid within its own protocol family"), true
+	}
+	return "", false
+}
+
+func toolSigNote(name, why string) string {
+	return fmt.Sprintf("dropped tool call reasoning signature (%s cannot express it: %s)", name, why)
+}
+
 // ResponseSignatureUnsupported 给没有签名字段的协议用，措辞与其它响应侧说明一致。
 func ResponseSignatureUnsupported(name string) string {
 	return responseSigNote(name, "no signed reasoning")
@@ -215,6 +266,44 @@ func DescribeResponseSignatureLoss(resp *ir.Response, name string, sigSupported 
 		}
 	}
 	return DedupeNotes(notes)
+}
+
+// DescribeResponseToolSignatureLoss 推导响应编码会丢弃哪些工具调用签名。
+//
+// 与 thinking 那条分开：gemini 上游的工具调用带签名，而三个入站协议的
+// tool_use 都没有这个字段，于是这一位在回客户端时必然被剥离。此前它在
+// 解码时就消失，有损列里查不到任何痕迹——运维无从知道上游给过推理凭据。
+//
+// toolSigSupported 为假表示本协议的函数调用没有签名字段（除 gemini 外全是）。
+func DescribeResponseToolSignatureLoss(resp *ir.Response, name string, toolSigSupported bool) []string {
+	if resp == nil {
+		return nil
+	}
+	var notes []string
+	for _, b := range resp.Content {
+		if b.Type != ir.BlockToolUse {
+			continue
+		}
+		if note, drop := ForeignToolSignature(signatureOf(b.ToolUse),
+			signatureFromOf(b.ToolUse), name, toolSigSupported); drop {
+			notes = append(notes, note)
+		}
+	}
+	return DedupeNotes(notes)
+}
+
+func signatureOf(use *ir.ToolUse) string {
+	if use == nil {
+		return ""
+	}
+	return use.Signature
+}
+
+func signatureFromOf(use *ir.ToolUse) string {
+	if use == nil {
+		return ""
+	}
+	return use.SignatureFrom
 }
 
 // DedupeNotes 把累加的说明去重并排序，供响应侧编码器的 Notes 出口使用。

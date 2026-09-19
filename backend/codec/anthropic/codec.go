@@ -44,6 +44,9 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	}
 	// 本协议有 signature 字段，异族来源才丢。
 	notes := codec.DescribeResponseSignatureLoss(resp, Name, true)
+	// 工具调用那一位本协议没有：gemini 把它挂在 functionCall 上，
+	// 本协议的 tool_use 里没有对应字段，所以一律丢弃并说明。
+	notes = append(notes, codec.DescribeResponseToolSignatureLoss(resp, Name, false)...)
 	// 本协议的响应信封没有执行档位的位置。上游报了就得说一声——
 	// 这一维决定计费，无声丢掉会让客户端按点的档位对账。
 	if resp != nil && resp.ServiceTier != "" {

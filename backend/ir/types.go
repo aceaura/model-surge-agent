@@ -81,6 +81,14 @@ type ToolUse struct {
 	// Input 是工具入参的 JSON 对象。流式解码期间是逐片累积的不完整 JSON，
 	// 只有 BlockStop 之后才保证可解析。
 	Input string `json:"input,omitempty"`
+	// Signature 是这次调用附带的推理签名。gemini 把它挂在 functionCall part
+	// 自身而不是 thought part 上，所以它必须跟着调用走而不是跟着思考块走。
+	//
+	// 与 Thinking.Signature 同规矩：只在同族协议间透传，异族一律剥离并出说明。
+	// 独立的一位而不是复用思考块那一位：一条响应里可以既有思考块的签名又有
+	// 若干次调用各自的签名，它们分别对应上游的不同状态，混在一处就对不回去。
+	Signature     string `json:"signature,omitempty"`
+	SignatureFrom string `json:"signature_from,omitempty"`
 }
 
 type ToolResult struct {

@@ -28,7 +28,9 @@ func budgetExceeded(ctx context.Context) bool {
 // 干净关闭、scanner 报读错误），上游被掐断时走哪条取决于读协程当时停在哪里，
 // 是竞态。两处各写一遍的话其中一处判错只在另一次运行里才暴露——而那种缺陷
 // 在跑一次的测试里是绿的。
-func teardownCause(ctx context.Context, upstreamErr *ir.Error) (cause *ir.Error, clientGone bool) {
+// streamErr 是上游在流内已经说明过的错误（有就说明它自己交代了原因），
+// upstreamErr 是「流没了但没人说为什么」的兜底归因。
+func teardownCause(ctx context.Context, streamErr, upstreamErr *ir.Error) (cause *ir.Error, clientGone bool) {
 	// 预算判在客户端取消之前：预算到期时 ctx.Err() 也非 nil，
 	// 顺序反了的话预算分支永远走不到。
 	if budgetExceeded(ctx) {
@@ -36,6 +38,16 @@ func teardownCause(ctx context.Context, upstreamErr *ir.Error) (cause *ir.Error,
 	}
 	if ctx.Err() != nil {
 		return nil, true
+	}
+	// 流内错误优先于通用断流错误：上游先说明了原因再断，那个原因才是根因。
+	// 此前这两条断流分支只报「流没有终止符就结束了」，于是一次流内 429
+	// 被记成目标故障并累计它的失败计数，而错误帧带的退避秒数一起丢掉——
+	// 客户端拿不到 Retry-After，运维看到的是一次上游抖动。
+	//
+	// 排在预算与客户端取消之后：本服务自己放弃或客户端走了，那是我们/客户端
+	// 的责任，不该记成上游的错，哪怕上游此前确实说过什么。
+	if streamErr != nil {
+		return streamErr, false
 	}
 	return upstreamErr, false
 }

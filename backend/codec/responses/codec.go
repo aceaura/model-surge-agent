@@ -43,7 +43,10 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 		return nil, nil, err
 	}
 	// 本协议用 encrypted_content 承载签名，异族来源才丢。
-	return body, codec.DescribeResponseSignatureLoss(resp, Name, true), nil
+	notes := codec.DescribeResponseSignatureLoss(resp, Name, true)
+	// 但 function_call 条目上没有签名字段，所以工具调用那一位一律丢弃。
+	notes = append(notes, codec.DescribeResponseToolSignatureLoss(resp, Name, false)...)
+	return body, codec.DedupeNotes(notes), nil
 }
 
 func (inboundCodec) RenderError(err *ir.Error) (int, []byte) { return RenderError(err) }

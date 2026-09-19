@@ -78,6 +78,10 @@ type InboundCodec interface {
 type Capabilities struct {
 	Thinking    bool
 	ThinkingSig bool
+	// ToolCallSig 为真表示本协议的函数调用自身带推理签名字段
+	// （gemini 的 functionCall part 上的 thoughtSignature）。只有 gemini 是这样。
+	// 与 ThinkingSig 分开：两者是上游的不同状态，一个协议可以只有其中一个。
+	ToolCallSig bool
 	Tools       bool
 	// ToolResultError 为真表示本协议的工具结果带失败标记（anthropic 的
 	// is_error、gemini 的 error 键）。为假时失败态改写成内容前缀——

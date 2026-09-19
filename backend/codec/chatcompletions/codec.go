@@ -46,8 +46,10 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	if err != nil {
 		return nil, nil, err
 	}
-	// 本协议无签名字段，一律丢弃，与来源无关。
-	return body, codec.DescribeResponseSignatureLoss(resp, Name, false), nil
+	// 本协议无签名字段，一律丢弃，与来源无关。思考块与工具调用两处都是。
+	notes := codec.DescribeResponseSignatureLoss(resp, Name, false)
+	notes = append(notes, codec.DescribeResponseToolSignatureLoss(resp, Name, false)...)
+	return body, codec.DedupeNotes(notes), nil
 }
 
 func (inboundCodec) RenderError(err *ir.Error) (int, []byte) { return RenderError(err) }

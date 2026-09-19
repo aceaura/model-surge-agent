@@ -86,7 +86,12 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 				// channel 关了却没收到 done：读协程被 ctx 掐断了。
 				// 先分清是谁断的——客户端自己走了就不是这个目标的故障，
 				// 记成 abnormal 会累计失败计数把健康账号推向冷却。
-				cause, gone := teardownCause(clientCtx,
+				// 这里刻意传 nil 而不是 streamErr：读协程的每条出口都带 done 或
+				// err，channel 关掉却没收到 done 只可能是 send 被 ctx 掐断，
+				// 而那时 teardownCause 在预算或客户端取消那两步就返回了，
+				// 根本走不到流内错误那一步。传过去是死代码——看着像覆盖了一种
+				// 情形，实际永远不生效，下一个人会照着它推断出错的结论。
+				cause, gone := teardownCause(clientCtx, nil,
 					ir.NewError(ir.ErrUpstream, 0, "", "upstream stream ended without a terminator"))
 				if gone {
 					return p.clientGone(&agg, rec)
@@ -107,7 +112,7 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 			// 而不是 channel 干净关闭。两条路径都要先分清是谁断的，
 			// 而且必须用同一个决策点——走哪条是竞态，两处各判一遍的话
 			// 其中一处判错只在另一次运行里才看得见。
-			cause, gone := teardownCause(clientCtx, f.err)
+			cause, gone := teardownCause(clientCtx, streamErr, f.err)
 			if gone {
 				return p.clientGone(&agg, rec)
 			}

@@ -197,11 +197,18 @@ func encodeMessage(m ir.Message, names map[string]string) ([]wireContent, error)
 			}
 			// 回指靠 name，但 id 是本协议的可选字段：上游原生的 id 带上，
 			// 能让它原样穿过一轮，省掉下一轮解码时的合成。
-			parts = append(parts, wirePart{FunctionCall: &wireFunctionCall{
+			part := wirePart{FunctionCall: &wireFunctionCall{
 				Name: b.ToolUse.Name,
 				Args: json.RawMessage(args),
 				ID:   outboundToolID(b.ToolUse.ID),
-			}})
+			}}
+			// 签名写回 part 自身：本协议就是这样表达工具调用的推理凭据。
+			// 异族的不写（DescribeLossy 已经为它留了说明）——把别家的密文
+			// 发过来会让上游拒整轮。
+			if b.ToolUse.SignatureFrom == Name {
+				part.ThoughtSignature = b.ToolUse.Signature
+			}
+			parts = append(parts, part)
 		case ir.BlockToolResult:
 			if b.ToolResult == nil {
 				return nil, fmt.Errorf("tool_result block without payload")

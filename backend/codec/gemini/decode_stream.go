@@ -146,7 +146,11 @@ func (d *streamDecoder) decodeParts(parts []wirePart) ([]ir.Event, error) {
 		case p.FunctionCall != nil:
 			// 函数调用不分片：整个 args 在一个 part 里到齐，
 			// 所以开块、发入参、闭块可以一次做完。
-			events, err := d.emitCall(p.FunctionCall)
+			//
+			// 签名从 part 上取而不是从 thought part 上取：本协议把工具调用的
+			// 推理签名挂在 functionCall part 自身，丢掉它会让下一轮的调用被
+			// 上游当成未经签名的推理续写，退化为不带思考上下文的调用。
+			events, err := d.emitCall(p.FunctionCall, p.ThoughtSignature)
 			if err != nil {
 				return nil, err
 			}
@@ -232,7 +236,7 @@ func (d *streamDecoder) closeCurrent() []ir.Event {
 }
 
 // emitCall 把一个完整的函数调用发成开块、入参、闭块三个事件。
-func (d *streamDecoder) emitCall(call *wireFunctionCall) ([]ir.Event, error) {
+func (d *streamDecoder) emitCall(call *wireFunctionCall, signature string) ([]ir.Event, error) {
 	out := d.closeCurrent()
 	d.sawCall = true
 
@@ -242,10 +246,15 @@ func (d *streamDecoder) emitCall(call *wireFunctionCall) ([]ir.Event, error) {
 	if !json.Valid([]byte(args)) {
 		args = "{}"
 	}
+	use := &ir.ToolUse{ID: d.callID(call), Name: call.Name}
+	if signature != "" {
+		use.Signature = signature
+		use.SignatureFrom = Name
+	}
 	out = append(out,
 		ir.Event{Type: ir.EvBlockStart, Index: index, Block: &ir.Block{
 			Type:    ir.BlockToolUse,
-			ToolUse: &ir.ToolUse{ID: d.callID(call), Name: call.Name},
+			ToolUse: use,
 		}},
 		ir.Event{Type: ir.EvToolInput, Index: index, Text: args},
 		ir.Event{Type: ir.EvBlockStop, Index: index},
@@ -333,9 +342,15 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 				if id == "" {
 					id = codec.SynthToolID(w.ResponseID, p.FunctionCall.Name, calls)
 				}
-				out.Content = append(out.Content, ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
+				use := &ir.ToolUse{
 					ID: id, Name: p.FunctionCall.Name, Input: string(p.FunctionCall.Args),
-				}})
+				}
+				// 与流式同一处：签名挂在 functionCall part 自身。
+				if p.ThoughtSignature != "" {
+					use.Signature = p.ThoughtSignature
+					use.SignatureFrom = Name
+				}
+				out.Content = append(out.Content, ir.Block{Type: ir.BlockToolUse, ToolUse: use})
 			case p.Thought:
 				out.Content = append(out.Content, ir.Block{Type: ir.BlockThinking, Thinking: &ir.Thinking{
 					Text: p.Text, Signature: p.ThoughtSignature, SignatureFrom: Name,
