@@ -131,7 +131,14 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 			if b.ToolResult == nil {
 				return nil, fmt.Errorf("tool_result block without payload")
 			}
-			content, err := encodeContent(b.ToolResult.Content)
+			// 失败态在这里改写成前缀块：本协议的 tool 消息只有
+			// role/tool_call_id/content 三个键，没有放标记的位置，
+			// 而丢掉它会让模型把失败当成功。
+			//
+			// 前置一个文本块而不是把整段内容折成一个字符串：后者会把
+			// 工具结果里的媒体块碾平，而那与失败态无关。
+			content, err := encodeContent(
+				codec.PrefixToolResultError(b.ToolResult, outboundCodec{}.Caps()))
 			if err != nil {
 				return nil, fmt.Errorf("tool_result content: %w", err)
 			}

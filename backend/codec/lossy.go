@@ -58,9 +58,19 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	unreturned := func(field, why string) {
 		notes[field] = fmt.Sprintf("forwarded %s but the result is not returned (%s)", field, why)
 	}
+	// rewrote 是第四种形态：这一维承载不了，但没丢——本服务把它改写成了
+	// 目标协议里能表达的另一种形状。措辞与 dropped 分开，因为读者对这两者
+	// 的下一步动作不同：dropped 要考虑换目标，rewrote 要考虑上游会怎么读。
+	rewrote := func(field, why string) {
+		notes[field] = fmt.Sprintf("rewrote %s (%s cannot express it: %s)", field, name, why)
+	}
 
 	if len(req.Tools) > 0 && !caps.Tools {
 		note("tools", "no tool calling")
+	}
+	if !caps.ToolResultError && hasFailedToolResult(req) {
+		rewrote("tool_result.is_error",
+			fmt.Sprintf("prefixed the content with %q", toolErrorPrefix))
 	}
 	if req.TopK != nil && !caps.TopK {
 		note("top_k", "no top_k parameter")
@@ -375,4 +385,46 @@ func FinishDetailNote(detail string) string {
 // DroppedServiceTierNote 是上游回了执行档位而入站协议无处安放的说明。
 func DroppedServiceTierNote(name string) string {
 	return "dropped service_tier from the response (" + name + " has no such field)"
+}
+
+// toolErrorPrefix 是工具结果失败态在无原生标记的协议上的表达。
+//
+// 方括号形态在工具输出里罕见，不易与工具自己打的内容混淆。
+const toolErrorPrefix = "[tool error] "
+
+// PrefixToolResultError 在目标协议没有失败标记时给工具结果前置一个标记块。
+//
+// caps 承载得了就原样返回内容：anthropic 与 gemini 有原生字段，加前缀等于
+// 把同一件事说两遍，其中一遍还混在工具的真实输出里。
+//
+// 返回新切片、不改入参：调用方的 IR 要留着换目标重试。
+//
+// 出处只有这一个：两个调用点若各写一份措辞，改了一处忘另一处的症状是
+// 「换个目标协议，同一个失败的前缀文本不一样」，而下游按文本匹配的
+// 客户端会只认出其中一种。
+func PrefixToolResultError(result *ir.ToolResult, caps Capabilities) []ir.Block {
+	if result == nil {
+		return nil
+	}
+	if !result.IsError || caps.ToolResultError {
+		return result.Content
+	}
+	out := make([]ir.Block, 0, len(result.Content)+1)
+	out = append(out, ir.Block{Type: ir.BlockText, Text: toolErrorPrefix})
+	return append(out, result.Content...)
+}
+
+// ToolErrorPrefix 供需要拼字符串的调用点取用同一份措辞。
+func ToolErrorPrefix() string { return toolErrorPrefix }
+
+// hasFailedToolResult 判断请求里是否带着失败的工具结果。
+func hasFailedToolResult(req *ir.Request) bool {
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			if b.Type == ir.BlockToolResult && b.ToolResult != nil && b.ToolResult.IsError {
+				return true
+			}
+		}
+	}
+	return false
 }

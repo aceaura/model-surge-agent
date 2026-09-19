@@ -173,10 +173,33 @@ func (d *streamDecoder) decodeParts(parts []wirePart) ([]ir.Event, error) {
 		case p.InlineData != nil || p.FileData != nil:
 			// 模型返回的图片本服务不往下游转：IR 的图片块只用于请求方向，
 			// 三个下游协议对响应内图片的表达各不相同且都不通用。
-			continue
+			//
+			// 但要出说明：客户端只看到文字时分不出「模型没画」与
+			// 「画了被我们丢了」，而这两者的下一步动作完全不同。
+			d.notes = append(d.notes, droppedResponseMediaNote(p))
 		}
 	}
 	return out, nil
+}
+
+// droppedResponseMediaNote 是响应内媒体被丢弃的说明。
+//
+// 流式与非流式共用这一个出处：两处各写一份措辞的症状是同一次丢弃在
+// 流式与探测路径上说法不同，而读说明的人会以为那是两件不同的事。
+//
+// 带上 media type：丢的是图还是音频决定客户端下一步怎么办，
+// 只说「有个媒体块丢了」等于没说。
+func droppedResponseMediaNote(p wirePart) string {
+	media := "unknown"
+	switch {
+	case p.InlineData != nil && p.InlineData.MimeType != "":
+		media = p.InlineData.MimeType
+	case p.FileData != nil && p.FileData.MimeType != "":
+		media = p.FileData.MimeType
+	}
+	return "dropped a " + media + " part from the response (" + Name +
+		" is the only protocol expressing it and the neutral representation " +
+		"carries media only in the request direction)"
 }
 
 // switchTo 保证当前开着的块是指定种类：种类变了就先闭合旧块再开新块。
@@ -319,6 +342,10 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 				}})
 			case p.Text != "":
 				out.Content = append(out.Content, ir.Block{Type: ir.BlockText, Text: p.Text})
+			case p.InlineData != nil || p.FileData != nil:
+				// 与流式同一处置、同一措辞。这个分支此前不存在，媒体 part
+				// 落到 switch 外面被静默跳过——连「丢了」都不在代码里。
+				notes = append(notes, droppedResponseMediaNote(p))
 			}
 		}
 	}

@@ -48,8 +48,10 @@ type Event struct {
 	// 出现。哪一帧先到取决于上游，只认一处就会在另一种形态下丢。
 	ServiceTier string     `json:"service_tier,omitempty"`
 	StopReason  StopReason `json:"stop_reason,omitempty"`
-	Usage       *Usage     `json:"usage,omitempty"`
-	MessageID   string     `json:"message_id,omitempty"`
-	Model       string     `json:"model,omitempty"`
-	Err         *Error     `json:"error,omitempty"`
+	// StopSequence 与 Response.StopSequence 同义，随收尾帧抵达。
+	StopSequence string `json:"stop_sequence,omitempty"`
+	Usage        *Usage `json:"usage,omitempty"`
+	MessageID    string `json:"message_id,omitempty"`
+	Model        string `json:"model,omitempty"`
+	Err          *Error `json:"error,omitempty"`
 }

@@ -88,13 +88,14 @@ type wireMetadata struct {
 
 // wireResponse 是非流式响应体。
 type wireResponse struct {
-	ID         string      `json:"id"`
-	Type       string      `json:"type"`
-	Role       string      `json:"role"`
-	Model      string      `json:"model"`
-	Content    []wireBlock `json:"content"`
-	StopReason string      `json:"stop_reason,omitempty"`
-	Usage      wireUsage   `json:"usage"`
+	ID           string      `json:"id"`
+	Type         string      `json:"type"`
+	Role         string      `json:"role"`
+	Model        string      `json:"model"`
+	Content      []wireBlock `json:"content"`
+	StopReason   string      `json:"stop_reason,omitempty"`
+	StopSequence string      `json:"stop_sequence,omitempty"`
+	Usage        wireUsage   `json:"usage"`
 }
 
 // wireUsage 没有推理 token 维度：本协议把推理消耗直接算进 output_tokens。
@@ -150,12 +151,13 @@ type streamMsg struct {
 
 // streamDelta 既承载块内增量（text_delta 等），也承载 message_delta 的 stop_reason。
 type streamDelta struct {
-	Type        string `json:"type,omitempty"`
-	Text        string `json:"text,omitempty"`
-	PartialJSON string `json:"partial_json,omitempty"`
-	Thinking    string `json:"thinking,omitempty"`
-	Signature   string `json:"signature,omitempty"`
-	StopReason  string `json:"stop_reason,omitempty"`
+	Type         string `json:"type,omitempty"`
+	Text         string `json:"text,omitempty"`
+	PartialJSON  string `json:"partial_json,omitempty"`
+	Thinking     string `json:"thinking,omitempty"`
+	Signature    string `json:"signature,omitempty"`
+	StopReason   string `json:"stop_reason,omitempty"`
+	StopSequence string `json:"stop_sequence,omitempty"`
 }
 
 // delta 类型名。

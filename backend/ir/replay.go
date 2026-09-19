@@ -19,7 +19,8 @@ func ResponseEvents(resp *Response) []Event {
 		out = append(out, blockEvents(i, b)...)
 	}
 	usage := resp.Usage
-	out = append(out, Event{Type: EvMessageDelta, StopReason: resp.StopReason, Usage: &usage})
+	out = append(out, Event{Type: EvMessageDelta, StopReason: resp.StopReason,
+		StopSequence: resp.StopSequence, Usage: &usage})
 	return append(out, Event{Type: EvMessageStop})
 }
 

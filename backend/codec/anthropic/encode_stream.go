@@ -233,8 +233,13 @@ func blockTypeForDelta(t ir.EventType) ir.BlockType {
 
 func (e *streamEncoder) messageDelta(ev ir.Event) ([]byte, error) {
 	out := streamEvent{
-		Type:  evMessageDelta,
-		Delta: &streamDelta{StopReason: renderStopReason(ev.StopReason)},
+		Type: evMessageDelta,
+		Delta: &streamDelta{
+			StopReason: renderStopReason(ev.StopReason),
+			// 走同一个采纳判据：兜底成 end_turn 的那一支不该带着序列，
+			// 而兜底发生在下面几行，所以这里先按原始终止原因判。
+			StopSequence: adoptStopSequence(ev.StopReason, ev.StopSequence),
+		},
 	}
 	if out.Delta.StopReason == "" {
 		out.Delta.StopReason = "end_turn"
@@ -298,12 +303,13 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 		return nil, nil
 	}
 	w := wireResponse{
-		ID:         resp.ID,
-		Type:       "message",
-		Role:       string(ir.RoleAssistant),
-		Model:      resp.Model,
-		StopReason: renderStopReason(resp.StopReason),
-		Usage:      renderUsage(resp.Usage),
+		ID:           resp.ID,
+		Type:         "message",
+		Role:         string(ir.RoleAssistant),
+		Model:        resp.Model,
+		StopReason:   renderStopReason(resp.StopReason),
+		StopSequence: adoptStopSequence(resp.StopReason, resp.StopSequence),
+		Usage:        renderUsage(resp.Usage),
 	}
 	if w.ID == "" {
 		w.ID = "msg_unknown"

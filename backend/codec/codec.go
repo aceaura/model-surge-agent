@@ -55,6 +55,10 @@ type Capabilities struct {
 	Thinking    bool
 	ThinkingSig bool
 	Tools       bool
+	// ToolResultError 为真表示本协议的工具结果带失败标记（anthropic 的
+	// is_error、gemini 的 error 键）。为假时失败态改写成内容前缀——
+	// 丢掉它会让模型把失败当成功，那是跨轮语义被改坏且完全不可见。
+	ToolResultError bool
 	// ServerTools 为真表示本协议表达得了「由上游自己执行的工具」。
 	// 只有 anthropic 是这样。为假时这类声明整条丢弃并出说明，而不是
 	// 降级成函数工具：降级后上游会等一个永远不来的工具结果。

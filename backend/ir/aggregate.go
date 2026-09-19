@@ -90,6 +90,9 @@ func (a *Aggregator) Add(ev Event) {
 		if ev.StopReason != "" {
 			a.resp.StopReason = ev.StopReason
 		}
+		if ev.StopSequence != "" {
+			a.resp.StopSequence = ev.StopSequence
+		}
 		a.mergeServiceTier(ev.ServiceTier)
 		if ev.Usage != nil {
 			a.mergeUsage(*ev.Usage)

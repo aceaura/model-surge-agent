@@ -63,7 +63,13 @@ type Response struct {
 	Model      string     `json:"model,omitempty"`
 	Content    []Block    `json:"content"`
 	StopReason StopReason `json:"stop_reason,omitempty"`
-	Usage      Usage      `json:"usage"`
+	// StopSequence 是触发停止的那一条序列的原文。空表示不是由停止序列
+	// 结束的，或上游没给。
+	//
+	// 只有 StopReason 为 StopStopSequence 时有意义：按它切分输出的客户端
+	// 拿到一条未触发的序列会切错位置，比拿不到更坏。
+	StopSequence string `json:"stop_sequence,omitempty"`
+	Usage        Usage  `json:"usage"`
 	// ServiceTier 是上游实际执行时所用的档位，原样回显。
 	//
 	// 绝不拿请求里的值兜底：客户端点了 flex 而上游降到 default 时，

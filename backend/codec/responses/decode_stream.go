@@ -30,6 +30,11 @@ type streamDecoder struct {
 	// serviceTier 是上游回的执行档位，created 与 completed 两帧都可能带。
 	serviceTier string
 	usage       *ir.Usage
+	// refused 记录流里出现过拒答 part。
+	//
+	// 必须在流里记而不是只看收尾帧：收尾帧的 response 对象可能不带
+	// 完整 output（上游实现不一），那时只有中途的 part 帧见过拒答。
+	refused bool
 	// notes 记录改写说明，走响应侧诊断通道。
 	notes []string
 }
@@ -83,6 +88,9 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		}
 		switch ev.Part.Type {
 		case partOutputText, partRefusal:
+			if ev.Part.Type == partRefusal {
+				d.refused = true
+			}
 			idx, opened := d.slot(partKey(ev.OutputIndex, ev.ContentIndex), ir.BlockText)
 			out := d.start(ev)
 			out = append(out, opened...)
@@ -96,6 +104,10 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		}
 
 	case evOutputTextDelta, evRefusalDelta:
+		if ev.Type == evRefusalDelta {
+			// part 开启帧可能整个缺席（上游只发 delta），所以两处都要记。
+			d.refused = true
+		}
 		idx, opened := d.slot(partKey(ev.OutputIndex, ev.ContentIndex), ir.BlockText)
 		out := append(d.start(ev), opened...)
 		return append(out, ir.Event{Type: ir.EvTextDelta, Index: idx, Text: ev.Delta}), nil
@@ -223,6 +235,11 @@ func (d *streamDecoder) complete(ev wireStreamEvent) []ir.Event {
 		if ev.Response.ServiceTier != "" {
 			d.serviceTier = ev.Response.ServiceTier
 		}
+	}
+	// 流里见过拒答就改判，除非收尾帧已经给出一个非正常结束的原因——
+	// 那是上游更明确的表态（比如同时被截断）。
+	if d.refused && (d.stopReason == "" || d.stopReason == ir.StopEndTurn) {
+		d.stopReason = ir.StopContentFilter
 	}
 	delta := ir.Event{Type: ir.EvMessageDelta, StopReason: d.stopReason, Usage: d.usage,
 		ServiceTier: d.serviceTier}
@@ -447,6 +464,14 @@ func stopReasonFor(r *wireResponse) ir.StopReason {
 			return ir.StopContentFilter
 		}
 	}
+	// 拒答的判定排在工具调用之前：两者同时出现时拒答是更重要的那一维。
+	// 判成 tool_use 会让客户端去执行工具，而模型其实是拒绝了。
+	//
+	// 排在 incomplete_details 之后：那是上游对「为什么没完成」的明确
+	// 表态，比我方从 part 类型推断出的更可靠。
+	if outputHasRefusal(r) {
+		return ir.StopContentFilter
+	}
 	for _, item := range r.Output {
 		if item.Type == itemFunctionCall {
 			return ir.StopToolUse
@@ -456,6 +481,32 @@ func stopReasonFor(r *wireResponse) ir.StopReason {
 		return ir.StopMaxTokens
 	}
 	return ir.StopEndTurn
+}
+
+// outputHasRefusal 判断输出里有没有拒答 part。
+//
+// 上游用一个独立的 part 类型表达拒答，而本协议的 status 仍是 completed，
+// 于是「模型拒绝回答」与「模型答完了」在 status 上看不出差别。
+// anthropic 入站有原生的 refusal 终止原因（见其 convertStopReason），
+// 两边不一致会让同一次拒答在不同入站协议上得到不同的 stop_reason。
+func outputHasRefusal(r *wireResponse) bool {
+	for _, item := range r.Output {
+		if item.Type != itemMessage || len(item.Content) == 0 {
+			continue
+		}
+		var parts []wirePart
+		if err := json.Unmarshal(item.Content, &parts); err != nil {
+			// content 是字符串形态时解不成 part 数组，那种形态里没有
+			// 拒答的表达位置，不是错误。
+			continue
+		}
+		for _, p := range parts {
+			if p.Type == partRefusal {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // renderStatus 是反向映射：出站为客户端合成 response 对象时用。

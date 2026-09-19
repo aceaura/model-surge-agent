@@ -21,12 +21,14 @@ var structuralCaps = map[string]struct {
 	minThinkingBudget int
 	systemAsText      bool
 	serverTools       bool
+	toolResultError   bool
 }{
 	codec.ProtocolAnthropic: {
 		cacheBreakpoints:  4,
 		thinkingExcl:      true,
 		minThinkingBudget: 1024,
 		serverTools:       true,
+		toolResultError:   true,
 	},
 	codec.ProtocolChatCompletions: {
 		maxStopSequences: 4,
@@ -45,7 +47,8 @@ var structuralCaps = map[string]struct {
 			CollapseUnionType:   true,
 			OmitEmptyProperties: true,
 		},
-		systemAsText: true,
+		systemAsText:    true,
+		toolResultError: true,
 	},
 }
 
@@ -81,6 +84,9 @@ func TestEveryOutboundDeclaresStructuralCaps(t *testing.T) {
 			}
 			if got.ServerTools != want.serverTools {
 				t.Errorf("ServerTools = %v，想要 %v", got.ServerTools, want.serverTools)
+			}
+			if got.ToolResultError != want.toolResultError {
+				t.Errorf("ToolResultError = %v，想要 %v", got.ToolResultError, want.toolResultError)
 			}
 		})
 	}

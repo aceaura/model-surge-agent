@@ -35,6 +35,8 @@ func (outboundCodec) Caps() codec.Capabilities {
 		Images:        true,
 		TopK:          true,
 		StopSequences: true,
+		// functionResponse 的载荷用 error 键承载失败态（见 wrapResponse）。
+		ToolResultError: true,
 		// systemInstruction 是单一 Content，system 里的非文本块必须先降级成文本。
 		SystemAsText: true,
 		// 本协议在 generationConfig 下有 candidateCount、responseLogprobs

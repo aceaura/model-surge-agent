@@ -156,10 +156,13 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 				return nil, fmt.Errorf("tool_result block without payload")
 			}
 			// 工具结果条目要排在承载它的消息之前发出，故先落进 out。
+			// 失败态改写成前缀：本协议的 function_call_output 只有
+			// call_id/output 两个键，没有放标记的位置，而丢掉它会让
+			// 模型把失败当成功。
 			out = append(out, wireItem{
 				Type:   itemFunctionCallOutput,
 				CallID: b.ToolResult.ToolUseID,
-				Output: joinText(b.ToolResult.Content),
+				Output: joinText(codec.PrefixToolResultError(b.ToolResult, outboundCodec{}.Caps())),
 			})
 		case ir.BlockThinking:
 			// Redacted 块的载荷在解码期就已舍弃，编出空 reasoning item 会被上游拒收。

@@ -132,6 +132,7 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		out := ir.Event{Type: ir.EvMessageDelta}
 		if ev.Delta != nil {
 			out.StopReason = convertStopReason(ev.Delta.StopReason)
+			out.StopSequence = adoptStopSequence(out.StopReason, ev.Delta.StopSequence)
 		}
 		if ev.Usage != nil {
 			u := convertUsage(*ev.Usage)
@@ -175,6 +176,7 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 		StopReason: convertStopReason(w.StopReason),
 		Usage:      convertUsage(w.Usage),
 	}
+	out.StopSequence = adoptStopSequence(out.StopReason, w.StopSequence)
 	out.Content = make([]ir.Block, 0, len(w.Content))
 	for _, b := range w.Content {
 		block, ok, err := decodeBlock(b)
@@ -223,6 +225,18 @@ func convertUsage(u wireUsage) ir.Usage {
 		CacheReadTokens:  u.CacheReadInputTokens,
 		CacheWriteTokens: u.CacheCreationInputTokens,
 	}
+}
+
+// adoptStopSequence 只在终止原因确实是停止序列时采纳上游给的那条序列。
+//
+// 不无条件采纳：按这一维切分输出的客户端拿到一条未触发的序列会切错位置，
+// 比拿不到更坏。上游在其他终止原因下带上这个字段（或带一个陈旧值）是
+// 我们控制不了的事，能控制的是不把它传下去。
+func adoptStopSequence(reason ir.StopReason, seq string) string {
+	if reason != ir.StopStopSequence {
+		return ""
+	}
+	return seq
 }
 
 func convertStopReason(s string) ir.StopReason {
