@@ -54,6 +54,8 @@ func (r *Recorder) Record(rec pipeline.Record) {
 		Stream:           rec.Stream,
 		LatencyMS:        rec.LatencyMS,
 		FirstTokenMS:     rec.FirstTokenMS,
+		DispatchMS:       rec.DispatchMS,
+		UpstreamMS:       rec.UpstreamMS,
 		InputTokens:      rec.Usage.InputTokens,
 		OutputTokens:     rec.Usage.OutputTokens,
 		ErrorCode:        rec.ErrorCode,

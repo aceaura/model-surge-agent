@@ -133,6 +133,8 @@ type LiveEntry struct {
 	Stream           bool      `json:"stream,omitempty"`
 	LatencyMS        int       `json:"latency_ms,omitempty"`
 	FirstTokenMS     int       `json:"first_token_ms,omitempty"`
+	DispatchMS       int       `json:"dispatch_ms,omitempty"`
+	UpstreamMS       int       `json:"upstream_ms,omitempty"`
 	InputTokens      int64     `json:"input_tokens,omitempty"`
 	OutputTokens     int64     `json:"output_tokens,omitempty"`
 	ErrorCode        string    `json:"error_code,omitempty"`

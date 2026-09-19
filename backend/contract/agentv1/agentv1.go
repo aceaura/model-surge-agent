@@ -31,6 +31,26 @@ type Health struct {
 	Relay         string `json:"relay"`
 	OutboxPending int    `json:"outbox_pending"`
 	OutboxDead    int    `json:"outbox_dead"`
+	// Pool 缺省表示没有 PG 连接池（未配或已关）。
+	//
+	// 指针而非零值：报一组零会让运维看到 total=0, max=0 以为池配崩了去查
+	// DSN，而真相是这个部署根本没配 PG。零是「池此刻空闲」的合法状态。
+	Pool *PoolStats `json:"pool,omitempty"`
+	// Goroutines 刻意不加 omitempty：NumGoroutine() 永远 >= 1，
+	// 零值不可能出现，加了只会让读代码的人怀疑它会不会缺。
+	Goroutines int `json:"goroutines"`
+}
+
+// PoolStats 是 PG 连接池的饱和度快照。整个服务变慢而每条流水都不异常时，
+// 慢的那段在拿连接上，而那段不在任何一条请求的计时里。
+type PoolStats struct {
+	Acquired int32 `json:"acquired"`
+	Idle     int32 `json:"idle"`
+	Total    int32 `json:"total"`
+	Max      int32 `json:"max"`
+	// AcquireWaiting 是累计发生过「池空、只能等」的次数，不是此刻的排队长度。
+	// 两次取样做差才是这段时间的等待次数。
+	AcquireWaiting int64 `json:"acquire_waiting"`
 }
 
 // RequestSummary 是一条请求流水。绝不含凭据与对话内容。
@@ -57,8 +77,12 @@ type RequestSummary struct {
 	CacheReadTokens  int64    `json:"cache_read_tokens,omitempty"`
 	LatencyMS        int      `json:"latency_ms,omitempty"`
 	FirstTokenMS     int      `json:"first_token_ms,omitempty"`
-	ErrorCode        string   `json:"error_code,omitempty"`
-	ErrorMessage     string   `json:"error_message,omitempty"`
+	// DispatchMS、UpstreamMS 是两段跨进程耗时的累计值（含全部重试）。
+	// latency_ms 减去两段即「本服务自身 + 上游生成」。
+	DispatchMS   int    `json:"dispatch_ms,omitempty"`
+	UpstreamMS   int    `json:"upstream_ms,omitempty"`
+	ErrorCode    string `json:"error_code,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
 	// Sanitized 是对客户端请求所做的畸形修复说明；为空表示请求本身合法。
 	Sanitized []string `json:"sanitized,omitempty"`
 	// Lossy 是出站编码因目标协议表达不了而丢弃的字段说明；为空表示无损转换。
@@ -93,6 +117,8 @@ type LiveEntry struct {
 	Stream           bool      `json:"stream,omitempty"`
 	LatencyMS        int       `json:"latency_ms,omitempty"`
 	FirstTokenMS     int       `json:"first_token_ms,omitempty"`
+	DispatchMS       int       `json:"dispatch_ms,omitempty"`
+	UpstreamMS       int       `json:"upstream_ms,omitempty"`
 	InputTokens      int64     `json:"input_tokens,omitempty"`
 	OutputTokens     int64     `json:"output_tokens,omitempty"`
 	ErrorCode        string    `json:"error_code,omitempty"`

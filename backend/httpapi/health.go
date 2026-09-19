@@ -2,8 +2,10 @@ package httpapi
 
 import (
 	"context"
+	"runtime"
 
 	"github.com/aceaura/model-surge-agent/backend/cache"
+	"github.com/aceaura/model-surge-agent/backend/contract/agentv1"
 	"github.com/aceaura/model-surge-agent/backend/relayclient"
 	"github.com/aceaura/model-surge-agent/backend/store"
 )
@@ -22,10 +24,15 @@ type Checker struct {
 }
 
 func (c Checker) Check(ctx context.Context) Health {
-	h := Health{Status: "ok", Database: "down", Cache: "down", Relay: "down"}
+	h := Health{Status: "ok", Database: "down", Cache: "down", Relay: "down",
+		Goroutines: runtime.NumGoroutine()}
 
 	if c.Store != nil && c.Store.Ping(ctx) == nil {
 		h.Database = "ok"
+		// 池快照只在 Ping 通时取：连接池已被 Close 过的话 Stat() 的数字
+		// 是最后一刻的残留，报出去会让运维以为池还活着。
+		st := agentv1.PoolStats(c.Store.Stats())
+		h.Pool = &st
 	}
 	if c.Cache == nil {
 		// 未配置与配了但连不上是两回事：前者是部署选择，不该报成故障。

@@ -39,8 +39,12 @@ func (u *upstream) Close() {
 
 // open 发出上游请求并确认拿到了 2xx 与流式响应体。
 // 此时还没读任何帧：解码首帧的成败才决定要不要换目标。
+// rec 只用于累加 UpstreamMS。计时贴在 client.Do 两侧而不是由 attempt 在
+// 外面包住整个 open：包在外面的话，将来有人在 open 里加一段本地预处理，
+// 那段耗时会被静默算成上游耗时，而这种漂移在读代码时看不出来。
 func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
-	target relayclient.Target, body []byte, decls codec.Declarations) (*upstream, *ir.Error) {
+	target relayclient.Target, body []byte, decls codec.Declarations,
+	rec *Record) (*upstream, *ir.Error) {
 
 	url, extra := outbound.Endpoint(target.BaseURL, target.NativeModel, true)
 
@@ -70,7 +74,13 @@ func (p *Pipeline) open(ctx context.Context, outbound codec.OutboundCodec,
 		req.Header.Set(k, v)
 	}
 
+	upstreamStart := p.now()
 	resp, err := p.client().Do(req)
+	// 累加在判错之前，且终点是响应头到达而不是首帧解码出来：后者已经有
+	// FirstTokenMS，且首帧里含上游的思考时间——那是生成成本不是连接成本。
+	// 响应头这一刻正是 ResponseHeaderTimeout 约束的那一刻，两者对齐，
+	// 运维看到 upstream_ms 逼近那个阈值就知道该调哪个参数。
+	rec.UpstreamMS += msSince(upstreamStart, p.now())
 	if err != nil {
 		cancel()
 		// 连接层与「上游明确地不行」分开归因：前者上游可能完全健康，

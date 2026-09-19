@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/aceaura/model-surge-agent/backend/codec"
+	"github.com/aceaura/model-surge-agent/backend/contract/agentv1"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 	"github.com/aceaura/model-surge-agent/backend/pipeline"
 	"github.com/aceaura/model-surge-agent/backend/relayclient"
@@ -53,6 +54,8 @@ type HealthChecker interface {
 	Check(ctx context.Context) Health
 }
 
+// Health 与 agentv1.Health 形状必须一致：admin.go 用整体类型转换把它交出去，
+// 少一个字段就编译不过。这正是要的守卫——新加的字段不会只改一边。
 type Health struct {
 	Status        string `json:"status"`
 	Database      string `json:"database"`
@@ -60,6 +63,10 @@ type Health struct {
 	Relay         string `json:"relay"`
 	OutboxPending int    `json:"outbox_pending"`
 	OutboxDead    int    `json:"outbox_dead"`
+	// 直接用 DTO 的指针类型而不是再定义一份：整体类型转换要求逐字段类型
+	// 完全相同，两个同形状但不同名的指针类型转不过去。
+	Pool       *agentv1.PoolStats `json:"pool,omitempty"`
+	Goroutines int                `json:"goroutines"`
 }
 
 // Handler 装好全部路由。

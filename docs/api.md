@@ -305,6 +305,20 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 | `relay` | string | `ok` / `down` —— 调度层可用性（探其健康端点） |
 | `outbox_pending` | int | 结果上报队列待发送条数 |
 | `outbox_dead` | int | 死信条数（超过重试上限） |
+| `pool` | object | PG 连接池饱和度快照，见下表。**PG 不可用或未配时整个字段不出现**，而不是报一组零——零是「池此刻空闲」的合法状态 |
+| `goroutines` | int | 当前 goroutine 数（`runtime.NumGoroutine()`）。永远出现，永远 >= 1 |
+
+`pool` 的字段：
+
+| 字段 | 类型 | 取值与含义 |
+|---|---|---|
+| `acquired` | int32 | 此刻被借出的连接数 |
+| `idle` | int32 | 池里闲着的连接数 |
+| `total` | int32 | 池中连接总数（含已借出与正在建立的）。`total / max` 就是饱和度 |
+| `max` | int32 | 池上限 |
+| `acquire_waiting` | int64 | **累计**发生过「池空、只能等一条连接」的次数，**不是此刻的排队长度**——pgxpool 没有暴露瞬时排队数。单调递增，两次取样做差才是这段时间的等待次数 |
+
+`acquire_waiting` 的读法见 [6.10](#610-依赖饱和度与时延分段)。
 
 ### 3.2 RequestSummary
 
@@ -332,6 +346,8 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 | `cache_read_tokens` | int64 | 命中提示缓存的输入 token 数 |
 | `latency_ms` | int | 总耗时（毫秒） |
 | `first_token_ms` | int | 首个上游帧解码成功的耗时（毫秒）；流式与非流式都记录；未收到任何帧即结束时为 0 |
+| `dispatch_ms` | int | 问调度层要目标的**累计**耗时（毫秒，含全部重试）。调度层失败时同样记录 |
+| `upstream_ms` | int | 发出上游请求到**响应头到达**的**累计**耗时（毫秒，含全部重试）。未发出请求时为 0 |
 | `error_code` | string | 错误种类（成功时为空） |
 | `error_message` | string | 错误文本（可能含上游原文；成功时为空） |
 | `sanitized` | string[] | 对客户端请求所做的畸形修复说明，如把孤儿 `tool_result` 降级为文本、丢弃无人应答的 `tool_use`；为空或不出现表示请求本身合法。指向客户端 bug |
@@ -558,7 +574,7 @@ Chat / Responses 的 `code` 是错误种类字符串（如 `"invalid_request"`�
 
 实时环元素（`GET /admin/live`）。是 `RequestSummary` 的子集：为速度省略了 `tried_ids`、`error_message`、`usage_estimated`、`cache_read_tokens`、`sanitized`、`lossy`，其余同名字段含义一致：
 
-`request_id`、`at`、`inbound_protocol`、`outbound_protocol`、`user_model`、`model_id`、`account`、`outcome`、`status_code`、`attempts`、`stream`、`latency_ms`、`first_token_ms`、`input_tokens`、`output_tokens`、`error_code`。
+`request_id`、`at`、`inbound_protocol`、`outbound_protocol`、`user_model`、`model_id`、`account`、`outcome`、`status_code`、`attempts`、`stream`、`latency_ms`、`first_token_ms`、`dispatch_ms`、`upstream_ms`、`input_tokens`、`output_tokens`、`error_code`。
 
 要看全量字段与 `tried_ids` 链，走 `GET /admin/requests/{request_id}`。
 
@@ -656,7 +672,15 @@ curl -s $BASE/health
   "cache": "ok",
   "relay": "ok",
   "outbox_pending": 0,
-  "outbox_dead": 0
+  "outbox_dead": 0,
+  "pool": {
+    "acquired": 1,
+    "idle": 3,
+    "total": 4,
+    "max": 8,
+    "acquire_waiting": 0
+  },
+  "goroutines": 37
 }
 ```
 
@@ -1549,6 +1573,48 @@ Gemini 的 `finishMessage`（上游随 `finishReason` 附的人类可读原因�
 - **流已经开始之后（committed）读流失败不做连接层归因**，仍归 `upstream`。此时目标已锁定、客户端已收到部分内容，换目标会拼出两段回答——归因再准也无处可用。
 - 与 `context_exceeded` 一样零变更，但**是独立的分类**：一个是「请求太大」、一个是「本服务的连接坏了」，合成一类运维就在流水里分不开这两种故障。
 
+### 6.10 依赖饱和度与时延分段
+
+两件事回答的是同一个问题：**故障发生了，故障在谁身上。**
+
+#### 时延的三段读法
+
+流水里三个时延字段构成一个可做减法的分解：
+
+| 读法 | 含义 |
+|---|---|
+| `dispatch_ms` | 问调度层要目标花了多久 |
+| `upstream_ms` | 发出请求到**上游响应头到达**花了多久 |
+| `latency_ms - dispatch_ms - upstream_ms` | 本服务自身的处理 + 上游的生成时间 |
+
+回答「慢在上游还是慢在我们」不需要额外字段，做这个减法就够。`first_token_ms` 与 `upstream_ms` 的差则是上游拿到请求之后到吐出第一个可解码帧之间的思考时间。
+
+**两段都只切跨进程边界。** 编码、`Sanitize`、参数覆盖都是纯 CPU，在总耗时里占不到毫秒级，给它们各记一列只会让表变宽而没有任何一次排查会用到。
+
+**两段在换目标重试时累加，不是覆盖。** 这与 `lossy` 的覆盖语义刻意相反：`lossy` 描述「最终发出去的那次编码丢了什么」，上一个目标的丢弃项描述的是一条没被采用的路径；而时延描述「客户端等了多久」，客户端确实等了全部尝试的时间。只记最后一次，「三次重试各 20 秒」会显示成一次 20 秒的请求，而那正是最需要被看见的那种慢。
+
+**`upstream_ms` 的终点是响应头到达，不是首帧解码出来。** 首帧里含上游的思考时间，那是生成成本不是连接成本；而响应头这一刻正是 `MSA_RESPONSE_HEADER_TIMEOUT`（见 [6.7](#67-出站连接层)）约束的那一刻。两者对齐，`upstream_ms` 逼近那个阈值就知道该调哪个参数。
+
+不变式：`dispatch_ms + upstream_ms <= latency_ms`。
+
+#### 连接池饱和度
+
+`/health` 的 `pool` 是**整个服务都慢、而每条流水看上去都正常**时唯一能看的地方——慢的那段在等一条数据库连接上，而那段不在任何一条请求的计时里。
+
+- **现取，不采样。** `Stat()` 是读内存计数器、没有 IO，所以不起后台 goroutine 定时采样：那只会换来一个过时的数字，而调 `/health` 就是想知道此刻的饱和度。
+- **`acquire_waiting` 是累计次数，不是排队长度。** pgxpool 没有暴露瞬时排队数。累计值反而更好用——它单调递增，两次取样做差就知道这段时间有没有人等过连接；瞬时值在轮询间隙里等过又等到了会完全看不见。
+- **PG 不可用时 `pool` 整体缺省。** 包括「池已被关闭」这一支：那时 `Stat()` 仍会返回最后一刻的残留数字，报出去会让运维以为池还活着。
+- `goroutines` 只作原始数字暴露，不设阈值告警：本服务没有告警设施。
+
+#### 明确不做
+
+- **不引入 Prometheus / OpenTelemetry。** 四个参考仓库（cc-switch、new-api、sub2api、kiro-gateway）**无一使用**，跳过它不是落后于这个同行群体。
+- **不做 sub2api 的四段划分**（auth / routing / upstream / response，`migrations/033_ops_monitoring_vnext.sql:117-122`）：本服务的入站鉴权是**转发**给调度层做的，没有一段独立的 auth 耗时可计；response 段与生成时间在 SSE 下不可分。
+- **不加 `error_owner` / `is_business_limited`**：本服务已有 `error_code` 与 `outcome` 两维足以定位，而 SLA 口径的计算面在调度层。
+- **不存请求体 / 响应体**。sub2api 自己把错误表里的 `request_body JSONB` 删掉了（`136_remove_ops_retry_replay.sql:8-11`），代价太高。
+- **不做 per-attempt 逐次快照**（每次尝试的绝对时刻、上游 URL、上游 request-id）：本轮两段是累计值；逐次明细要另建表。
+- **不用 `context.WithValue` 传计时器**：两段的累加点都在能直接拿到流水记录的函数里，走 ctx 是把编译期可见的数据流变成运行期的类型断言。
+
 ---
 
 ## 7. 管理面
@@ -1625,6 +1691,8 @@ curl -s "$BASE/admin/requests?user_model=demo-pool&limit=1" \
       "output_tokens": 0,
       "latency_ms": 812,
       "first_token_ms": 0,
+      "dispatch_ms": 12,
+      "upstream_ms": 795,
       "error_code": "not_found",
       "error_message": "upstream returned 404"
     }
@@ -1677,7 +1745,9 @@ curl -s "$BASE/admin/requests/req_fcb7839ac6c6cb8810820d35" \
   "input_tokens": 120,
   "output_tokens": 340,
   "latency_ms": 1520,
-  "first_token_ms": 230
+  "first_token_ms": 230,
+  "dispatch_ms": 9,
+  "upstream_ms": 115
 }
 ```
 
@@ -1731,6 +1801,8 @@ curl -s "$BASE/admin/live?limit=2" -H "Authorization: Bearer $MSA_ADMIN_KEY"
       "stream": true,
       "latency_ms": 8,
       "first_token_ms": 0,
+      "dispatch_ms": 3,
+      "upstream_ms": 4,
       "error_code": "authentication"
     }
   ],
@@ -1973,6 +2045,7 @@ curl -s "http://127.0.0.1:8082/admin/stats?window=1h"   -H "Authorization: Beare
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| 2.10 | 2026-09-19 | 时延分段归因与依赖饱和度首次成文（[6.10](#610-依赖饱和度与时延分段)）：流水新增 `dispatch_ms`、`upstream_ms` 两列（累计值，含全部重试），`/health` 与 `/admin/health` 新增 `pool`（五个数）与 `goroutines`。**行为变更**：此前 `latency_ms` 是一个不可拆的总数，一个 30 秒的请求分不清是调度层要目标要了很久、上游压着响应头不发、还是生成本来就长；`/health` 只对 PG 做 `Ping` 报 `ok`/`down`，连接池被占满时每个请求都慢而**每一条流水看上去都正常**——慢的那段在等连接上，那段不在任何一条请求的计时里。`upstream_ms` 的终点选在响应头到达而不是首帧，与 `MSA_RESPONSE_HEADER_TIMEOUT` 对齐；两段在重试时累加而非覆盖（与 `lossy` 的覆盖语义刻意相反）。**明确不做**：不引入 Prometheus/OpenTelemetry（四个参考仓库无一使用）；不做 sub2api 的 auth/routing/upstream/response 四段划分（本服务的入站鉴权是转发给调度层做的，没有独立的 auth 段；response 段与生成时间在 SSE 下不可分）；不加 `error_owner`/`is_business_limited`（SLA 口径的计算面在调度层）；不存请求体/响应体（sub2api 自己已把错误表里的 `request_body` 删掉）；不做 per-attempt 逐次快照（需另建表）；不起后台 goroutine 采样池指标（换来的是过时数字）；不给 `goroutines` 设阈值告警（本服务没有告警设施） |
 | 2.9 | 2026-09-19 | 死连接探测与连接层归因首次成文（[6.9](#69-死连接探测与连接层归因)）：出站 transport 配 HTTP/2 PING 健康检查（`MSA_H2_SEND_PING_TIMEOUT`、`MSA_H2_PING_TIMEOUT`，默认各 15s），新增 `transport` 错误分类（502）与同名结果上报类别，该类别**不计入目标的失败计数**、调度层运行态零变更。**行为变更**：此前所有 `Do` 失败一律归 `upstream`，经 `retrying` 累计到目标的失败计数上——一条静默半开的连接会把一个完全健康的账号推向冷却；且没有主动探测，撞上死连接的请求只能等 120s 的响应头超时，那对一次尝试是整个重试预算（本机探针实测：不配 PING 时挂到 20s ctx 超时都不失败，配了 4s 内明确失败）。**明确不做**：HTTP/1.1 正常关闭不加重放（标准库已自动换连接重放，实测确认）；不自定义 `DialContext` 设 `KeepAlive`（`DefaultTransport` 的 Dialer 已带 30s，重写还会丢掉标准库后续的默认调整）；不做 per-origin 分片 transport（PING 是直接摘掉死连接，分片只缩小爆炸半径）；连接层失败不在同一目标上就地重试（换目标已能恢复，真正的收益是不记这个目标的失败）；committed 之后读流失败仍归 `upstream`（客户端已收到部分内容，换目标会拼出两段回答） |
 | 2.8 | 2026-09-19 | 上游限流到期时刻首次成文（[6.8](#68-上游限流的到期时刻)）：从六类限流响应头与 Gemini 的 `google.rpc.RetryInfo` 解出「最早可以再来」的绝对时刻，随结果上报交给调度层精确冷却，并落进请求流水的 `retry_after` 列。**行为变更**：此前 `resp.Header` 在错误路径上被整体丢弃（全仓唯一读过上游响应头的地方是判 SSE 的 `Content-Type`），限流与普通上游错、超时同为 `retrying` 一档，调度层只能按失败计数累积后冷却一个固定时长——上游说「5 小时后再来」时我们一分钟后就又去撞，在整个限流窗口里反复空转，而每次空转都是一次真实的失败上报。`DecodeError` 签名因此从 `(status, body)` 改为 `(status, header, body)`（改签名而非加可选接口：限流头是 HTTP 层的，四个协议全都可能收到，漏一个就是缺口）。**明确不做**：不在数据面为同一目标睡等退避（数据面睡等会占住入站连接）；不做账号级或 (账号,模型) 级限流（账号身份在 upstream 侧，数据面看不到）；不做 `x-ratelimit-remaining-*` 的预测性避让（需要跨请求窗口状态，那是调度层的职责）；不从错误文案里抠 `"try again in 1.5s"` 这类说法（文案一改就静默失效，而失效方向是又开始瞎猜） |
 | 2.7 | 2026-09-19 | 响应侧调参保真：`service_tier` 首次原样回显（Chat Completions 顶层、Responses 的 `response` 对象；`created` 与 `completed` 两帧任一带上都认），Anthropic 出站无此位时报 `dropped service_tier from the response`；上游回多路候选而中立表示只装得下一路时报出**实际丢弃路数**（`dropped N extra response candidate(s)`，一个流恒一条），该数字可与 `usage.output_tokens` 对账；Gemini 的 `finishMessage` 原文作为说明保留（截断 200 字节，**不改写 `stop_reason`**，枚举仍只由 `finishReason` 决定）。新增第三类说明措辞 `forwarded X but the result is not returned`——与 `dropped`（换个目标就有）、`filled in`（本服务补的值）区分开，它表示换谁都拿不到。`n` 与 `logprobs` 的请求侧/响应侧分工成文（[6.4](#64-跨协议能力差异)「调参的请求侧与响应侧分工」）。**绝不拿请求里的 `service_tier` 兜底**：点 `flex` 拿到 `default` 是被降档，兜底会把降档伪装成按要求执行，而这一维决定计费。**明确不做**（五项理由成文，见 [6.4](#64-跨协议能力差异)「响应侧明确不做的维度」）：响应 `logprobs`、`system_fingerprint`、Gemini 的 grounding/citation、`safetyRatings`、`text.format` 与 `truncation` 回显 |

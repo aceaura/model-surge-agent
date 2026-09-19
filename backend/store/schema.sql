@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS request_log (
   cache_read_tokens BIGINT NOT NULL DEFAULT 0,
   latency_ms        INT NOT NULL DEFAULT 0,
   first_token_ms    INT NOT NULL DEFAULT 0,
+  -- 两段跨进程耗时的累计值（含全部重试）。latency_ms 减去两段
+  -- 即「本服务自身 + 上游生成」，据此回答慢在上游还是慢在我们。
+  dispatch_ms       INT NOT NULL DEFAULT 0,
+  upstream_ms       INT NOT NULL DEFAULT 0,
   error_code        TEXT NOT NULL DEFAULT '',
   error_message     TEXT NOT NULL DEFAULT '',
   sanitized         JSONB NOT NULL DEFAULT '[]',
@@ -35,6 +39,8 @@ ALTER TABLE request_log ADD COLUMN IF NOT EXISTS sanitized JSONB NOT NULL DEFAUL
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS lossy JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS path TEXT NOT NULL DEFAULT '';
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS retry_after TIMESTAMPTZ;
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS dispatch_ms INT NOT NULL DEFAULT 0;
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS upstream_ms INT NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS request_log_at_idx ON request_log(at DESC);
 CREATE INDEX IF NOT EXISTS request_log_model_idx ON request_log(model_id, at DESC);

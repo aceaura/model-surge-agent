@@ -60,8 +60,22 @@ type Record struct {
 	Usage            relayclient.Usage
 	LatencyMS        int
 	FirstTokenMS     int
-	ErrorCode        string
-	ErrorMessage     string
+	// DispatchMS 是问调度层要目标的累计耗时，UpstreamMS 是发出上游请求到
+	// 响应头到达的累计耗时。两段都只切跨进程边界：进程内的编码与 sanitize
+	// 是纯 CPU，给它们各记一列只会让表变宽而没有一次排查会用到。
+	//
+	// 换目标重试时累加而非覆盖，与 Lossy 的覆盖语义刻意相反：Lossy 描述
+	// 最终发出去的那次编码，而时延描述客户端等了多久——客户端确实等了
+	// 全部尝试的时间。只记最后一次会让「三次重试各 20 秒」看起来像一次
+	// 20 秒的请求，而那正是最需要被看见的那种慢。
+	//
+	// 不变式：DispatchMS + UpstreamMS <= LatencyMS。
+	// LatencyMS 减去两段即「本服务自身 + 上游生成」，据此回答
+	// 「慢在上游还是慢在我们」，不需要再加字段。
+	DispatchMS   int
+	UpstreamMS   int
+	ErrorCode    string
+	ErrorMessage string
 	// RetryAfter 是上游明示的该目标最早可重试时刻，零值表示上游没说。
 	// 落库供事后回答「那次为什么换了目标」。
 	RetryAfter time.Time
@@ -177,6 +191,7 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 		rec.Attempts = attempt + 1
 		rec.TriedIDs = tried
 
+		dispatchStart := p.now()
 		disp, err := p.Dispatch.Dispatch(ctx, relayclient.DispatchRequest{
 			Model:           call.UserModel,
 			InboundProtocol: call.Protocol,
@@ -185,6 +200,9 @@ func (p *Pipeline) Serve(ctx context.Context, w http.ResponseWriter, call Call) 
 			TriedIDs:        tried,
 			EstTokens:       est,
 		})
+		// 累加在判错之前：失败的那次要目标同样花了时间，而「调度层超时后
+		// 才报错」正是要看见的形态，记到 err 分支之后就会漏掉它。
+		rec.DispatchMS += msSince(dispatchStart, p.now())
 		if err != nil {
 			// 调度层没给出目标，没有 model_id 可上报，只能回错。
 			lastErr = dispatchError(err)
@@ -289,7 +307,7 @@ func (p *Pipeline) attempt(ctx context.Context, w http.ResponseWriter, call Call
 		}
 	}
 
-	stream, irErr := p.open(ctx, outbound, target, body, call.Declarations)
+	stream, irErr := p.open(ctx, outbound, target, body, call.Declarations, rec)
 	if irErr != nil {
 		return outcomeFor(irErr), attemptResult{err: irErr}
 	}
