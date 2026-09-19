@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aceaura/model-surge-agent/backend/relayclient"
+	"github.com/aceaura/model-surge-agent/backend/textsafe"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -188,9 +189,12 @@ func scanEntry(row scanner) (Entry, error) {
 	return e, nil
 }
 
+// truncate 限长并保证结果能写进 TEXT 列。
+//
+// last_error 的来源是上游/调度层的响应字节，按字节切会切在多字节字符中间，
+// 而 PG 对非法序列直接拒收整行——这一列存在的意义就是记下那次失败，
+// 因为写不进去而丢掉它是最坏的结果。净化与收边界都要做：前者管上游本来就
+// 发的坏字节，后者管我们切出来的。
 func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max]
+	return textsafe.Truncate(textsafe.Clean(s), max)
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aceaura/model-surge-agent/backend/pipeline"
+	"github.com/aceaura/model-surge-agent/backend/textsafe"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -70,7 +71,8 @@ func (l *RequestLog) Insert(ctx context.Context, rec pipeline.Record) error {
 		rec.ModelID, rec.Account, rec.Outcome, rec.StatusCode, rec.Attempts, tried,
 		rec.Committed, rec.Stream, rec.UsageEstimated,
 		rec.Usage.InputTokens, rec.Usage.OutputTokens, rec.Usage.CacheReadTokens,
-		rec.LatencyMS, rec.FirstTokenMS, rec.ErrorCode, rec.ErrorMessage, sanitized, lossy,
+		rec.LatencyMS, rec.FirstTokenMS,
+		textsafe.Clean(rec.ErrorCode), textsafe.Clean(rec.ErrorMessage), sanitized, lossy,
 		zeroTimeAsNull(rec.RetryAfter), rec.DispatchMS, rec.UpstreamMS, trail)
 	return err
 }

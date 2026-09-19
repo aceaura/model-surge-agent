@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/aceaura/model-surge-agent/backend/ir"
+	"github.com/aceaura/model-surge-agent/backend/textsafe"
 )
 
 // foreignSigPrefixes 是别家协议的推理密文特征前缀。
@@ -382,7 +383,7 @@ const maxFinishDetail = 200
 // 策略），砍掉只剩「有个细节丢了」等于没说。
 func FinishDetailNote(detail string) string {
 	if len(detail) > maxFinishDetail {
-		detail = detail[:maxFinishDetail] + "..."
+		detail = textsafe.Truncate(detail, maxFinishDetail) + "..."
 	}
 	return "dropped the upstream finish detail: " + detail
 }

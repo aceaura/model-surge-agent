@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/aceaura/model-surge-agent/backend/textsafe"
 )
 
 type Client struct {
@@ -141,9 +143,5 @@ func codeForStatus(status int) string {
 
 func snippet(raw []byte) string {
 	const maxLen = 256
-	s := strings.TrimSpace(string(raw))
-	if len(s) > maxLen {
-		return s[:maxLen]
-	}
-	return s
+	return textsafe.Truncate(strings.TrimSpace(string(raw)), maxLen)
 }

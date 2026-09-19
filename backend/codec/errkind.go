@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/aceaura/model-surge-agent/backend/ir"
+	"github.com/aceaura/model-surge-agent/backend/textsafe"
 )
 
 // KindForStatus 按 HTTP 状态码归类错误，并对 400 额外看消息内容：
@@ -150,10 +151,8 @@ func StatusMessage(status int, body []byte) string {
 	if text == "" {
 		return fmt.Sprintf("upstream returned %d", status)
 	}
-	if len(text) > maxLen {
-		text = text[:maxLen]
-	}
-	return fmt.Sprintf("upstream returned %d: %s", status, text)
+	return fmt.Sprintf("upstream returned %d: %s", status,
+		textsafe.Truncate(text, maxLen))
 }
 
 // StatusForKind 是 KindForStatus 的反向映射，供入站 codec 决定响应状态码。

@@ -10,8 +10,11 @@
 package paramover
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 )
 
 // Apply 依次作用 defaults 与 overrides，返回新的请求体。
@@ -48,11 +51,29 @@ func Apply(body, defaults, overrides json.RawMessage) (json.RawMessage, error) {
 	applyDefaults(root, def)
 	applyOverrides(root, over)
 
-	out, err := json.Marshal(root)
+	out, err := encodeObject(root)
 	if err != nil {
-		return nil, fmt.Errorf("paramover: encode merged body: %w", err)
+		return nil, err
 	}
 	return out, nil
+}
+
+// encodeObject 把合并后的对象编回请求体字节。
+//
+// 关掉 HTML 转义：默认开着的话 prompt 里的 `<`、`>`、`&` 会变成
+// `\u003c` 这类六字节转义，语义不变但字节变了——而本服务有两处按字节办事的
+// 东西（请求体字节预算、转换四体捕获），同一个请求配了 overrides 与没配，
+// 量出来的数就不一样。
+//
+// Encoder 会在末尾追加换行，必须去掉：这个返回值是要当请求体发出去的。
+func encodeObject(obj map[string]any) (json.RawMessage, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(obj); err != nil {
+		return nil, fmt.Errorf("paramover: encode merged body: %w", err)
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
 // applyDefaults 只填空缺。键已存在且两侧都是 object 时递归下钻，
@@ -92,13 +113,28 @@ func applyOverrides(dst, src map[string]any) {
 	}
 }
 
+// decodeObject 解出一个 JSON 对象，数字保持原始字面。
+//
+// UseNumber 让数字停在 json.Number（就是原始字面字符串）而不经过 float64。
+// 不开的话 seed 这类大整数会被静默改写：13835058055282163712 出去变成
+// 13835058055282164000，上游按另一个种子生成，而请求 200、流水正常、
+// 有损诊断为空——只有配了 defaults/overrides 的目标会这样。
+//
+// Decoder 比 json.Unmarshal 宽松：读完第一个文档就返回，`{"a":1} {"b":2}`
+// 会被当成 `{"a":1}`。所以后面要显式确认没有尾随文档，否则这次改动会顺手
+// 放宽一个原本守住的边界。
 func decodeObject(raw json.RawMessage, what string) (map[string]any, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var obj map[string]any
-	if err := json.Unmarshal(raw, &obj); err != nil {
+	if err := dec.Decode(&obj); err != nil {
 		return nil, fmt.Errorf("paramover: %s must be a json object: %w", what, err)
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("paramover: %s must be a single json object", what)
 	}
 	return obj, nil
 }
