@@ -439,9 +439,15 @@ func flush(w http.ResponseWriter) {
 
 func usageOf(agg *ir.Aggregator) relayclient.Usage {
 	u := agg.Response().Usage
+	// 这里必须搬全 ir.Usage 的每一位。漏一位的症状是客户端收到了那个数字而
+	// 流水与调度层记零，两边对账差额随该维度的使用率放大，而所有测试都绿。
+	// usageOf 的完整性由 pipeline 包内一条「字段数」断言顶住（ir.Usage 加第六位
+	// 时那条会红，逼着人回到这里）。
 	return relayclient.Usage{
-		InputTokens:     u.InputTokens,
-		OutputTokens:    u.OutputTokens,
-		CacheReadTokens: u.CacheReadTokens,
+		InputTokens:      u.InputTokens,
+		OutputTokens:     u.OutputTokens,
+		CacheReadTokens:  u.CacheReadTokens,
+		CacheWriteTokens: u.CacheWriteTokens,
+		ReasoningTokens:  u.ReasoningTokens,
 	}
 }

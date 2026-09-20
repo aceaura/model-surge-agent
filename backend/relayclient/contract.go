@@ -113,6 +113,17 @@ type Usage struct {
 	InputTokens     int64 `json:"input_tokens,omitempty"`
 	OutputTokens    int64 `json:"output_tokens,omitempty"`
 	CacheReadTokens int64 `json:"cache_read_tokens,omitempty"`
+	// CacheWriteTokens 与 ReasoningTokens 与 ir.Usage 同名同义。
+	//
+	// 两位都必须过这条边界：客户端那侧确实收到了它们（anthropic 出站把缓存写入
+	// 填进 cache_creation_input_tokens），所以「上报里没有」不是「上游没给」，
+	// 而是本服务把算出来的数字在跨进程时丢了一半，两边对账永久差额。
+	//
+	// 调度层的 runstate 仍只累计前三位：缓存写入与推理的单价与输入输出不同，
+	// 直接加进同一组累计列等于用错的权重记账，而加权需要定价模型（在 upstream
+	// 配置中心）。这里如实交出去，让将来做分档定价时数据已经在库里。
+	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens  int64 `json:"reasoning_tokens,omitempty"`
 }
 
 // Outcome 决定调度层如何更新运行态，语义由 relay 的 runstate 定义。

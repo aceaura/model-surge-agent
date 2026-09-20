@@ -75,8 +75,12 @@ type RequestSummary struct {
 	InputTokens      int64    `json:"input_tokens,omitempty"`
 	OutputTokens     int64    `json:"output_tokens,omitempty"`
 	CacheReadTokens  int64    `json:"cache_read_tokens,omitempty"`
-	LatencyMS        int      `json:"latency_ms,omitempty"`
-	FirstTokenMS     int      `json:"first_token_ms,omitempty"`
+	// CacheWriteTokens 与 ReasoningTokens 与 ir.Usage 同名同义。客户端那侧本来
+	// 就收到这两位，管理面不暴露会让排查成本问题的人以为上游没给。
+	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens  int64 `json:"reasoning_tokens,omitempty"`
+	LatencyMS        int   `json:"latency_ms,omitempty"`
+	FirstTokenMS     int   `json:"first_token_ms,omitempty"`
 	// DispatchMS、UpstreamMS 是两段跨进程耗时的累计值（含全部重试）。
 	// latency_ms 减去两段即「本服务自身 + 上游生成」。
 	DispatchMS   int    `json:"dispatch_ms,omitempty"`

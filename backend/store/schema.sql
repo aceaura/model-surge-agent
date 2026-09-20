@@ -20,6 +20,10 @@ CREATE TABLE IF NOT EXISTS request_log (
   input_tokens      BIGINT NOT NULL DEFAULT 0,
   output_tokens     BIGINT NOT NULL DEFAULT 0,
   cache_read_tokens BIGINT NOT NULL DEFAULT 0,
+  -- 缓存写入与推理消耗：客户端那侧本来就收到这两位，这里不落库会让流水
+  -- 与客户端看到的账不一致，而差额随 prompt caching 使用率放大。
+  cache_write_tokens BIGINT NOT NULL DEFAULT 0,
+  reasoning_tokens   BIGINT NOT NULL DEFAULT 0,
   latency_ms        INT NOT NULL DEFAULT 0,
   first_token_ms    INT NOT NULL DEFAULT 0,
   -- 两段跨进程耗时的累计值（含全部重试）。latency_ms 减去两段
@@ -45,6 +49,8 @@ ALTER TABLE request_log ADD COLUMN IF NOT EXISTS retry_after TIMESTAMPTZ;
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS dispatch_ms INT NOT NULL DEFAULT 0;
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS upstream_ms INT NOT NULL DEFAULT 0;
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS attempts_trail JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS cache_write_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS reasoning_tokens BIGINT NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS request_log_at_idx ON request_log(at DESC);
 CREATE INDEX IF NOT EXISTS request_log_model_idx ON request_log(model_id, at DESC);

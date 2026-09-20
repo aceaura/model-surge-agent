@@ -305,6 +305,8 @@ func summaryOf(rec pipeline.Record) agentv1.RequestSummary {
 		InputTokens:      rec.Usage.InputTokens,
 		OutputTokens:     rec.Usage.OutputTokens,
 		CacheReadTokens:  rec.Usage.CacheReadTokens,
+		CacheWriteTokens: rec.Usage.CacheWriteTokens,
+		ReasoningTokens:  rec.Usage.ReasoningTokens,
 		LatencyMS:        rec.LatencyMS,
 		FirstTokenMS:     rec.FirstTokenMS,
 		DispatchMS:       rec.DispatchMS,

@@ -19,6 +19,21 @@ func TestLiveEntryWireKeys(t *testing.T) {
 		map[string]float64{"dispatch_ms": 1, "upstream_ms": 2, "latency_ms": 3})
 }
 
+// 五位用量的键名。
+//
+// 缓存写入与推理这两位客户端本来就收到（anthropic 出站把前者填进
+// cache_creation_input_tokens），管理面这两列空着会让排查成本问题的人以为
+// 上游没给。改 tag 在仓内自洽，只有这条钉字面量的测试会红。
+func TestRequestUsageWireKeys(t *testing.T) {
+	assertKeys(t, RequestSummary{
+		InputTokens: 1, OutputTokens: 2, CacheReadTokens: 3,
+		CacheWriteTokens: 4, ReasoningTokens: 5,
+	}, map[string]float64{
+		"input_tokens": 1, "output_tokens": 2, "cache_read_tokens": 3,
+		"cache_write_tokens": 4, "reasoning_tokens": 5,
+	})
+}
+
 func TestPoolStatsWireKeys(t *testing.T) {
 	assertKeys(t, PoolStats{Acquired: 1, Idle: 2, Total: 3, Max: 4, AcquireWaiting: 5},
 		map[string]float64{

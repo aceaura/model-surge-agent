@@ -272,11 +272,33 @@ func splitDataURI(url string) (media, data string, ok bool) {
 	if !found {
 		return "", "", false
 	}
-	media, encoding, found := strings.Cut(head, ";")
-	if !found || encoding != "base64" {
+	media, ok = dataURIMediaType(head)
+	if !ok {
 		return "", "", false
 	}
 	return media, payload, true
+}
+
+// dataURIMediaType 从 data URI 的头部取出 media type，并确认载荷是 base64。
+//
+// 参数列表可以有任意多项（RFC 2397 的 charset 之外实测还有别的），base64 恒在末位。
+// 只切第一个分号的话，合法的 image/png;charset=utf-8;base64 会拿到
+// "charset=utf-8;base64" 去比 "base64"，比不上，于是整段内联图片被当成远程 URL
+// 塞进 Media.URL——上游去拉一个几百 KB 的伪链接，或者被降级成文本。
+//
+// 中间那些参数描述的是文本编码，对 base64 载荷无意义，丢掉不损失什么，所以不报有损。
+func dataURIMediaType(head string) (string, bool) {
+	i := strings.LastIndex(head, ";")
+	// i < 0 覆盖 data:base64,xxx 这种形态：那个 base64 占的是 media type 位，
+	// 载荷并不是 base64，认下来会让出站编出一份上游解不开的载荷。
+	if i < 0 || !strings.EqualFold(head[i+1:], "base64") {
+		return "", false
+	}
+	// media type 可能为空（data:;base64,...），交给 SniffMediaType 去猜。
+	if j := strings.Index(head, ";"); j >= 0 {
+		return head[:j], true
+	}
+	return head, true
 }
 
 func decodeStop(raw json.RawMessage) ([]string, error) {

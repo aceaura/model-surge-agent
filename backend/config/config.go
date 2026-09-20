@@ -128,6 +128,24 @@ func Load() (Config, error) {
 	c.IdleTimeout = durationOr(&errs, "MSA_IDLE_TIMEOUT", 120*time.Second)
 	// 负值表示显式关闭保活，所以这里不做 > 0 校验。
 	c.HeartbeatInterval = durationOr(&errs, "MSA_HEARTBEAT_INTERVAL", 15*time.Second)
+	// 心跳只在流式读循环里发，比两个流超时还长的间隔意味着一个心跳都发不出——
+	// 请求先被超时掐断。那是「配了保活却等于没配」，而运维完全看不出来，
+	// 所以拒绝启动而不是打个警告。
+	//
+	// 取两者较小的那个：空闲超时比心跳还短时，静默期里同样一个都发不出。
+	// 用 >= 而不是 >：恰好相等时谁先到取决于调度，这种配置没有存在的理由。
+	if c.HeartbeatInterval > 0 {
+		minTimeout := c.FirstTokenTimeout
+		if c.IdleTimeout < minTimeout {
+			minTimeout = c.IdleTimeout
+		}
+		if c.HeartbeatInterval >= minTimeout {
+			fail("MSA_HEARTBEAT_INTERVAL (%s) must be shorter than both "+
+				"MSA_FIRST_TOKEN_TIMEOUT (%s) and MSA_IDLE_TIMEOUT (%s); "+
+				"otherwise no heartbeat is ever sent and the keepalive is silently off",
+				c.HeartbeatInterval, c.FirstTokenTimeout, c.IdleTimeout)
+		}
+	}
 	c.MaxRequestDuration = durationOr(&errs, "MSA_MAX_REQUEST_DURATION", 0)
 	if c.MaxRequestDuration < 0 {
 		fail("MSA_MAX_REQUEST_DURATION must not be negative; use 0 to disable the limit")
