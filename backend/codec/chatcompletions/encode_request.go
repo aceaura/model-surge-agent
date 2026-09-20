@@ -123,7 +123,7 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 		plain    []ir.Block
 		toolMsgs []wireMessage
 		calls    []wireToolCall
-		thinking string
+		thinking strings.Builder
 	)
 	for _, b := range m.Content {
 		switch b.Type {
@@ -164,7 +164,7 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 			})
 		case ir.BlockThinking:
 			if b.Thinking != nil {
-				thinking += b.Thinking.Text
+				thinking.WriteString(b.Thinking.Text)
 			}
 		default:
 			plain = append(plain, b)
@@ -175,10 +175,10 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 	// 而 IR 把工具结果放在 user 消息里，所以先发它们。
 	out = append(out, toolMsgs...)
 
-	if len(plain) == 0 && len(calls) == 0 && thinking == "" {
+	if len(plain) == 0 && len(calls) == 0 && thinking.Len() == 0 {
 		return out, nil
 	}
-	msg := wireMessage{Role: string(m.Role), ToolCalls: calls, ReasoningContent: thinking}
+	msg := wireMessage{Role: string(m.Role), ToolCalls: calls, ReasoningContent: thinking.String()}
 	if len(plain) > 0 {
 		content, err := encodeContent(plain)
 		if err != nil {
@@ -200,11 +200,11 @@ func encodeContent(blocks []ir.Block) (json.RawMessage, error) {
 		}
 	}
 	if onlyText {
-		var text string
+		var text strings.Builder
 		for _, b := range blocks {
-			text += b.Text
+			text.WriteString(b.Text)
 		}
-		return json.Marshal(text)
+		return json.Marshal(text.String())
 	}
 
 	parts := make([]wirePart, 0, len(blocks))

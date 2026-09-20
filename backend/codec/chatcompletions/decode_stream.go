@@ -59,11 +59,13 @@ type streamDecoder struct {
 // 而各家实现给这两个字段的时机不同——有的首片就全给，有的先发几片
 // arguments 才补上 name。宣告前把 arguments 攒在 pending 里，
 // 等 id 与 name 都到齐再一次性放出。
+// 用 Builder 而不是往字符串上 += ：分片数由上游决定，而 += 每片一次全量
+// 重分配。同一条理由见 ir 聚合器的 acc。
 type toolSlot struct {
 	index     int
 	id        string
 	name      string
-	pending   string
+	pending   strings.Builder
 	announced bool
 }
 
@@ -175,12 +177,25 @@ func (d *streamDecoder) decodeDelta(delta wireMessage) ([]ir.Event, error) {
 		}
 	}
 
-	out = append(out, d.decodeToolCalls(delta.ToolCalls)...)
+	calls, err := d.decodeToolCalls(delta.ToolCalls)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, calls...)
 	return out, nil
 }
 
+// maxToolSlots 是一次响应里工具调用槽位数的上限。
+//
+// 槽位按上游给的 index 与 id 建键，两者都不校验，于是上游一个跳号 bug 会变成
+// 本服务的内存增长。真实响应的并行调用数是「个」到「几十个」的量级。
+//
+// 与聚合器的块数上限同值但各包一份常量：让 codec 去 import ir 的未导出常量做
+// 不到，而导出它会把一个内部判据变成跨包契约。
+const maxToolSlots = 4096
+
 // decodeToolCalls 累积工具调用分片。
-func (d *streamDecoder) decodeToolCalls(calls []wireToolCall) []ir.Event {
+func (d *streamDecoder) decodeToolCalls(calls []wireToolCall) ([]ir.Event, error) {
 	var out []ir.Event
 	for i, tc := range calls {
 		// index 是本协议拼回分片的唯一依据；缺失时退回数组下标。
@@ -213,6 +228,10 @@ func (d *streamDecoder) decodeToolCalls(calls []wireToolCall) []ir.Event {
 			}
 		}
 		if slot == nil {
+			if len(d.toolSlots) >= maxToolSlots {
+				return nil, ir.NewError(ir.ErrUpstream, 0, "",
+					fmt.Sprintf("upstream response exceeds the %d tool call limit", maxToolSlots))
+			}
 			slot = &toolSlot{index: d.allocIndex()}
 			d.toolSlots[n] = slot
 		}
@@ -232,12 +251,12 @@ func (d *streamDecoder) decodeToolCalls(calls []wireToolCall) []ir.Event {
 			}
 			continue
 		}
-		slot.pending += tc.Function.Arguments
+		slot.pending.WriteString(tc.Function.Arguments)
 		if slot.name != "" {
 			out = append(out, d.announce(slot)...)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // announce 发出块开启帧并把缓冲的入参一次性放出。
@@ -255,9 +274,11 @@ func (d *streamDecoder) announce(slot *toolSlot) []ir.Event {
 			Name: slot.name,
 		}},
 	}}
-	if slot.pending != "" {
-		out = append(out, ir.Event{Type: ir.EvToolInput, Index: slot.index, Text: slot.pending})
-		slot.pending = ""
+	if slot.pending.Len() > 0 {
+		out = append(out, ir.Event{
+			Type: ir.EvToolInput, Index: slot.index, Text: slot.pending.String()})
+		// 缓冲已经放出，清掉：这里的语义是「交出所有权」，后续分片重新攒。
+		slot.pending.Reset()
 	}
 	return out
 }
@@ -317,8 +338,9 @@ func (d *streamDecoder) announcePending() []ir.Event {
 			slot.name = unknownToolName
 		}
 		// 残缺入参发出去会让整条历史带上语法错误的 JSON。
-		if !json.Valid([]byte(slot.pending)) {
-			slot.pending = "{}"
+		if !json.Valid([]byte(slot.pending.String())) {
+			slot.pending.Reset()
+			slot.pending.WriteString("{}")
 		}
 		out = append(out, d.announce(slot)...)
 	}

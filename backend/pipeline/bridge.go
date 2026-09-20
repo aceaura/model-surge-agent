@@ -16,6 +16,11 @@ import (
 // 覆盖残缺工具入参与缺签名的未闭合推理块：两者都不能补个闭合帧当成功。
 const incompleteStream = "incomplete_stream"
 
+// responseTooLarge 是撞了聚合器累积闸门的归因码。与 incomplete_stream 分开：
+// 那一个说的是「上游没说完」，这一个说的是「上游说得太多，本服务不再收」，
+// 运维的下一步动作不同。
+const responseTooLarge = "response_too_large"
+
 // bridge 把上游流转成客户端响应。
 //
 // 首帧成功解码之前不动 w：只有确认这个目标真的在出内容，才锁定它。
@@ -140,6 +145,19 @@ func (p *Pipeline) bridge(ctx context.Context, w http.ResponseWriter, call Call,
 					writeStreamHeaders(w)
 				}
 			}
+			// 闸门的检查排在提交处理之后：首帧就撞线时（单帧上限恰好顶到
+			// 累计上限）仍要走完提交流程，否则流式客户端拿到的是一个连响应头
+			// 都没有的断连。finish 已按 committed 分流（未提交→HTTP 错误信封，
+			// 已提交→流内错误帧），这里不必再判一遍。
+			//
+			// 不可重试：换个目标重新生成一遍还是同样的规模，而重试会把这笔
+			// 代价再付一次。
+			if reason := agg.Overflow(); reason != "" {
+				err := ir.NewError(ir.ErrUpstream, 0, responseTooLarge, reason)
+				err.Retryable = false
+				return p.finish(w, call, up, encoder, &agg, committed, tail, err, rec)
+			}
+
 			if ev.Type == ir.EvMessageDelta || ev.Type == ir.EvMessageStop {
 				tail = append(tail, ev)
 				continue
