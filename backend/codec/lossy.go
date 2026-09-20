@@ -512,6 +512,37 @@ func PrefixToolResultError(result *ir.ToolResult, caps Capabilities) []ir.Block 
 // ToolErrorPrefix 供需要拼字符串的调用点取用同一份措辞。
 func ToolErrorPrefix() string { return toolErrorPrefix }
 
+// AdoptToolResultError 在入站解码时把前缀还原成失败标记位。
+//
+// 没有原生失败字段的协议（chat_completions、responses）里，失败态是我们
+// 自己上一轮用 PrefixToolResultError 写进正文的。客户端把整段历史回传后，
+// 若不认这个前缀，标记位读作 false：再路由到 anthropic 或 gemini 时模型被
+// 告知工具调用成功，而正文写着 [tool error] connection refused。多跳还会
+// 把前缀叠成 [tool error] [tool error] …。
+//
+// 剥掉前缀而不是只置位：留着它等于把同一件事说两遍，且下一跳若又落到无
+// 原生字段的协议，PrefixToolResultError 会再加一层。
+//
+// 只认块首那一处：正文中间出现同样的字面量是工具自己打的内容，
+// 改写它会篡改工具输出。
+func AdoptToolResultError(blocks []ir.Block) ([]ir.Block, bool) {
+	if len(blocks) == 0 || blocks[0].Type != ir.BlockText {
+		return blocks, false
+	}
+	if !strings.HasPrefix(blocks[0].Text, toolErrorPrefix) {
+		return blocks, false
+	}
+	out := make([]ir.Block, len(blocks))
+	copy(out, blocks)
+	out[0].Text = strings.TrimPrefix(out[0].Text, toolErrorPrefix)
+	// 前缀独占一块时（PrefixToolResultError 写出的正是这个形态）整块去掉，
+	// 留一个空文本块会让下游协议多出一个无内容的 part。
+	if out[0].Text == "" {
+		out = out[1:]
+	}
+	return out, true
+}
+
 // hasFailedToolResult 判断请求里是否带着失败的工具结果。
 func hasFailedToolResult(req *ir.Request) bool {
 	for _, m := range req.Messages {

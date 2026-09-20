@@ -146,6 +146,17 @@ type Capabilities struct {
 	CacheBreakpoints int
 	// MaxStopSequences 是停止序列数量上限。0 表示无上限。
 	MaxStopSequences int
+	// MaxTemperature 是 temperature 的取值上限。0 表示不设限且跳过检查。
+	//
+	// 这是取值范围维度，与上面那些「能不能承载」的布尔位不同：字段能发，
+	// 但值超出范围就是一个不可重试的 400（换目标也无用）。客户端按 OpenAI
+	// 习惯发 temperature 1.5 是合法入站，被调度到 Anthropic 目标才出问题，
+	// 而客户端无从预知目标协议是哪个——所以必须在出站侧夹紧。
+	//
+	// 当前只有 anthropic 填了 1.0：上游 400 原文为 temperature: range: 0..1。
+	// 其余三个留零值——OpenAI 常说的 2.0 与 Gemini 各维上限都没有实测或
+	// 官方明示的确证，猜出来的上限会把本来能过的请求改坏。
+	MaxTemperature float64
 	// ThinkingExcludesSampling 为真表示开启推理时不得同时发
 	// temperature / top_p，同发会拿到不可重试的 400。
 	ThinkingExcludesSampling bool

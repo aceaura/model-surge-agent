@@ -158,11 +158,15 @@ func appendItem(out *ir.Request, item wireItem) error {
 		if item.Output != "" {
 			content = []ir.Block{{Type: ir.BlockText, Text: item.Output}}
 		}
+		// 本协议没有失败标记字段，失败态是我们出站时写进正文的前缀，
+		// 这里认回来：不认的话换目标重试时模型会把失败当成功。
+		content, isErr := codec.AdoptToolResultError(content)
 		appendBlocks(out, ir.RoleUser, []ir.Block{{
 			Type: ir.BlockToolResult,
 			ToolResult: &ir.ToolResult{
 				ToolUseID: item.CallID,
 				Content:   content,
+				IsError:   isErr,
 			},
 		}})
 		return nil

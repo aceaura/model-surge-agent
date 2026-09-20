@@ -50,7 +50,15 @@ func Sanitize(r *Request) []string {
 // 同样按轮次配对，四个出站都受益于一份交替的历史。
 //
 // 只拼接，不去重也不把块并成一个：两条 user 各说一句话，合并后仍是两个
-// 文本块。并成一个需要决定用什么分隔符，而那个决定会改变模型看到的内容。
+// 文本块。
+//
+// 但两个文本块在边界处要显式插一个空行分隔块：出站编码器的文本拼接是无
+// 分隔的（responses 的 instructions、gemini 的 systemInstruction、
+// chat_completions 的字符串形态 content 都是直接相加），于是「订单号 10086」
+// 与「3 件退货」会粘成「订单号 100863 件退货」，模型算错且全程 200。
+//
+// 分隔符写在这里而不是各编码器里：这处相邻是本函数制造的，而客户端自己
+// 在一条消息里写的多个文本块属于目标协议的语义，不该由我们加料。
 func mergeAdjacentRoles(r *Request) []string {
 	if len(r.Messages) < 2 {
 		return nil
@@ -62,8 +70,11 @@ func mergeAdjacentRoles(r *Request) []string {
 		if last.Role == m.Role {
 			// 先拷再拼：直接 append 可能写进原切片的富余容量，
 			// 而那块内存属于调用方传进来的消息。
-			joined := make([]Block, 0, len(last.Content)+len(m.Content))
+			joined := make([]Block, 0, len(last.Content)+len(m.Content)+1)
 			joined = append(joined, last.Content...)
+			if needsTextSeparator(last.Content, m.Content) {
+				joined = append(joined, Block{Type: BlockText, Text: "\n\n"})
+			}
 			last.Content = append(joined, m.Content...)
 			count++
 			continue
@@ -77,6 +88,33 @@ func mergeAdjacentRoles(r *Request) []string {
 	// 报出合并了几条：排查的人需要知道「我发了 5 条、上游看到 4 条」
 	// 不是丢消息。
 	return []string{fmt.Sprintf("merged %d adjacent same-role message(s)", count)}
+}
+
+// needsTextSeparator 判断合并边界是否需要插一个空行块。
+//
+// 只在「前一条以文本结尾且后一条以文本开头」时插：其余组合（工具结果、
+// 媒体块相邻）在出站编码里各自成块或成条，不会被拼进同一个字符串，
+// 插一个空块反而会在 anthropic 那边多出一个空文本块。
+//
+// 已以空白结尾时不插：客户端自己留了分隔，再加一个空行是改它的排版。
+func needsTextSeparator(prev, next []Block) bool {
+	if len(prev) == 0 || len(next) == 0 {
+		return false
+	}
+	last := prev[len(prev)-1]
+	if last.Type != BlockText || next[0].Type != BlockText {
+		return false
+	}
+	if last.Text == "" || next[0].Text == "" {
+		return false
+	}
+	return !isSpace(last.Text[len(last.Text)-1]) && !isSpace(next[0].Text[0])
+}
+
+// isSpace 只判 ASCII 空白：粘连风险来自紧邻的可见字符，
+// 而多字节空白的末字节不会是这几个值，误判方向是「多插一个空行」而非漏插。
+func isSpace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
 }
 
 // useSite 记录一个 tool_use 块的位置。

@@ -256,16 +256,29 @@ func shapeParams(req *ir.Request, caps Capabilities, c *noteCollector) {
 	//
 	// 排在关掉 thinking 之前：夹后的值可能低于协议下限，那时应当落到关掉
 	// 那一支。反过来先关后夹会漏掉这条路径。
-	if thinkingOn && req.MaxTokens > 0 && req.Thinking.BudgetTokens >= req.MaxTokens {
-		was := req.Thinking.BudgetTokens
-		req.Thinking.BudgetTokens = req.MaxTokens - 1
-		c.rewrite("thinking.budget_tokens", fmt.Sprintf(
-			"%d is not below max_tokens %d, clamped to %d",
-			was, req.MaxTokens, req.Thinking.BudgetTokens))
+	// 取协议的有效上限而非客户端给的那个数：客户端不给 max_tokens 时
+	// 编码器随后会补上 DefaultMaxTokens（anthropic 是 4096），而那一步在
+	// 整形之后。只看 req.MaxTokens 会让「不给 max_tokens + 大 budget」这条
+	// 路径整个逃过夹紧，出站成 max_tokens=4096 / budget=60000，
+	// 拿到上游 400 budget_tokens must be less than max_tokens——
+	// 参数错误不可重试，且归因指向上游而不是我们。
+	effMax, hasMax, err := MaxTokensFor(req.MaxTokens, caps)
+	if err != nil {
+		// 协议要求 max_tokens 却没配默认值，这是配置缺陷而非请求问题。
+		// 整形阶段不报错（本函数只返回说明），留给编码器那一处报同一个错。
+		effMax, hasMax = 0, false
 	}
 
-	if thinkingOn && caps.MinThinkingBudget > 0 && req.MaxTokens > 0 &&
-		req.MaxTokens-1 < caps.MinThinkingBudget {
+	if thinkingOn && hasMax && req.Thinking.BudgetTokens >= effMax {
+		was := req.Thinking.BudgetTokens
+		req.Thinking.BudgetTokens = effMax - 1
+		c.rewrite("thinking.budget_tokens", fmt.Sprintf(
+			"%d is not below max_tokens %d, clamped to %d",
+			was, effMax, req.Thinking.BudgetTokens))
+	}
+
+	if thinkingOn && caps.MinThinkingBudget > 0 && hasMax &&
+		effMax-1 < caps.MinThinkingBudget {
 		// 预算必须同时低于 max_tokens 且不低于协议下限，两个约束在
 		// max_tokens 过小时无解。关掉 thinking 保住这一轮，
 		// 而不是发一个注定被拒的请求。
@@ -291,6 +304,32 @@ func shapeParams(req *ir.Request, caps Capabilities, c *noteCollector) {
 			c.drop("temperature/top_p", "sampling parameters must be absent while reasoning is enabled")
 			req.Temperature = nil
 			req.TopP = nil
+		}
+	}
+
+	// 取值范围夹紧排在采样参数互斥之后：那一支会把 temperature 整个剥掉，
+	// 剥掉之后没有值可夹。顺序反了会先夹一个马上要被丢弃的值，白报一条说明。
+	//
+	// 夹紧而不是拒请求：目标协议是调度层选的，客户端按 OpenAI 习惯发
+	// temperature 1.5 是合法入站，它无从预知这一跳会落到 Anthropic。
+	// 拒掉等于把调度的内部选择变成客户端的错误。夹紧会改变输出的随机性，
+	// 所以报一条有损说明让调用方看得见。
+	if caps.MaxTemperature > 0 && req.Temperature != nil {
+		// 下界 0 与上界同出一处证据：上游 400 原文是 range: 0..1，
+		// 两端都在这句话里，所以不另设一个能力位。
+		switch {
+		case *req.Temperature > caps.MaxTemperature:
+			was := *req.Temperature
+			v := caps.MaxTemperature
+			req.Temperature = &v
+			c.rewrite("temperature", fmt.Sprintf(
+				"%g exceeds this protocol's maximum %g, clamped", was, caps.MaxTemperature))
+		case *req.Temperature < 0:
+			was := *req.Temperature
+			v := 0.0
+			req.Temperature = &v
+			c.rewrite("temperature", fmt.Sprintf(
+				"%g is below this protocol's minimum 0, clamped", was))
 		}
 	}
 

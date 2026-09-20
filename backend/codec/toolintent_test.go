@@ -136,8 +136,11 @@ func TestThinkingBudgetClampedBelowMaxTokens(t *testing.T) {
 		// 相等意味着留给回答本身的 token 为零，上游回不可重试的 400。
 		{name: "budget-equals-max", maxTokens: 8192, budget: 8192, wantBudget: 8191, wantClamp: true},
 		{name: "budget-above-max", maxTokens: 8192, budget: 9000, wantBudget: 8191, wantClamp: true},
-		// max_tokens 缺席时无从比较，也无冲突可解。
-		{name: "no-max-tokens", maxTokens: 0, budget: 9000, wantBudget: 9000},
+		// max_tokens 缺席时按协议的默认值比较：anthropic 的 max_tokens 必填，
+		// 编码器随后会补 DefaultMaxTokens（4096），只看客户端给的那个数会让
+		// 这条路径整个逃过夹紧，出站成 max_tokens=4096 / budget=9000，
+		// 拿到上游 400 budget_tokens must be less than max_tokens。
+		{name: "no-max-tokens", maxTokens: 0, budget: 9000, wantBudget: 4095, wantClamp: true},
 		// 夹紧后低于协议下限时应落到关掉推理那一支，而不是发一个必被拒的预算。
 		{name: "clamped-below-floor", maxTokens: 512, budget: 4096, wantOff: true, wantClamp: true},
 	}

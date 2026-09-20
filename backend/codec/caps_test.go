@@ -17,6 +17,7 @@ var structuralCaps = map[string]struct {
 	dialect           schemadialect.Dialect
 	cacheBreakpoints  int
 	maxStopSequences  int
+	maxTemperature    float64
 	thinkingExcl      bool
 	minThinkingBudget int
 	systemAsText      bool
@@ -25,7 +26,9 @@ var structuralCaps = map[string]struct {
 	imageDetail       bool
 }{
 	codec.ProtocolAnthropic: {
-		cacheBreakpoints:  4,
+		cacheBreakpoints: 4,
+		// 上游 400 原文：temperature: range: 0..1。
+		maxTemperature:    1.0,
 		thinkingExcl:      true,
 		minThinkingBudget: 1024,
 		serverTools:       true,
@@ -52,6 +55,8 @@ var structuralCaps = map[string]struct {
 		},
 		systemAsText:    true,
 		toolResultError: true,
+		// 官方限定至多 5 个 stopSequences，超出即 INVALID_ARGUMENT。
+		maxStopSequences: 5,
 	},
 }
 
@@ -75,6 +80,11 @@ func TestEveryOutboundDeclaresStructuralCaps(t *testing.T) {
 			}
 			if got.MaxStopSequences != want.maxStopSequences {
 				t.Errorf("MaxStopSequences = %d，想要 %d", got.MaxStopSequences, want.maxStopSequences)
+			}
+			// 取值范围维度同受这张表管辖：没有实测或官方确证的上限必须留
+			// 零值（零值=跳过检查），猜出来的上限会把本来能过的请求改坏。
+			if got.MaxTemperature != want.maxTemperature {
+				t.Errorf("MaxTemperature = %g，想要 %g", got.MaxTemperature, want.maxTemperature)
 			}
 			if got.ThinkingExcludesSampling != want.thinkingExcl {
 				t.Errorf("ThinkingExcludesSampling = %v，想要 %v", got.ThinkingExcludesSampling, want.thinkingExcl)

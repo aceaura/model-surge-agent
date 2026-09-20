@@ -38,6 +38,9 @@ func (outboundCodec) Caps() codec.Capabilities {
 		Images:        true,
 		TopK:          true,
 		StopSequences: true,
+		// 官方限定至多 5 个 stopSequences，超出即 INVALID_ARGUMENT。
+		// 不截断会让同一个请求「只有 Gemini 坏了」，换上游即成功。
+		MaxStopSequences: 5,
 		// functionResponse 的载荷用 error 键承载失败态（见 wrapResponse）。
 		ToolResultError: true,
 		// systemInstruction 是单一 Content，system 里的非文本块必须先降级成文本。

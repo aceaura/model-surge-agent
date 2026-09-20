@@ -24,13 +24,19 @@ func TestAdjacentSameRoleMessagesMerged(t *testing.T) {
 	if r.Messages[0].Role != RoleUser || r.Messages[1].Role != RoleAssistant {
 		t.Fatalf("合并后角色错乱：%#v", r.Messages)
 	}
-	// 只拼接，不把两个文本块并成一个：并成一个需要决定分隔符，
-	// 而那个决定会改变模型看到的内容。
-	if len(r.Messages[0].Content) != 2 {
-		t.Errorf("块被并成了 %d 个，应保留 2 个：%#v", len(r.Messages[0].Content), r.Messages[0].Content)
+	// 不把两个文本块并成一个（那会让 CacheCtl 这类块级属性无处安放），
+	// 但边界处插一个空行分隔块：出站编码器的文本拼接是无分隔的，
+	// 不插会让「first」「second」在 responses / gemini / chat_completions
+	// 的字符串形态里粘成「firstsecond」。
+	want := []string{"first", "\n\n", "second"}
+	got := r.Messages[0].Content
+	if len(got) != len(want) {
+		t.Fatalf("块数 = %d，想要 %d（文本、分隔、文本）：%#v", len(got), len(want), got)
 	}
-	if r.Messages[0].Content[0].Text != "first" || r.Messages[0].Content[1].Text != "second" {
-		t.Errorf("块顺序被改了：%#v", r.Messages[0].Content)
+	for i, w := range want {
+		if got[i].Type != BlockText || got[i].Text != w {
+			t.Errorf("块 %d = %+v，想要文本 %q", i, got[i], w)
+		}
 	}
 	if !hasNote(notes, "merged 1 adjacent same-role message") {
 		t.Errorf("notes = %v，合并必须出说明：客户端需要知道「我发了 3 条、上游看到 2 条」不是丢消息", notes)

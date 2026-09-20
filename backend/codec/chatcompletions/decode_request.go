@@ -118,9 +118,14 @@ func appendMessage(out *ir.Request, m wireMessage) error {
 		}
 		// 工具结果在本协议是独立的 tool 消息，IR 里是 user 消息中的一个块。
 		// 紧邻的多条 tool 消息合并进同一条 user 消息，与 Anthropic 的形态一致。
+		//
+		// 本协议没有失败标记字段，失败态是我们出站时写进正文的前缀，
+		// 这里认回来：不认的话换目标重试时模型会把失败当成功。
+		blocks, isErr := codec.AdoptToolResultError(blocks)
 		block := ir.Block{Type: ir.BlockToolResult, ToolResult: &ir.ToolResult{
 			ToolUseID: m.ToolCallID,
 			Content:   blocks,
+			IsError:   isErr,
 		}}
 		if n := len(out.Messages); n > 0 && out.Messages[n-1].Role == ir.RoleUser &&
 			onlyToolResults(out.Messages[n-1].Content) {

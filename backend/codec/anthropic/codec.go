@@ -80,6 +80,9 @@ func (outboundCodec) Caps() codec.Capabilities {
 		CacheBreakpoints: 4,
 		// 开启 thinking 时 temperature / top_p 必须缺席。
 		ThinkingExcludesSampling: true,
+		// 上游 400 原文：temperature: range: 0..1。本协议的上限是 1 而不是
+		// OpenAI 习惯的 2，超出即不可重试的 400——换目标也无用。
+		MaxTemperature: 1.0,
 		// 实测：thinking 开启时 tool_choice 为 any / 具名会被拒，上游原文是
 		// tool_choice 'specified' is incompatible with thinking enabled。
 		ThinkingExcludesForcedTools: true,
