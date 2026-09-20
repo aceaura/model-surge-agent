@@ -137,7 +137,19 @@ type LiveEntry struct {
 	UpstreamMS       int       `json:"upstream_ms,omitempty"`
 	InputTokens      int64     `json:"input_tokens,omitempty"`
 	OutputTokens     int64     `json:"output_tokens,omitempty"`
-	ErrorCode        string    `json:"error_code,omitempty"`
+	// 后三维与明细表（store.RequestLog）的列一一对应。少报它们正是少报
+	// 计费权重最偏的那几维（缓存写通常 1.25×、缓存读 0.1×、推理计入输出），
+	// 于是 /admin/requests 的明细与本摘要长期对不上，而两侧都不报错。
+	CacheReadTokens  int64  `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64  `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens  int64  `json:"reasoning_tokens,omitempty"`
+	ErrorCode        string `json:"error_code,omitempty"`
+	// LogPersisted 是三态：nil 表示没配 PG（未尝试落库），false 表示尝试过
+	// 且失败——这条记录不在 /admin/requests 里，true 表示成功。
+	//
+	// 必须三态：布尔的零值会让「没配 PG」（正常的单进程测试形态）与
+	// 「落库失败」（故障）变成同一个值，而看面板的人分不出来。
+	LogPersisted *bool `json:"log_persisted,omitempty"`
 }
 
 // PushLive 把一条摘要推进环形列表并裁到上限。
@@ -193,22 +205,32 @@ type Bucket struct {
 	Outcomes     map[string]int64 `json:"outcomes,omitempty"`
 	InputTokens  int64            `json:"input_tokens"`
 	OutputTokens int64            `json:"output_tokens"`
-	LatencySumMS int64            `json:"latency_sum_ms"`
+	// 与 LiveEntry 同理：这三维不补齐，趋势图的用量就系统性少报。
+	CacheReadTokens  int64 `json:"cache_read_tokens"`
+	CacheWriteTokens int64 `json:"cache_write_tokens"`
+	ReasoningTokens  int64 `json:"reasoning_tokens"`
+	LatencySumMS     int64 `json:"latency_sum_ms"`
 }
 
 // 分钟桶里的固定字段名。outcome 的计数键加前缀区分，
 // 否则一个叫 total 的 outcome 会覆盖总数。
 const (
-	fieldTotal   = "total"
-	fieldInput   = "input"
-	fieldOutput  = "output"
-	fieldLatency = "latency"
-	outcomeAffix = "o:"
+	fieldTotal      = "total"
+	fieldInput      = "input"
+	fieldOutput     = "output"
+	fieldCacheRead  = "cache_read"
+	fieldCacheWrite = "cache_write"
+	fieldReasoning  = "reasoning"
+	fieldLatency    = "latency"
+	outcomeAffix    = "o:"
 )
 
 // Incr 累计一分钟桶。
+//
+// usage 整个传进来而不是把五维排成五个 int64 参数：那样一行里会有六个同类型
+// 标量，调错顺序编译器不报，而记错的是计费维度。传结构体让字段名对位。
 func (c *Cache) Incr(ctx context.Context, at time.Time, outcome string,
-	input, output int64, latencyMS int) {
+	usage relayclient.Usage, latencyMS int) {
 	if c == nil {
 		return
 	}
@@ -220,8 +242,13 @@ func (c *Cache) Incr(ctx context.Context, at time.Time, outcome string,
 	if outcome != "" {
 		pipe.HIncrBy(ctx, key, outcomeAffix+outcome, 1)
 	}
-	pipe.HIncrBy(ctx, key, fieldInput, input)
-	pipe.HIncrBy(ctx, key, fieldOutput, output)
+	pipe.HIncrBy(ctx, key, fieldInput, usage.InputTokens)
+	pipe.HIncrBy(ctx, key, fieldOutput, usage.OutputTokens)
+	// 三维各自独立累计，不加权：按单价折算需要 upstream 的定价模型，
+	// 把不同单价的维度加进同一个数等于用错权重记账。
+	pipe.HIncrBy(ctx, key, fieldCacheRead, usage.CacheReadTokens)
+	pipe.HIncrBy(ctx, key, fieldCacheWrite, usage.CacheWriteTokens)
+	pipe.HIncrBy(ctx, key, fieldReasoning, usage.ReasoningTokens)
 	pipe.HIncrBy(ctx, key, fieldLatency, int64(latencyMS))
 	// TTL 每次刷新：桶写完就不再动，靠过期自行清理，不需要额外的清扫任务。
 	pipe.Expire(ctx, key, statTTL)
@@ -279,6 +306,12 @@ func bucketFrom(minute time.Time, fields map[string]string) Bucket {
 			b.InputTokens = n
 		case fieldOutput:
 			b.OutputTokens = n
+		case fieldCacheRead:
+			b.CacheReadTokens = n
+		case fieldCacheWrite:
+			b.CacheWriteTokens = n
+		case fieldReasoning:
+			b.ReasoningTokens = n
 		case fieldLatency:
 			b.LatencySumMS = n
 		default:

@@ -154,7 +154,15 @@ type LiveEntry struct {
 	UpstreamMS       int       `json:"upstream_ms,omitempty"`
 	InputTokens      int64     `json:"input_tokens,omitempty"`
 	OutputTokens     int64     `json:"output_tokens,omitempty"`
-	ErrorCode        string    `json:"error_code,omitempty"`
+	// 后三维与 /admin/requests 的明细列一一对应。少报它们等于少报计费权重
+	// 最偏的那几维，而两个视图都不报错。
+	CacheReadTokens  int64  `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64  `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens  int64  `json:"reasoning_tokens,omitempty"`
+	ErrorCode        string `json:"error_code,omitempty"`
+	// LogPersisted 三态：nil 未配明细表、false 落库失败（这条不在
+	// /admin/requests 里）、true 成功。布尔零值会让「没配」与「失败」同值。
+	LogPersisted *bool `json:"log_persisted,omitempty"`
 }
 
 type Stats struct {
@@ -166,19 +174,25 @@ type Stats struct {
 }
 
 type StatBucket struct {
-	Minute       time.Time        `json:"minute"`
-	Total        int64            `json:"total"`
-	Outcomes     map[string]int64 `json:"outcomes,omitempty"`
-	InputTokens  int64            `json:"input_tokens"`
-	OutputTokens int64            `json:"output_tokens"`
-	AvgLatencyMS int64            `json:"avg_latency_ms"`
+	Minute           time.Time        `json:"minute"`
+	Total            int64            `json:"total"`
+	Outcomes         map[string]int64 `json:"outcomes,omitempty"`
+	InputTokens      int64            `json:"input_tokens"`
+	OutputTokens     int64            `json:"output_tokens"`
+	CacheReadTokens  int64            `json:"cache_read_tokens"`
+	CacheWriteTokens int64            `json:"cache_write_tokens"`
+	ReasoningTokens  int64            `json:"reasoning_tokens"`
+	AvgLatencyMS     int64            `json:"avg_latency_ms"`
 }
 
 type StatTotals struct {
-	Total        int64            `json:"total"`
-	Outcomes     map[string]int64 `json:"outcomes,omitempty"`
-	InputTokens  int64            `json:"input_tokens"`
-	OutputTokens int64            `json:"output_tokens"`
+	Total            int64            `json:"total"`
+	Outcomes         map[string]int64 `json:"outcomes,omitempty"`
+	InputTokens      int64            `json:"input_tokens"`
+	OutputTokens     int64            `json:"output_tokens"`
+	CacheReadTokens  int64            `json:"cache_read_tokens"`
+	CacheWriteTokens int64            `json:"cache_write_tokens"`
+	ReasoningTokens  int64            `json:"reasoning_tokens"`
 	// SuccessRate 是 normal 占比，0 到 1。总数为零时为 0。
 	SuccessRate float64 `json:"success_rate"`
 	// QPS 是窗口内的平均每秒请求数。

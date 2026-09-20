@@ -171,16 +171,22 @@ func (a *Admin) stats(w http.ResponseWriter, r *http.Request) {
 	totals := agentv1.StatTotals{Outcomes: map[string]int64{}}
 	for _, b := range buckets {
 		out.Buckets = append(out.Buckets, agentv1.StatBucket{
-			Minute:       b.Minute,
-			Total:        b.Total,
-			Outcomes:     b.Outcomes,
-			InputTokens:  b.InputTokens,
-			OutputTokens: b.OutputTokens,
-			AvgLatencyMS: avg(b.LatencySumMS, b.Total),
+			Minute:           b.Minute,
+			Total:            b.Total,
+			Outcomes:         b.Outcomes,
+			InputTokens:      b.InputTokens,
+			OutputTokens:     b.OutputTokens,
+			CacheReadTokens:  b.CacheReadTokens,
+			CacheWriteTokens: b.CacheWriteTokens,
+			ReasoningTokens:  b.ReasoningTokens,
+			AvgLatencyMS:     avg(b.LatencySumMS, b.Total),
 		})
 		totals.Total += b.Total
 		totals.InputTokens += b.InputTokens
 		totals.OutputTokens += b.OutputTokens
+		totals.CacheReadTokens += b.CacheReadTokens
+		totals.CacheWriteTokens += b.CacheWriteTokens
+		totals.ReasoningTokens += b.ReasoningTokens
 		for k, v := range b.Outcomes {
 			totals.Outcomes[k] += v
 		}

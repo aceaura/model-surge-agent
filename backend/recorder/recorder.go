@@ -33,11 +33,18 @@ func (r *Recorder) Record(rec pipeline.Record) {
 	ctx, cancel := context.WithTimeout(context.Background(), r.timeout())
 	defer cancel()
 
+	// 落库结果要带进摘要：PG 失败只 Warn 而 Redis 两路照常成功，于是
+	// /admin/requests 缺记录、/admin/live 有记录，长期不一致且没有任何
+	// 暴露面——看面板的人会把差异当成自己看错了。
+	var persisted *bool
 	if r.Log != nil {
+		ok := true
 		if err := r.Log.Insert(ctx, rec); err != nil {
 			// PG 挂了不拦数据面，只是流水缺一条。
 			r.logger().Warn("record request log", "request_id", rec.RequestID, "err", err)
+			ok = false
 		}
+		persisted = &ok
 	}
 
 	r.Cache.PushLive(ctx, cache.LiveEntry{
@@ -58,10 +65,13 @@ func (r *Recorder) Record(rec pipeline.Record) {
 		UpstreamMS:       rec.UpstreamMS,
 		InputTokens:      rec.Usage.InputTokens,
 		OutputTokens:     rec.Usage.OutputTokens,
+		CacheReadTokens:  rec.Usage.CacheReadTokens,
+		CacheWriteTokens: rec.Usage.CacheWriteTokens,
+		ReasoningTokens:  rec.Usage.ReasoningTokens,
 		ErrorCode:        rec.ErrorCode,
+		LogPersisted:     persisted,
 	})
-	r.Cache.Incr(ctx, rec.At, rec.Outcome,
-		rec.Usage.InputTokens, rec.Usage.OutputTokens, rec.LatencyMS)
+	r.Cache.Incr(ctx, rec.At, rec.Outcome, rec.Usage, rec.LatencyMS)
 }
 
 func (r *Recorder) timeout() time.Duration {

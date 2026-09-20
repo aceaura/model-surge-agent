@@ -109,6 +109,18 @@ func EstimateRequestMode(r *Request, mode EstimateMode) int64 {
 			EstimateTokensMode(t.Description, mode) +
 			EstimateTokensMode(t.Schema, mode)
 	}
+	// 结构化输出的 schema 与工具的 schema 一样要进提示词，而它常有数千
+	// token。漏掉它让带结构化输出的请求被系统性低估，据此写调度策略的人
+	// 看不出拿到的数是偏小的。
+	if r.ResponseFormat != nil {
+		total += EstimateTokensMode(r.ResponseFormat.Name, mode) +
+			EstimateTokensMode(r.ResponseFormat.Schema, mode)
+	}
+	// 只计名字：Mode 是 auto/any/none/tool 的枚举，出站编成一个结构化字段
+	// 而不是提示词文本；只有被强制指定的那个工具名会进去。
+	if r.ToolChoice != nil {
+		total += EstimateTokensMode(r.ToolChoice.Name, mode)
+	}
 	return total
 }
 

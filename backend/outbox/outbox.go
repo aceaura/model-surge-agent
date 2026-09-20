@@ -61,7 +61,15 @@ func (w *Worker) Report(rep relayclient.ResultReport) {
 	}
 	// 不可重试的失败（如契约不符）入队也没用，但仍要落库：
 	// 悄悄丢弃会让运维查不出用量为何缺口。管理面能看到 last_error。
-	if qerr := w.Queue.Enqueue(context.Background(), rep, err.Error()); qerr != nil {
+	//
+	// 另起一个 context 而不是复用上面那个：直投往往正是因为超时才失败的，
+	// 那个预算已经耗尽，拿它入队必然立刻失败——比没有超时更坏。而完全不设
+	// 超时也不行：本函数跑在 per-request 上报队列的单消费者里，而请求收尾
+	// 要等消费者排空，PG hang 住（不是拒连）时客户端会越过它自己全部的
+	// 预算（请求总时长、首字、idle）一直挂住，且服务端不报任何错。
+	qctx, qcancel := context.WithTimeout(context.Background(), w.timeout())
+	defer qcancel()
+	if qerr := w.Queue.Enqueue(qctx, rep, err.Error()); qerr != nil {
 		w.log().Error("report lost: direct send and enqueue both failed",
 			"report_id", rep.ReportID, "send_error", err, "enqueue_error", qerr)
 		return

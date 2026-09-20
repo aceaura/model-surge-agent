@@ -43,7 +43,7 @@ func TestNilCacheDegradesInsteadOfPanicking(t *testing.T) {
 	}
 	c.PutModels(ctx, []relayclient.UserModelSummary{{Name: "m"}})
 	c.PushLive(ctx, LiveEntry{RequestID: "r"})
-	c.Incr(ctx, time.Now(), "normal", 1, 2, 3)
+	c.Incr(ctx, time.Now(), "normal", relayclient.Usage{InputTokens: 1, OutputTokens: 2}, 3)
 	if got := c.Live(ctx, 10); got != nil {
 		t.Errorf("live = %+v, want nil", got)
 	}
@@ -69,7 +69,7 @@ func TestUnreachableRedisDegradesInsteadOfFailing(t *testing.T) {
 	}
 	c.PutModels(ctx, []relayclient.UserModelSummary{{Name: "m"}})
 	c.PushLive(ctx, LiveEntry{RequestID: "r"})
-	c.Incr(ctx, time.Now(), "normal", 1, 2, 3)
+	c.Incr(ctx, time.Now(), "normal", relayclient.Usage{InputTokens: 1, OutputTokens: 2}, 3)
 	if got := c.Live(ctx, 10); len(got) != 0 {
 		t.Errorf("live = %+v, want empty", got)
 	}
@@ -133,9 +133,9 @@ func TestBucketsAggregateOutcomesAndTokens(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	c.Incr(ctx, now, "normal", 100, 20, 300)
-	c.Incr(ctx, now, "normal", 50, 10, 100)
-	c.Incr(ctx, now, "abnormal", 0, 0, 50)
+	c.Incr(ctx, now, "normal", relayclient.Usage{InputTokens: 100, OutputTokens: 20}, 300)
+	c.Incr(ctx, now, "normal", relayclient.Usage{InputTokens: 50, OutputTokens: 10}, 100)
+	c.Incr(ctx, now, "abnormal", relayclient.Usage{InputTokens: 0, OutputTokens: 0}, 50)
 
 	buckets := c.Buckets(ctx, now, time.Hour)
 	if len(buckets) != 1 {
@@ -162,7 +162,7 @@ func TestAnOutcomeNamedTotalDoesNotClobberTheCount(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	c.Incr(ctx, now, "total", 0, 0, 0)
+	c.Incr(ctx, now, "total", relayclient.Usage{InputTokens: 0, OutputTokens: 0}, 0)
 	buckets := c.Buckets(ctx, now, time.Hour)
 	if len(buckets) != 1 {
 		t.Fatalf("buckets = %d, want 1", len(buckets))
@@ -181,7 +181,7 @@ func TestEmptyMinutesAreOmittedRatherThanZeroFilled(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	c.Incr(ctx, now.Add(-30*time.Minute), "normal", 1, 1, 1)
+	c.Incr(ctx, now.Add(-30*time.Minute), "normal", relayclient.Usage{InputTokens: 1, OutputTokens: 1}, 1)
 	buckets := c.Buckets(ctx, now, time.Hour)
 	if len(buckets) != 1 {
 		t.Fatalf("buckets = %d, want only the minute with data", len(buckets))
