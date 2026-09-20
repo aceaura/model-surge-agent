@@ -74,7 +74,7 @@ func run(log *slog.Logger) error {
 		}
 	}
 
-	relay := relayclient.New(cfg.RelayBaseURL, cfg.RelayDispatchKey)
+	relay := relayclient.NewWithOptions(cfg.RelayBaseURL, cfg.RelayDispatchKey, relayOptions(cfg))
 	queue := store.NewOutbox(db.Pool())
 	requests := store.NewRequestLog(db.Pool())
 
@@ -211,5 +211,21 @@ func transportOptions(cfg config.Config) pipeline.TransportOptions {
 		ResponseHeaderTimeout: cfg.ResponseHeaderTimeout,
 		H2SendPingTimeout:     cfg.H2SendPingTimeout,
 		H2PingTimeout:         cfg.H2PingTimeout,
+	}
+}
+
+// relayOptions 把配置搬到控制面连接层的参数上。
+//
+// Load 已经校验过代理策略合法，这里的错误不可能发生；忽略它而不是 panic：
+// 真出现时取 off 是安全侧，而启动错误已经在 Load 里一次报全了。
+func relayOptions(cfg config.Config) relayclient.Options {
+	proxy, _ := relayclient.ParseProxyMode(cfg.RelayProxy)
+	return relayclient.Options{
+		MaxIdleConns:          cfg.RelayMaxIdleConns,
+		MaxIdleConnsPerHost:   cfg.RelayMaxIdleConnsPerHost,
+		IdleConnTimeout:       cfg.RelayIdleConnTimeout,
+		ResponseHeaderTimeout: cfg.RelayResponseHeaderTimeout,
+		Timeout:               cfg.RelayTimeout,
+		Proxy:                 proxy,
 	}
 }

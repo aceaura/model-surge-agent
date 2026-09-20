@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aceaura/model-surge-agent/backend/capture"
+	"github.com/aceaura/model-surge-agent/backend/relayclient"
 )
 
 type Config struct {
@@ -66,6 +67,20 @@ type Config struct {
 	// H2 死连接探测的两个超时。任一为负表示显式关闭探测。
 	H2SendPingTimeout time.Duration
 	H2PingTimeout     time.Duration
+
+	// 控制面（调 relay 的调度面）连接层。零值一律取 relayclient 的内置默认。
+	//
+	// 与出站那一组分开：控制面是内网的小 JSON 往返，出站要容忍推理模型在首帧前
+	// 思考几分钟。共用一组值等于用数据面的宽松度去等一个本该秒回的内部查询。
+	RelayMaxIdleConns          int
+	RelayMaxIdleConnsPerHost   int
+	RelayIdleConnTimeout       time.Duration
+	RelayResponseHeaderTimeout time.Duration
+	RelayTimeout               time.Duration
+	// RelayProxy 是 off/environment 两态。默认 off：控制面的 baseURL 在集群里
+	// 是服务名，而这类主机名会命中 HTTP_PROXY，于是调度调用被送去一个不认识它
+	// 的外网代理，症状却是「relay 不可达」。
+	RelayProxy string
 
 	// 转换四体捕获。CaptureMode 为 off/errors/all 三态，非法值在启动时报错
 	// 而不是静默关闭：静默的后果是运维以为捕获开着，等出了故障才发现
@@ -211,6 +226,18 @@ func Load() (Config, error) {
 	c.ResponseHeaderTimeout = durationOr(&errs, "MSA_RESPONSE_HEADER_TIMEOUT", 0)
 	c.H2SendPingTimeout = durationOr(&errs, "MSA_H2_SEND_PING_TIMEOUT", 0)
 	c.H2PingTimeout = durationOr(&errs, "MSA_H2_PING_TIMEOUT", 0)
+
+	c.RelayMaxIdleConns = intOr(&errs, "MSA_RELAY_MAX_IDLE_CONNS", 0)
+	c.RelayMaxIdleConnsPerHost = intOr(&errs, "MSA_RELAY_MAX_IDLE_CONNS_PER_HOST", 0)
+	c.RelayIdleConnTimeout = durationOr(&errs, "MSA_RELAY_IDLE_CONN_TIMEOUT", 0)
+	c.RelayResponseHeaderTimeout = durationOr(&errs, "MSA_RELAY_RESPONSE_HEADER_TIMEOUT", 0)
+	c.RelayTimeout = durationOr(&errs, "MSA_RELAY_TIMEOUT", 0)
+	c.RelayProxy = envOr("MSA_RELAY_PROXY", string(relayclient.ProxyOff))
+	if _, err := relayclient.ParseProxyMode(c.RelayProxy); err != nil {
+		// 非法值报错而不是静默回落 off：写了这个变量的人是明确想让控制面走代理，
+		// 静默关掉会让他以为配好了，而故障表现是「relay 不可达」。
+		fail("MSA_RELAY_PROXY is invalid: %v", err)
+	}
 
 	c.CaptureMode = envOr("MSA_CAPTURE_MODE", string(capture.ModeOff))
 	if _, err := capture.ParseMode(c.CaptureMode); err != nil {
