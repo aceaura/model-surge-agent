@@ -64,7 +64,10 @@ func (outboundCodec) Caps() codec.Capabilities {
 		Thinking:    true,
 		ThinkingSig: true,
 		Tools:       true,
-		Images:      true,
+		// function_call_output.output 是单个字符串：媒体块会被 joinText
+		// 静默碾掉，模型看不到截图却被要求据此答题。
+		ToolResultTextOnly: true,
+		Images:             true,
 		// instructions 是单一字符串，system 里的非文本块必须先降级成文本。
 		SystemAsText: true,
 		// 本协议独有三项：verbosity（text.verbosity）、include、truncation，

@@ -9,9 +9,6 @@ import (
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
-// leadingUserPlaceholder 是首条消息不是 user 时补入的占位文本。
-const leadingUserPlaceholder = "(continuing the conversation)"
-
 // EncodeRequest 把 IR 编码成 /v1/messages 请求体。
 //
 // 始终写 stream:true —— 对上游一律流式请求，客户端要非流式时由数据面
@@ -49,7 +46,7 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	// assistant 起头时（跨协议转换的常见形态）在前面补一条占位消息。
 	// 只在确有需要时插入：无条件插入会改变正常请求的前缀，打掉 prompt cache。
 	if len(req.Messages) > 0 && req.Messages[0].Role != ir.RoleUser {
-		placeholder, err := encodeBlocks([]ir.Block{{Type: ir.BlockText, Text: leadingUserPlaceholder}})
+		placeholder, err := encodeBlocks([]ir.Block{{Type: ir.BlockText, Text: codec.ConversationPlaceholder}})
 		if err != nil {
 			return nil, fmt.Errorf("anthropic: leading user placeholder: %w", err)
 		}

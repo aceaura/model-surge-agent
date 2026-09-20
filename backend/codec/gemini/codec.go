@@ -43,6 +43,9 @@ func (outboundCodec) Caps() codec.Capabilities {
 		MaxStopSequences: 5,
 		// functionResponse 的载荷用 error 键承载失败态（见 wrapResponse）。
 		ToolResultError: true,
+		// functionResponse.response 只有一个 output/error 字符串键，
+		// 媒体块同样会被碾掉。
+		ToolResultTextOnly: true,
 		// systemInstruction 是单一 Content，system 里的非文本块必须先降级成文本。
 		SystemAsText: true,
 		// 本协议在 generationConfig 下有 candidateCount、responseLogprobs
@@ -64,12 +67,31 @@ func (outboundCodec) Caps() codec.Capabilities {
 		// 本协议的 schema 是 OpenAPI 3.0 子集，不是完整 JSON Schema：
 		// 表外关键字会被当成未知字段拒收（400 Invalid JSON payload），
 		// type 取值必须大写，也不接受联合 type 数组。
+		//
+		// 白名单而非黑名单：结构性关键字（$ref、$defs、oneOf、allOf、
+		// prefixItems）漏一个，请求就原样发出去拿一个不可重试的 400，
+		// 而 DroppedKeys 为空意味着连有损说明都报不出来。
+		//
+		// 表内没有 title：原来的黑名单剔除它且上线未见问题，而本协议是否
+		// 真的接受 title 无实测也无官方明示——按保守维持剔除。
+		// 表内没有 additionalProperties / patternProperties /
+		// exclusiveMinimum / exclusiveMaximum / $schema / $id / deprecated：
+		// 它们本来就在剔除之列，现在由白名单一并覆盖。
 		SchemaDialect: schemadialect.Dialect{
-			Drop: []string{
-				"$schema", "$id", "additionalProperties", "patternProperties",
-				"minLength", "maxLength", "minItems", "maxItems",
-				"exclusiveMinimum", "exclusiveMaximum", "deprecated", "title",
+			// 表内没有 minLength / maxLength / minItems / maxItems：
+			// new-api 的白名单放行它们，而我们原来剔除且上线未见问题。
+			// 两边冲突时不动已经跑通的行为——放行可能换来一个 400，
+			// 而剔除只丢一条长度约束且已有有损说明。拿到能发请求的账号后
+			// 再实测，别按参考实现改。
+			Allow: []string{
+				"anyOf", "default", "description", "enum", "example", "format",
+				"items", "maxProperties", "maximum", "minProperties", "minimum",
+				"nullable", "pattern", "properties", "propertyOrdering",
+				"required", "type",
 			},
+			// enum 成员必须是字符串：{"type":"integer","enum":[1,2]} 会拿到
+			// Invalid value at 'enum[0]' (TYPE_STRING)。
+			StringEnumOnly:      true,
 			UppercaseType:       true,
 			CollapseUnionType:   true,
 			OmitEmptyProperties: true,

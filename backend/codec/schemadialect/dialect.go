@@ -7,6 +7,7 @@ package schemadialect
 import (
 	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -62,6 +63,19 @@ var opaqueKeys = map[string]bool{
 type Dialect struct {
 	// Drop 是递归剔除的关键字。
 	Drop []string
+	// Allow 非空时按白名单收敛：表外的关键字一律剔除。
+	//
+	// 与 Drop 并存而不是取代它：Drop 说「这个键我明确知道不行」，Allow 说
+	// 「这个表之外的我都不认」。黑名单永远追不全——$ref / $defs / oneOf /
+	// allOf / prefixItems 这些结构性关键字漏一个，请求就原样发出去拿一个
+	// 400 Invalid JSON payload ... Cannot find field，而我们连有损说明都
+	// 报不出来（DroppedKeys 为空）。
+	Allow []string
+	// StringEnumOnly 为真时把 enum 成员统一成字符串字面量。
+	//
+	// Gemini 的 Schema.enum 是 string[]：{"type":"integer","enum":[1,2]}
+	// 会拿到 Invalid value at 'enum[0]' (TYPE_STRING)。
+	StringEnumOnly bool
 	// UppercaseType 为真时把 type 取值转大写（gemini 的 OBJECT/STRING）。
 	UppercaseType bool
 	// CollapseUnionType 为真时把 type 联合数组折成首个非 null 成员 + nullable。
@@ -72,7 +86,8 @@ type Dialect struct {
 
 // Empty 判断本方言是否什么都不改。
 func (d Dialect) Empty() bool {
-	return len(d.Drop) == 0 && !d.UppercaseType && !d.CollapseUnionType && !d.OmitEmptyProperties
+	return len(d.Drop) == 0 && len(d.Allow) == 0 && !d.StringEnumOnly &&
+		!d.UppercaseType && !d.CollapseUnionType && !d.OmitEmptyProperties
 }
 
 // Result 是一次归一化的结果。
@@ -107,7 +122,7 @@ func Normalize(raw []byte, d Dialect) (Result, error) {
 	if err := json.Unmarshal(raw, &root); err != nil {
 		return Result{Out: raw}, err
 	}
-	st := &state{dialect: d, drop: dropSet(d.Drop)}
+	st := &state{dialect: d, drop: dropSet(d.Drop), allow: dropSet(d.Allow)}
 	walked := st.walk(root, 0)
 
 	obj, isObj := walked.(map[string]any)
@@ -132,9 +147,18 @@ func Normalize(raw []byte, d Dialect) (Result, error) {
 type state struct {
 	dialect   Dialect
 	drop      map[string]bool
+	allow     map[string]bool
 	dropped   map[string]bool
 	changed   bool
 	truncated bool
+}
+
+func (s *state) markDropped(key string) {
+	s.changed = true
+	if s.dropped == nil {
+		s.dropped = map[string]bool{}
+	}
+	s.dropped[key] = true
 }
 
 func (s *state) droppedKeys() []string {
@@ -170,17 +194,17 @@ func (s *state) walk(node any, depth int) any {
 		return node
 	}
 
-	for k := range obj {
-		if s.drop[k] {
+	// 剔除排在下钻之前：$defs / oneOf 这些容器被白名单剔掉之后不该再下钻
+	// 进一个已经不存在的子树，否则 dropped 与 truncated 会记上子树里的键，
+	// 说明就指不出真正被削掉的是哪一条约束。
+	for _, k := range sortedKeys(obj) {
+		if s.drop[k] || (len(s.allow) > 0 && !s.allow[k]) {
 			delete(obj, k)
-			s.changed = true
-			if s.dropped == nil {
-				s.dropped = map[string]bool{}
-			}
-			s.dropped[k] = true
+			s.markDropped(k)
 		}
 	}
 	s.normalizeType(obj)
+	s.normalizeEnum(obj)
 
 	for _, k := range sortedKeys(obj) {
 		if opaqueKeys[k] {
@@ -227,6 +251,63 @@ func (s *state) normalizeType(obj map[string]any) {
 			obj["type"] = up
 			s.changed = true
 		}
+	}
+}
+
+// normalizeEnum 把 enum 成员统一成字符串字面量。
+//
+// 就地改成员而不是下钻：enum 的值是实例数据，opaqueKeys 那张表管的是
+// 「不要把用户数据当子 schema 走一遍」，与这里改成员类型不冲突。
+func (s *state) normalizeEnum(obj map[string]any) {
+	if !s.dialect.StringEnumOnly {
+		return
+	}
+	list, ok := obj["enum"].([]any)
+	if !ok || len(list) == 0 {
+		return
+	}
+	out := make([]any, 0, len(list))
+	for _, v := range list {
+		str, ok := stringifyEnumMember(v)
+		if !ok {
+			// 对象或数组成员转不成标量字面量。整条删掉而不是留一个半截的
+			// 枚举：留下来会让模型以为可选值只有能转的那几个，比没有约束更坏。
+			delete(obj, "enum")
+			s.markDropped("enum")
+			return
+		}
+		out = append(out, str)
+	}
+	for i := range out {
+		if out[i] != list[i] {
+			obj["enum"] = out
+			s.changed = true
+			return
+		}
+	}
+}
+
+// stringifyEnumMember 把一个标量成员转成它的 JSON 字面量字符串。
+// 返回 ok=false 表示这个成员不是标量。
+func stringifyEnumMember(v any) (string, bool) {
+	switch t := v.(type) {
+	case string:
+		return t, true
+	case bool:
+		if t {
+			return "true", true
+		}
+		return "false", true
+	case nil:
+		return "null", true
+	case float64:
+		// FormatFloat 而不是 fmt.Sprint：后者对 1e+06 之类输出科学记数法，
+		// 与原 JSON 里的字面量不一致，模型按字符串匹配就对不上。
+		return strconv.FormatFloat(t, 'f', -1, 64), true
+	case json.Number:
+		return t.String(), true
+	default:
+		return "", false
 	}
 }
 

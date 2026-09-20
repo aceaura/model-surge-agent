@@ -83,6 +83,14 @@ type Capabilities struct {
 	// 与 ThinkingSig 分开：两者是上游的不同状态，一个协议可以只有其中一个。
 	ToolCallSig bool
 	Tools       bool
+	// ToolResultTextOnly 为真表示本协议的工具结果载荷只装文本。
+	//
+	// 与 Images 无关：这三个协议都能在普通消息里带图，只有工具结果这一处
+	// 装不下（responses 的 function_call_output.output 与 gemini 的
+	// functionResponse.response 都是单个字符串，chat_completions 的
+	// role:tool 消息不接受媒体 part）。混用 Images 会让「能带图」与
+	// 「工具结果里能带图」变成同一个判断，而它们不是。
+	ToolResultTextOnly bool
 	// ToolResultError 为真表示本协议的工具结果带失败标记（anthropic 的
 	// is_error、gemini 的 error 键）。为假时失败态改写成内容前缀——
 	// 丢掉它会让模型把失败当成功，那是跨轮语义被改坏且完全不可见。

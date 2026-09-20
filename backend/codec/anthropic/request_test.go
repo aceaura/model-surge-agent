@@ -265,7 +265,7 @@ func TestEncodeInsertsLeadingUserMessage(t *testing.T) {
 	if got.Messages[0].Role != "user" {
 		t.Fatalf("first message must be user, got %q", got.Messages[0].Role)
 	}
-	if !strings.Contains(string(got.Messages[0].Content), leadingUserPlaceholder) {
+	if !strings.Contains(string(got.Messages[0].Content), codec.ConversationPlaceholder) {
 		t.Fatalf("placeholder text missing: %s", got.Messages[0].Content)
 	}
 	if got.Messages[1].Role != "assistant" || !strings.Contains(string(got.Messages[1].Content), "picking up") {

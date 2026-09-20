@@ -14,16 +14,17 @@ import (
 // 零值无法区分「填过且为零」与「忘了填」。有了表，新增协议不进表即失败，
 // 改了取值不同步表也失败——这正是我们要的那种失败。
 var structuralCaps = map[string]struct {
-	dialect           schemadialect.Dialect
-	cacheBreakpoints  int
-	maxStopSequences  int
-	maxTemperature    float64
-	thinkingExcl      bool
-	minThinkingBudget int
-	systemAsText      bool
-	serverTools       bool
-	toolResultError   bool
-	imageDetail       bool
+	dialect            schemadialect.Dialect
+	cacheBreakpoints   int
+	maxStopSequences   int
+	maxTemperature     float64
+	thinkingExcl       bool
+	minThinkingBudget  int
+	systemAsText       bool
+	serverTools        bool
+	toolResultError    bool
+	toolResultTextOnly bool
+	imageDetail        bool
 }{
 	codec.ProtocolAnthropic: {
 		cacheBreakpoints: 4,
@@ -36,25 +37,37 @@ var structuralCaps = map[string]struct {
 	},
 	codec.ProtocolChatCompletions: {
 		maxStopSequences: 4,
-		imageDetail:      true,
+		// role:tool 消息不接受媒体 part。
+		toolResultTextOnly: true,
+		imageDetail:        true,
 	},
 	codec.ProtocolResponses: {
 		systemAsText: true,
-		imageDetail:  true,
+		// function_call_output.output 是单个字符串。
+		toolResultTextOnly: true,
+		imageDetail:        true,
 	},
 	codec.ProtocolGemini: {
+		// 白名单而非黑名单：结构性关键字（$ref / $defs / oneOf / allOf /
+		// prefixItems）漏一个就原样发出去拿一个 400，且 DroppedKeys 为空
+		// 意味着连有损说明都报不出来。表内刻意不含 title 与四个长度/数量
+		// 约束——它们原来就被剔除且上线未见问题，参考实现放行不构成改它
+		// 的证据。
 		dialect: schemadialect.Dialect{
-			Drop: []string{
-				"$schema", "$id", "additionalProperties", "patternProperties",
-				"minLength", "maxLength", "minItems", "maxItems",
-				"exclusiveMinimum", "exclusiveMaximum", "deprecated", "title",
+			Allow: []string{
+				"anyOf", "default", "description", "enum", "example", "format",
+				"items", "maxProperties", "maximum", "minProperties", "minimum",
+				"nullable", "pattern", "properties", "propertyOrdering",
+				"required", "type",
 			},
+			StringEnumOnly:      true,
 			UppercaseType:       true,
 			CollapseUnionType:   true,
 			OmitEmptyProperties: true,
 		},
-		systemAsText:    true,
-		toolResultError: true,
+		systemAsText:       true,
+		toolResultError:    true,
+		toolResultTextOnly: true,
 		// 官方限定至多 5 个 stopSequences，超出即 INVALID_ARGUMENT。
 		maxStopSequences: 5,
 	},
@@ -100,6 +113,11 @@ func TestEveryOutboundDeclaresStructuralCaps(t *testing.T) {
 			}
 			if got.ToolResultError != want.toolResultError {
 				t.Errorf("ToolResultError = %v，想要 %v", got.ToolResultError, want.toolResultError)
+			}
+			// 工具结果的媒体承载力与 Images 是两件事：三家协议都能在普通
+			// 消息里带图，只有工具结果这一处装不下。
+			if got.ToolResultTextOnly != want.toolResultTextOnly {
+				t.Errorf("ToolResultTextOnly = %v，想要 %v", got.ToolResultTextOnly, want.toolResultTextOnly)
 			}
 			if got.ImageDetail != want.imageDetail {
 				t.Errorf("ImageDetail = %v，想要 %v", got.ImageDetail, want.imageDetail)

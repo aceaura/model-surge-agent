@@ -31,6 +31,8 @@ func ShapeRequest(req *ir.Request, name string, caps Capabilities) []string {
 		return nil
 	}
 	c := &noteCollector{name: name}
+	ensureNonEmptyMessages(req, c)
+	moveToolResultMedia(req, caps, c)
 	shapeTools(req, caps, c)
 	shapeParams(req, caps, c)
 	shapeSystem(req, caps, c)
@@ -40,6 +42,77 @@ func ShapeRequest(req *ir.Request, name string, caps Capabilities) []string {
 	// 消失的调用算 id 长度。
 	shapeToolIDs(req, caps, c)
 	return c.notes()
+}
+
+// ConversationPlaceholder 是补入的占位用户消息的正文。
+//
+// 两个用途共用一处字面量：首条消息不是 user 时的补位（anthropic）、
+// 与消息序列被清空后的补位（本文件）。分开写两份会在措辞调整时漂移，
+// 而这段文本会进提示词，漂移意味着两条路径打掉不同的 prompt cache 前缀。
+const ConversationPlaceholder = "(continuing the conversation)"
+
+// ensureNonEmptyMessages 在消息序列为空时补一条最小用户消息。
+//
+// 四个出站协议都要求非空：anthropic 与 chat_completions 的 messages 字段
+// 无 omitempty，空切片序列化成 null；gemini 的 contents 同理；responses
+// 的 input 出成 []。四者上游都报字段缺失或类型错的 400。
+//
+// 补而不是拒：清空是 ir.Sanitize 的修复动作造成的（丢掉无人应答的
+// tool_use 后整条消息空了），或者请求本就只有 system。客户端无从预知
+// 我们会修到一条不剩，把它变成客户端的错误是错误归因。
+func ensureNonEmptyMessages(req *ir.Request, c *noteCollector) {
+	if len(req.Messages) > 0 {
+		return
+	}
+	req.Messages = []ir.Message{{Role: ir.RoleUser, Content: []ir.Block{
+		{Type: ir.BlockText, Text: ConversationPlaceholder},
+	}}}
+	c.rewrite("messages", "the message list is empty and this protocol rejects that, "+
+		"filled in a minimal user turn")
+}
+
+// moveToolResultMedia 把工具结果里的媒体挪到紧随其后的一条用户消息。
+//
+// 集中在整形阶段而不是各编码器内：三个协议的坏法不同（碾平成文本 / 被上游
+// 拒收），但正确的处置只有一个，写三份会漂移。anthropic 不设
+// ToolResultTextOnly，这一步对它是空操作，它的 tool_result.content 原生
+// 装得下媒体，改动只会把一个正确的形态弄坏。
+//
+// 同一条消息里多个工具结果的媒体并进同一条用户消息：拆成多条会让模型
+// 看到一串没有上下文的图，也会多出几轮空洞的角色交替。
+func moveToolResultMedia(req *ir.Request, caps Capabilities, c *noteCollector) {
+	if !caps.ToolResultTextOnly {
+		return
+	}
+	out := make([]ir.Message, 0, len(req.Messages))
+	moved := false
+	for _, m := range req.Messages {
+		var media []ir.Block
+		for i := range m.Content {
+			if m.Content[i].Type != ir.BlockToolResult || m.Content[i].ToolResult == nil {
+				continue
+			}
+			kept, pulled := SplitToolResultMedia(m.Content[i].ToolResult.Content)
+			if len(pulled) == 0 {
+				continue
+			}
+			// 就地改 pointee：本函数的契约是「调用方须传入自己拥有的副本」，
+			// 而 ir.Request.Clone 已深拷到 ToolResult.Content。在这一处再复制
+			// 一层与本文件其余各步（thinking 预算、嵌套块降级）的做法不一致，
+			// 会让读者以为别处漏了防护。
+			m.Content[i].ToolResult.Content = kept
+			media = append(media, pulled...)
+		}
+		out = append(out, m)
+		if len(media) > 0 {
+			moved = true
+			out = append(out, ir.Message{Role: ir.RoleUser, Content: media})
+		}
+	}
+	if moved {
+		req.Messages = out
+		c.put("tool_result content", ToolResultMediaMovedNote(c.name))
+	}
 }
 
 // noteCollector 按字段名去重：同一字段在多个工具或多条消息上被改写只报一条。
