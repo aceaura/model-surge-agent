@@ -399,6 +399,13 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 		return nil, nil, ir.NewError(ir.ErrUpstream, 0, "",
 			fmt.Sprintf("undecodable response: %v", err))
 	}
+	// 怪异上游会以 200 返回 {"error":{...}}：choices 为空，照解下去产出
+	// 一份零内容的伪造成功，调用方据此记账并报告正常结束。判据与归类
+	// 都和流式错误帧同源（feedOne / DecodeError），口径不另起一份。
+	var env wireErrorEnvelope
+	if json.Unmarshal(body, &env) == nil && env.Error.Message != "" {
+		return nil, nil, convertError(0, &env.Error)
+	}
 	out := &ir.Response{ID: w.ID, Model: w.Model, Content: []ir.Block{},
 		ServiceTier: w.ServiceTier}
 	if w.Usage != nil {
