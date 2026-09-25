@@ -255,6 +255,11 @@ func decodeBlock(b wireBlock) (ir.Block, bool, error) {
 	case blockWebSearchToolResult:
 		out.Type = ir.BlockWebSearchToolResult
 		out.WebSearchToolResult = decodeWebSearchToolResult(b.ToolUseID, b.Content)
+	case blockContainerUpload:
+		// 容器文件引用：放行而不是报 unknown——多轮历史里带模型产出文件引用的
+		// 同族往返是合法输入，拒收会让客户端整轮 400。只有 file_id 一个载荷。
+		out.Type = ir.BlockContainerUpload
+		out.ContainerUpload = &ir.ContainerUploadRef{FileID: b.FileID}
 	default:
 		return out, false, fmt.Errorf("unknown block type %q", b.Type)
 	}

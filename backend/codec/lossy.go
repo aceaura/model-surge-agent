@@ -164,6 +164,13 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 		if calls, results := countRequestServerTools(req); calls > 0 || results > 0 {
 			notes["server tool blocks"] = ServerToolDropNote(calls, results)
 		}
+		// 历史里的容器文件引用块（container_upload）：外族没有 file_id 槽位，
+		// 三个外族出站编码器都整块跳过。模型看不到客户端上一轮送进容器的文件
+		// 或模型自己产出的文件引用，只能当作文件不存在继续。file_id 不回显。
+		// anthropic 一律不报：同族原样往返，报了就是谎报。
+		if n := countRequestContainerUploads(req); n > 0 {
+			notes["container upload blocks"] = ContainerUploadDropNote(n)
+		}
 	}
 
 	if !caps.Citations {
@@ -732,6 +739,22 @@ func ContainerDropNote() string {
 	return "dropped container info: this protocol's response has no container field, the client cannot see or reuse the code-execution container that served the request"
 }
 
+// ContainerUploadDropNote 容器文件引用块（container_upload）丢失注记。该块是
+// anthropic 专属（file_id 指向容器输入/产出文件），外族没有 file_id 槽位：
+// 整块跳过而不降级（把 file_id 拼进正文会污染回答），损耗经此报出。
+//
+// 与 ServerToolDropNote 同一口径：措辞用「接收端」而非「客户端」，因为这条
+// 注记同时用于响应侧（受众是客户端，模型产出的文件引用带不过去）与请求侧
+// 诊断（受众是上游模型，客户端历史里的文件引用带不过去），两个方向都成立。
+// file_id 属会话内容，不进注记。
+//
+// 三条路径共用：流式编码器 Notes()、非流式 EncodeResponseLossy、请求侧
+// DescribeLossy。措辞只此一份，按说明检索流水的人不会把同一件事当成多种故障。
+func ContainerUploadDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped %d container upload block(s): this protocol has no container file-reference slot, so the receiving side cannot see files uploaded to or produced by the code-execution container", n)
+}
+
 // MediaOutputDropNote 是模型产出附件丢失的说明：图片与非图片附件分开计数，
 // 合成一个数字会让排障时分不清丢的是哪一类——两者在源协议里是不同块型，
 // 处置路径也不同。
@@ -789,6 +812,22 @@ func CountResponseServerTools(resp *ir.Response) (calls, results int) {
 	return calls, results
 }
 
+// CountResponseContainerUploads 数出响应里的容器文件引用块（container_upload）
+// 条数。与 CountResponseServerTools 同一路数：编码器整块跳过之前先数出来，
+// 跳过才不是静默的。
+func CountResponseContainerUploads(resp *ir.Response) int {
+	if resp == nil {
+		return 0
+	}
+	n := 0
+	for _, b := range resp.Content {
+		if b.Type == ir.BlockContainerUpload {
+			n++
+		}
+	}
+	return n
+}
+
 // CountResponseNonPortableCitations 数出响应里外族标注槽位装不下的引用条数
 // （用于非流式有损诊断）。与 CountResponseServerTools 同一路数：编码器
 // 逐条跳过之前先数出来，跳过才不是静默的。
@@ -841,6 +880,24 @@ func countRequestServerTools(req *ir.Request) (calls, results int) {
 		count(m.Content)
 	}
 	return calls, results
+}
+
+// countRequestContainerUploads 数出请求历史里的容器文件引用块（container_upload）
+// 条数。与 countRequestServerTools 同一路数：外族编码器整块跳过之前先数出来。
+func countRequestContainerUploads(req *ir.Request) int {
+	n := 0
+	count := func(blocks []ir.Block) {
+		for _, b := range blocks {
+			if b.Type == ir.BlockContainerUpload {
+				n++
+			}
+		}
+	}
+	count(req.System)
+	for _, m := range req.Messages {
+		count(m.Content)
+	}
+	return n
 }
 
 // ServerToolDropNote 服务端托管工具块丢失注记。server_tool_use 与

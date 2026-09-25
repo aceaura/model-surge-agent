@@ -70,6 +70,9 @@ type streamEncoder struct {
 	// droppedContainer 容器回显（anthropic 专属维度）被丢标记：本协议响应
 	// 没有 container 槽位。首帧或收尾帧任一带到即置位，Notes() 报一次。
 	droppedContainer bool
+	// droppedUploads 被跳过的容器文件引用块（container_upload）数：本协议
+	// 没有 file_id 槽位，整块跳过，Notes() 收尾时报出。
+	droppedUploads int
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
 	// suppressUsageFrame 为真表示客户端明确说了不要那一帧单独的 usage
@@ -98,6 +101,9 @@ func (e *streamEncoder) Notes() []string {
 	}
 	if e.droppedContainer {
 		notes = append(notes, codec.ContainerDropNote())
+	}
+	if e.droppedUploads > 0 {
+		notes = append(notes, codec.ContainerUploadDropNote(e.droppedUploads))
 	}
 	return codec.DedupeNotes(notes)
 }
@@ -163,6 +169,12 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		case ir.BlockWebSearchToolResult:
 			// 搜回来的页面同理：跳过但计数。
 			e.droppedServerResults++
+			return nil, nil
+		case ir.BlockContainerUpload:
+			// 容器文件引用（file_id）没有本族形态：整块跳过但计数，Notes() 报出。
+			// kind 已记进 blockKind，skipDelta 据此挡住该索引的任何后续增量，
+			// 不让 file_id 或空正文被编成凭空的文本/工具调用。
+			e.droppedUploads++
 			return nil, nil
 		}
 		if kind != ir.BlockToolUse {
@@ -346,11 +358,13 @@ func (e *streamEncoder) Finish() [][]byte {
 	return out
 }
 
-// skipDelta 报告某个块索引是否属于服务端托管工具块：那类块在 EvBlockStart
-// 已被整块跳过，但它的查询串仍会经 EvToolInput 通道续传，不挡住就会被
-// toolSlot 编成一场客户端从未发起的伪工具调用。
+// skipDelta 报告某个块索引是否属于要在增量通道上整块丢弃的块型：服务端托管
+// 工具块与容器文件引用块。那两类块在 EvBlockStart 已被整块跳过，但托管工具的
+// 查询串仍会经 EvToolInput 通道续传，不挡住就会被 toolSlot 编成一场客户端
+// 从未发起的伪工具调用；容器文件引用块本无增量，这里一并挡住是防御性的。
 func (e *streamEncoder) skipDelta(blockIndex int) bool {
-	return e.blockKind[blockIndex].IsServerTool()
+	kind := e.blockKind[blockIndex]
+	return kind.IsServerTool() || kind == ir.BlockContainerUpload
 }
 
 // toolSlot 把块索引映射成连续的工具调用序号。
@@ -447,6 +461,11 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			// 服务端托管工具块没有本族输出形态：整块跳过，落进 default
 			// 会被当正文编成一段凭空的查询串或搜索结果。
 			// 跳过，损耗由 EncodeResponseLossy 经 CountResponseServerTools 报出。
+			continue
+		case ir.BlockContainerUpload:
+			// 容器文件引用块没有本族输出形态：整块跳过，落进 default 会被当
+			// 正文编成一个空 content part（file_id 不会泄漏，但会凭空多一段空文本）。
+			// 跳过，损耗由 EncodeResponseLossy 经 CountResponseContainerUploads 报出。
 			continue
 		default:
 			if b.Type == ir.BlockText {

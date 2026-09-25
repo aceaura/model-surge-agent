@@ -64,6 +64,11 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	if resp.Container != nil {
 		notes = append(notes, codec.ContainerDropNote())
 	}
+	// 容器文件引用块（container_upload）同理：本协议没有 file_id 槽位，
+	// 编码器整块跳过，丢了要报出来。
+	if n := codec.CountResponseContainerUploads(resp); n > 0 {
+		notes = append(notes, codec.ContainerUploadDropNote(n))
+	}
 	return body, codec.DedupeNotes(notes), nil
 }
 

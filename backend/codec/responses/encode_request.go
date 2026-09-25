@@ -211,6 +211,11 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 			// 会硬报错，伪装成 function_call 则是伪造一场客户端从未发起、
 			// 也永远等不到结果的调用。损耗由 DescribeLossy 统一报出。
 			continue
+		case ir.BlockContainerUpload:
+			// 容器文件引用块没有本族请求槽位：整块跳过。落进 default 会硬报错，
+			// 伪装成 input_file 则会把只有 file_id 的容器引用当普通附件投递。
+			// 损耗由 DescribeLossy 统一报出。
+			continue
 		default:
 			return nil, fmt.Errorf("cannot encode block type %q", b.Type)
 		}

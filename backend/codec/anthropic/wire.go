@@ -93,6 +93,9 @@ type wireBlock struct {
 	Content   json.RawMessage `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
 
+	// FileID container_upload 块的文件引用（type=container_upload 时唯一载荷）。
+	FileID string `json:"file_id,omitempty"`
+
 	// image
 	Source *wireSource `json:"source,omitempty"`
 
@@ -233,6 +236,8 @@ const (
 	// 与错误对象的 union）。
 	blockServerToolUse       = "server_tool_use"
 	blockWebSearchToolResult = "web_search_tool_result"
+	// container_upload 复用 wireBlock 的 FileID（该块唯一载荷）。
+	blockContainerUpload = "container_upload"
 )
 
 // webSearchResultBlock web_search_tool_result.content 的结果子块形态。

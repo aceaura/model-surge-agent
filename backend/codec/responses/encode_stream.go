@@ -57,12 +57,16 @@ type streamEncoder struct {
 	// droppedContainer 容器回显（anthropic 专属维度）被丢标记：本协议响应
 	// 没有 container 槽位。首帧或收尾帧任一带到即置位，Notes() 报一次。
 	droppedContainer bool
+	// droppedUploads 被跳过的容器文件引用块（container_upload）数：本协议
+	// 没有 file_id 槽位，整块跳过，Notes() 收尾时报出。
+	droppedUploads int
 	// badToolArgs 是关块时判定畸形的函数调用入参数（增量已发出、改写
 	// 不了，只能计数），Notes() 报出。
 	badToolArgs int
-	// skipIdx 记录被整块跳过的服务端托管工具块索引。跳过发生在开条目
-	// 之前，output_index 因此不被烧掉；但该块后续的查询串增量仍会经
-	// EvToolInput 到来，不挡住会被 ensureOpen 补开成一个凭空的条目。
+	// skipIdx 记录被整块跳过的块索引（服务端托管工具块与容器文件引用块）。
+	// 跳过发生在开条目之前，output_index 因此不被烧掉；但托管工具块后续的
+	// 查询串增量仍会经 EvToolInput 到来，不挡住会被 ensureOpen 补开成一个
+	// 凭空的条目。
 	skipIdx map[int]bool
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
@@ -85,6 +89,9 @@ func (e *streamEncoder) Notes() []string {
 	}
 	if e.droppedContainer {
 		notes = append(notes, codec.ContainerDropNote())
+	}
+	if e.droppedUploads > 0 {
+		notes = append(notes, codec.ContainerUploadDropNote(e.droppedUploads))
 	}
 	return codec.DedupeNotes(notes)
 }
@@ -164,6 +171,14 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			// 搜回来的页面同理：跳过但计数。
 			e.skipIdx[ev.Index] = true
 			e.droppedServerResults++
+			return nil, nil
+		case ir.BlockContainerUpload:
+			// 容器文件引用（file_id）没有本族输出条目形态：整块跳过但计数，
+			// Notes() 报出。且不进 openBlock——那会烧掉一个 output_index 把
+			// 后续真块序号推后，还会凭空多出一个 content 为 [] 的空 message item。
+			// 记下索引，后续任何增量一并丢弃。
+			e.skipIdx[ev.Index] = true
+			e.droppedUploads++
 			return nil, nil
 		}
 		return e.openBlock(ev.Index, kind, ev.Block)
@@ -710,6 +725,11 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			// 服务端托管工具块没有本族输出条目形态：整块跳过。落进 default
 			// 会硬报错，编成 message 条目则凭空多出一个空助手消息。
 			// 跳过，损耗由 EncodeResponseLossy 经 CountResponseServerTools 报出。
+			continue
+		case ir.BlockContainerUpload:
+			// 容器文件引用块没有本族输出条目形态：整块跳过。落进 default 会硬
+			// 报错，编成 message 条目则凭空多出一个空助手消息并泄漏 file_id。
+			// 跳过，损耗由 EncodeResponseLossy 经 CountResponseContainerUploads 报出。
 			continue
 		default:
 			return nil, fmt.Errorf("responses: cannot encode block type %q", b.Type)

@@ -311,6 +311,13 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 			return out, false, fmt.Errorf("web_search_tool_result content: %w", err)
 		}
 		out.Content = raw
+	case ir.BlockContainerUpload:
+		// 容器文件引用：只有 file_id 一个载荷。ContainerUpload 为 nil 时
+		// FileID 留空——上游按缺 file_id 拒收，而不是本服务伪造一个引用。
+		out.Type = blockContainerUpload
+		if b.ContainerUpload != nil {
+			out.FileID = b.ContainerUpload.FileID
+		}
 	default:
 		return out, false, fmt.Errorf("cannot encode block type %q", b.Type)
 	}

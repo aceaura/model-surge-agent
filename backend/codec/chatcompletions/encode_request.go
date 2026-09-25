@@ -175,6 +175,11 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 			// encodeContent 直接报错，伪装成 tool_calls 则是伪造一场
 			// 客户端从未发起、也永远等不到结果的调用。
 			continue
+		case ir.BlockContainerUpload:
+			// 容器文件引用块没有本族槽位：整块跳过。落进 plain 会编成一个空
+			// content part，伪装成附件则会把只有 file_id 的引用当内联内容投递、
+			// 被上游按内容解码后 400。损耗由 DescribeLossy 统一报出。
+			continue
 		case ir.BlockText:
 			// 先在块内解析再平移：块内定位精确，拼接文本里搜可能命中别块。
 			cites = append(cites, shiftCitations(b.Citations, citeText.String(), b.Text)...)

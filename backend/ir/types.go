@@ -41,6 +41,12 @@ const (
 	// 多轮历史里带这类块的同族往返直接 400。
 	BlockServerToolUse       BlockType = "server_tool_use"
 	BlockWebSearchToolResult BlockType = "web_search_tool_result"
+	// BlockContainerUpload 容器文件引用块（Anthropic 的 container_upload）：
+	// 请求侧把已上传的文件送进代码执行容器的输入目录，响应侧是模型运行代码后
+	// 产出的文件引用。与四类媒体块分开建模是因为它没有内容本体——只有一个
+	// file_id 与「进容器」的语义，塞进 Media.FileID 会让外族把它当普通附件
+	// 投递，上游按内容解码后 400。外族没有容器概念，整块跳过并计损耗。
+	BlockContainerUpload BlockType = "container_upload"
 )
 
 // IsServerTool 判断块是否为服务端托管工具产物（调用或结果）。
@@ -78,6 +84,9 @@ type Block struct {
 	// 仅 Anthropic 一族可往返，外族编码整块跳过（见 IsServerTool）。
 	ServerToolUse       *ServerToolUse       `json:"server_tool_use,omitempty"`
 	WebSearchToolResult *WebSearchToolResult `json:"web_search_tool_result,omitempty"`
+	// ContainerUpload 承载容器文件引用块（BlockContainerUpload），仅
+	// Anthropic 一族可往返，外族编码整块跳过（无 file_id 槽位）。
+	ContainerUpload *ContainerUploadRef `json:"container_upload,omitempty"`
 	// Citations 本块正文引用的来源。挂在块上而非消息上，是因为各协议都把它
 	// 绑到单个文本块：Anthropic 的 text.citations、Chat 的 message.annotations、
 	// Responses 的 output_text.annotations。偏移量也只有在单块正文内才有意义
@@ -103,6 +112,13 @@ type Skill struct {
 	SkillID string `json:"skill_id,omitempty"`
 	Type    string `json:"type,omitempty"`
 	Version string `json:"version,omitempty"`
+}
+
+// ContainerUploadRef 容器文件引用（container_upload 块的载荷）。只有 file_id：
+// 文件本体在 Files API 侧，块只是指向它的指针。请求侧代表「把这个已上传文件
+// 送进容器输入目录」，响应侧代表「模型在容器里产出了这个文件」。
+type ContainerUploadRef struct {
+	FileID string `json:"file_id,omitempty"`
 }
 
 // Citation 正文中一段文字的来源标注。
@@ -596,6 +612,10 @@ func cloneBlocks(in []Block) []Block {
 				v.Results = append([]WebSearchResult(nil), b.WebSearchToolResult.Results...)
 			}
 			out[i].WebSearchToolResult = &v
+		}
+		if b.ContainerUpload != nil {
+			v := *b.ContainerUpload
+			out[i].ContainerUpload = &v
 		}
 		if b.Citations != nil {
 			out[i].Citations = append([]Citation(nil), b.Citations...)
