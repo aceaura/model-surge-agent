@@ -183,12 +183,13 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 			// call_id/output 两个键，没有放标记的位置，而丢掉它会让
 			// 模型把失败当成功。
 			output := joinText(codec.PrefixToolResultError(b.ToolResult, outboundCodec{}.Caps()))
+			// output 恒写键：空文本（纯媒体结果）也得是 ""，
+			// 依据见 wireItem.Output 的注释。字符串不会 marshal 失败。
+			enc, _ := json.Marshal(output)
 			out = append(out, wireItem{
 				Type:   itemFunctionCallOutput,
 				CallID: b.ToolResult.ToolUseID,
-				// output 恒写键：空文本（纯媒体结果）也得是 ""，
-				// 依据见 wireItem.Output 的注释。
-				Output: &output,
+				Output: enc,
 			})
 		case ir.BlockThinking:
 			// Redacted 块的载荷在解码期就已舍弃，编出空 reasoning item 会被上游拒收。

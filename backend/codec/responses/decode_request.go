@@ -153,11 +153,8 @@ func appendItem(out *ir.Request, item wireItem) error {
 		return nil
 
 	case itemFunctionCallOutput:
-		// output 是纯字符串，无结构。
-		var content []ir.Block
-		if item.Output != nil && *item.Output != "" {
-			content = []ir.Block{{Type: ir.BlockText, Text: *item.Output}}
-		}
+		// output 官方允许字符串或 content part 数组两种形态。
+		content := decodeToolCallOutput(item.Output)
 		// 本协议没有失败标记字段，失败态是我们出站时写进正文的前缀，
 		// 这里认回来：不认的话换目标重试时模型会把失败当成功。
 		content, isErr := codec.AdoptToolResultError(content)
@@ -191,6 +188,18 @@ func appendItem(out *ir.Request, item wireItem) error {
 	default:
 		return fmt.Errorf("unknown item type %q", item.Type)
 	}
+}
+
+// decodeToolCallOutput 解 function_call_output.output 的双形态。
+// 字符串形态最常见，落成单个文本块；数组形态（output_text / input_image
+// 等 part）走与消息 content 同款的逐 part 解析。缺省、空串或数组解不出
+// 都落一个空文本块占位：结果块的内容全丢会让配平的 tool_use 读到
+// 不存在的结果，比空结果更难排查。
+func decodeToolCallOutput(raw json.RawMessage) []ir.Block {
+	if blocks, err := decodeContent(raw); err == nil && len(blocks) > 0 {
+		return blocks
+	}
+	return []ir.Block{{Type: ir.BlockText}}
 }
 
 // appendBlocks 把块并进末尾消息，角色不同才新开一条。

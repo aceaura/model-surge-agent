@@ -101,7 +101,12 @@ type wireItem struct {
 	// 空文本/纯媒体的工具结果也必须写 ""。string + omitempty 会把空串的键
 	// 丢掉，编出 {"type":"function_call_output","call_id":...} 的非法形状。
 	// nil 表示该条目类型本就没有这个键，照常缺席。
-	Output *string `json:"output,omitempty"`
+	//
+	// RawMessage 是因为官方允许两种形态：字符串，或 content part 数组
+	// （[{"type":"output_text",...},...]）。声明成字符串时数组形态会让
+	// input 数组整段 Unmarshal 失败——合法请求被整单 400 拒掉。
+	// 逐 part 解析在 decodeToolCallOutput 做；出站一律写回字符串形态。
+	Output json.RawMessage `json:"output,omitempty"`
 
 	// reasoning
 	Summary []wireSummary `json:"summary,omitempty"`
