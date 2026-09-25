@@ -37,19 +37,27 @@ type streamDecoder struct {
 	refused bool
 	// notes 记录改写说明，走响应侧诊断通道。
 	notes []string
+	// closed 是已闭合块的槽位键。part 级 done 帧可能在块闭合后才到
+	// （迟到的终态帧），那时回补会把内容追加到已定稿的条目上。
+	closed map[string]struct{}
 }
 
 // slot 把「两级序号构成的键」绑到分配给它的 IR 块索引。
 type slot struct {
 	key   string
 	index int
+	// text 是已发出的正文/思考前缀。done 帧携带的是完整终态而不是新一份
+	// 内容，回补判据要靠这份账：只补尚未发出的后缀。
+	text string
 	// sig 记住这个块已经拿到过的推理签名。多数上游只在 output_item.done 上
 	// 挂 encrypted_content，少数在 added 上就给；两处都给时不能都发——聚合器
 	// 对签名增量是累加的，第二条会把两份密文拼成一段无法解密的垃圾。
 	sig string
 }
 
-func newStreamDecoder() *streamDecoder { return &streamDecoder{} }
+func newStreamDecoder() *streamDecoder {
+	return &streamDecoder{closed: map[string]struct{}{}}
+}
 
 // Notes 实现 codec.StreamNotes。
 func (d *streamDecoder) Notes() []string { return codec.DedupeNotes(d.notes) }
@@ -100,6 +108,7 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 			out = append(out, opened...)
 			// part 开启帧可能已带完整文本（非增量实现），带了就当一次 delta 发出。
 			if text := partText(ev.Part); text != "" {
+				d.accText(idx, text)
 				out = append(out, ir.Event{Type: ir.EvTextDelta, Index: idx, Text: text})
 			}
 			return out, nil
@@ -114,6 +123,7 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		}
 		idx, opened := d.slot(partKey(ev.OutputIndex, ev.ContentIndex), ir.BlockText)
 		out := append(d.start(ev), opened...)
+		d.accText(idx, ev.Delta)
 		return append(out, ir.Event{Type: ir.EvTextDelta, Index: idx, Text: ev.Delta}), nil
 
 	case evFunctionArgsDelta:
@@ -127,14 +137,54 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		// IR 的一个 thinking 块承载全部段落，段间不需要边界。
 		idx, opened := d.slot(reasoningKey(ev.OutputIndex), ir.BlockThinking)
 		out := append(d.start(ev), opened...)
+		d.accText(idx, ev.Delta)
 		return append(out, ir.Event{Type: ir.EvThinkingDelta, Index: idx, Text: ev.Delta}), nil
 
 	case evOutputItemDone:
 		return d.itemDone(ev), nil
 
-	case evContentPartDone, evOutputTextDone, evFunctionArgsDone:
-		// 这些帧只是「该 part 已完整」的确认，块闭合统一在 output_item.done 做。
+	case evOutputTextDone:
+		// 完整终态在这一帧。此前整个事件落到 default 被丢掉，只发终态
+		// 不发增量的 done-only 上游整段正文一个字都到不了客户端。
+		return d.backfill(partKey(ev.OutputIndex, ev.ContentIndex), ir.BlockText,
+			ev.Text, ir.EvTextDelta), nil
+
+	case evRefusalDone:
+		// 拒绝正文与文本增量同键同块：本协议实现里没有独立的拒答块类型，
+		// 拒答 part 在开启帧就并进了文本块。
+		return d.backfill(partKey(ev.OutputIndex, ev.ContentIndex), ir.BlockText,
+			ev.Refusal, ir.EvTextDelta), nil
+
+	case evContentPartDone:
+		// part 级终态同样可能带着完整正文：网关漏发 output_text.done 时
+		// 它是唯一来源。块闭合仍统一在 output_item.done 做，
 		// 在这里也闭合会产出重复的 block_stop。
+		if ev.Part == nil {
+			return nil, nil
+		}
+		switch ev.Part.Type {
+		case partOutputText, partRefusal, "":
+			return d.backfill(partKey(ev.OutputIndex, ev.ContentIndex), ir.BlockText,
+				partText(ev.Part), ir.EvTextDelta), nil
+		}
+		return nil, nil
+
+	case evReasoningSummaryTextDone, evReasoningTextDone:
+		// 不在这里关块：encrypted_content 要到 output_item.done 才给，
+		// 提前关会丢签名（判据同 donesignature_test）。
+		return d.backfill(reasoningKey(ev.OutputIndex), ir.BlockThinking,
+			ev.Text, ir.EvThinkingDelta), nil
+
+	case evReasoningSummaryPartDone:
+		// 有的网关只发这一帧推理终态。
+		if ev.Part == nil {
+			return nil, nil
+		}
+		return d.backfill(reasoningKey(ev.OutputIndex), ir.BlockThinking,
+			ev.Part.Text, ir.EvThinkingDelta), nil
+
+	case evFunctionArgsDone:
+		// 块闭合统一在 output_item.done 做；参数终态回补是独立的移植点。
 		return nil, nil
 
 	case evCompleted, evIncomplete, evFailed:
@@ -214,6 +264,18 @@ func (d *streamDecoder) itemDone(ev wireStreamEvent) []ir.Event {
 	prefix := fmt.Sprintf("%d:", ev.OutputIndex)
 	reasoning := reasoningKey(ev.OutputIndex)
 	var out []ir.Event
+	if ev.Item != nil {
+		switch ev.Item.Type {
+		case itemMessage:
+			// done-only 上游的整条正文只在 item.content 里，前面一帧增量都没有。
+			out = append(out, d.completeItemParts(ev.OutputIndex, ev.Item.Content)...)
+		case itemReasoning:
+			// 摘要快照只在 item.done 里：有的网关不发任何 reasoning_* 终止帧。
+			// 回补必须排在下面的签名增量之前，思考正文才不会落到签名后面。
+			out = append(out, d.backfill(reasoning, ir.BlockThinking,
+				joinSummary(ev.Item.Summary), ir.EvThinkingDelta)...)
+		}
+	}
 	for _, s := range d.open {
 		if !strings.HasPrefix(s.key, prefix) {
 			continue
@@ -292,9 +354,84 @@ func (d *streamDecoder) closeAll() []ir.Event {
 	out := make([]ir.Event, 0, len(d.open))
 	for _, s := range d.open {
 		out = append(out, ir.Event{Type: ir.EvBlockStop, Index: s.index})
+		d.closed[s.key] = struct{}{}
 	}
 	d.open = nil
 	return out
+}
+
+// backfill 用 part 级 done 帧携带的完整终态补齐尚未发出的后缀，块尚未开时补开。
+// done 帧带的是完整值而不是新一份内容：只发终态不发增量的 done-only 上游，
+// 整段正文只在这类帧里出现，整帧丢掉就一个字都到不了客户端。
+// 块已关就不动：再发增量会被追加到已定稿的条目上（对齐 new-api
+// mergeFinalValue 的 block.Stopped 判据）。
+func (d *streamDecoder) backfill(key string, kind ir.BlockType, full string, typ ir.EventType) []ir.Event {
+	if full == "" {
+		return nil
+	}
+	if _, closed := d.closed[key]; closed {
+		return nil
+	}
+	idx, opened := d.slot(key, kind)
+	suffix, ok := missingSuffix(d.delivered(idx), full)
+	if !ok {
+		return opened
+	}
+	d.accText(idx, suffix)
+	return append(opened, ir.Event{Type: typ, Index: idx, Text: suffix})
+}
+
+// completeItemParts 从 output_item.done 的 message content 回补正文：
+// done-only 上游的整条正文只在这里出现。part 在数组里的位置就是它的
+// content_index，与流式 part 帧的寻址一致。
+func (d *streamDecoder) completeItemParts(oi int, raw json.RawMessage) []ir.Event {
+	if len(raw) == 0 {
+		return nil
+	}
+	var parts []wirePart
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return nil
+	}
+	var out []ir.Event
+	for n := range parts {
+		switch parts[n].Type {
+		case partOutputText, partRefusal, "":
+			out = append(out, d.backfill(partKey(oi, n), ir.BlockText,
+				partText(&parts[n]), ir.EvTextDelta)...)
+		}
+	}
+	return out
+}
+
+// missingSuffix 判 done 帧携带的完整终态与已发出前缀的关系：终态是已发内容的
+// 延长才补缺失后缀；一致（增量已给全）或分叉（上游自相矛盾）都不补——分叉时
+// 保留已下发的增量，不追加成畸形正文。new-api mergeFinalValue 与 cc-switch
+// missing_suffix 用的是同一套判据。
+func missingSuffix(delivered, full string) (string, bool) {
+	if !strings.HasPrefix(full, delivered) || full == delivered {
+		return "", false
+	}
+	return full[len(delivered):], true
+}
+
+// accText 把刚发出的增量记进槽位账，供 done 帧回补时判前缀。
+func (d *streamDecoder) accText(index int, delta string) {
+	for i := range d.open {
+		if d.open[i].index == index {
+			d.open[i].text += delta
+			return
+		}
+	}
+}
+
+// delivered 读出该块已发出的内容前缀。
+func (d *streamDecoder) delivered(index int) string {
+	for _, s := range d.open {
+		if s.index == index {
+			return s.text
+		}
+	}
+	return ""
 }
 
 // Finish 处理上游没发终止帧就断流的情况。
@@ -338,10 +475,12 @@ func (d *streamDecoder) allocate(key string) int {
 }
 
 // forget 移除该条目下的槽位，让 closeAll 不再重复闭合它们。
+// 键同时记入 closed：迟到的 part 级 done 帧不得再往这些块上回补。
 func (d *streamDecoder) forget(prefix string) {
 	kept := d.open[:0]
 	for _, s := range d.open {
 		if strings.HasPrefix(s.key, prefix) {
+			d.closed[s.key] = struct{}{}
 			continue
 		}
 		kept = append(kept, s)

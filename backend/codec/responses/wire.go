@@ -291,6 +291,13 @@ type wireStreamEvent struct {
 	Item         *wireRespItem `json:"item,omitempty"`
 	Part         *wirePart     `json:"part,omitempty"`
 	Delta        string        `json:"delta,omitempty"`
+	// Text / Refusal 是 done 帧携带的完整终态值而不是新一份内容：
+	// output_text.done 给 text，refusal.done 给 refusal，
+	// reasoning_summary_text.done / reasoning_text.done 给 text。
+	// 只发终态不发增量的上游全靠这两个字段，漏读就是整段正文静默丢失。
+	// annotations 快照的回补随引用（Citation）支持一起移植。
+	Text    string `json:"text,omitempty"`
+	Refusal string `json:"refusal,omitempty"`
 	// SummaryIndex 是推理摘要分段的序号。
 	SummaryIndex int           `json:"summary_index,omitempty"`
 	Response     *wireResponse `json:"response,omitempty"`
@@ -321,23 +328,27 @@ const (
 
 // 流帧类型名。
 const (
-	evCreated              = "response.created"
-	evInProgress           = "response.in_progress"
-	evOutputItemAdded      = "response.output_item.added"
-	evOutputItemDone       = "response.output_item.done"
-	evContentPartAdded     = "response.content_part.added"
-	evContentPartDone      = "response.content_part.done"
-	evOutputTextDelta      = "response.output_text.delta"
-	evOutputTextDone       = "response.output_text.done"
-	evRefusalDelta         = "response.refusal.delta"
-	evFunctionArgsDelta    = "response.function_call_arguments.delta"
-	evFunctionArgsDone     = "response.function_call_arguments.done"
-	evReasoningSummaryText = "response.reasoning_summary_text.delta"
-	evReasoningTextDelta   = "response.reasoning_text.delta"
-	evCompleted            = "response.completed"
-	evIncomplete           = "response.incomplete"
-	evFailed               = "response.failed"
-	evError                = "error"
+	evCreated                  = "response.created"
+	evInProgress               = "response.in_progress"
+	evOutputItemAdded          = "response.output_item.added"
+	evOutputItemDone           = "response.output_item.done"
+	evContentPartAdded         = "response.content_part.added"
+	evContentPartDone          = "response.content_part.done"
+	evOutputTextDelta          = "response.output_text.delta"
+	evOutputTextDone           = "response.output_text.done"
+	evRefusalDelta             = "response.refusal.delta"
+	evRefusalDone              = "response.refusal.done"
+	evFunctionArgsDelta        = "response.function_call_arguments.delta"
+	evFunctionArgsDone         = "response.function_call_arguments.done"
+	evReasoningSummaryText     = "response.reasoning_summary_text.delta"
+	evReasoningSummaryTextDone = "response.reasoning_summary_text.done"
+	evReasoningSummaryPartDone = "response.reasoning_summary_part.done"
+	evReasoningTextDelta       = "response.reasoning_text.delta"
+	evReasoningTextDone        = "response.reasoning_text.done"
+	evCompleted                = "response.completed"
+	evIncomplete               = "response.incomplete"
+	evFailed                   = "response.failed"
+	evError                    = "error"
 )
 
 const (
@@ -356,15 +367,19 @@ const (
 // 刻意不在表里：它们不属于任何条目，带上 output_index 会让客户端
 // 把这些帧归到第一个条目上。
 var requiredIndexFields = map[string][]string{
-	evOutputItemAdded:      {"output_index"},
-	evOutputItemDone:       {"output_index"},
-	evContentPartAdded:     {"output_index", "content_index"},
-	evContentPartDone:      {"output_index", "content_index"},
-	evOutputTextDelta:      {"output_index", "content_index"},
-	evOutputTextDone:       {"output_index", "content_index"},
-	evRefusalDelta:         {"output_index", "content_index"},
-	evFunctionArgsDelta:    {"output_index"},
-	evFunctionArgsDone:     {"output_index"},
-	evReasoningSummaryText: {"output_index", "summary_index"},
-	evReasoningTextDelta:   {"output_index"},
+	evOutputItemAdded:          {"output_index"},
+	evOutputItemDone:           {"output_index"},
+	evContentPartAdded:         {"output_index", "content_index"},
+	evContentPartDone:          {"output_index", "content_index"},
+	evOutputTextDelta:          {"output_index", "content_index"},
+	evOutputTextDone:           {"output_index", "content_index"},
+	evRefusalDelta:             {"output_index", "content_index"},
+	evRefusalDone:              {"output_index", "content_index"},
+	evFunctionArgsDelta:        {"output_index"},
+	evFunctionArgsDone:         {"output_index"},
+	evReasoningSummaryText:     {"output_index", "summary_index"},
+	evReasoningSummaryTextDone: {"output_index", "summary_index"},
+	evReasoningSummaryPartDone: {"output_index", "summary_index"},
+	evReasoningTextDelta:       {"output_index"},
+	evReasoningTextDone:        {"output_index"},
 }

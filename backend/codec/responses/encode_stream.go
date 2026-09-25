@@ -277,8 +277,21 @@ func (e *streamEncoder) closeBlockAs(index int, status string) ([][]byte, error)
 	item.closed = true
 
 	var out [][]byte
+	// part 级终止帧，官方顺序是 *.done -> content_part.done -> output_item.done。
+	// 只发 output_item.done 的话，按 part 事件关块的下游永远等不到块结束
+	// （cc-switch 把 output_text.done 直接映射成 content_block_stop）。
+	// done 帧必须带完整终态：只读终态不拼增量的下游从这些帧里取内容。
 	if item.partOpen {
-		frames, err := e.frame(evContentPartDone, wireStreamEvent{
+		done, err := e.frame(evOutputTextDone, wireStreamEvent{
+			Type:        evOutputTextDone,
+			OutputIndex: item.outputIndex,
+			Text:        item.text,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, done...)
+		part, err := e.frame(evContentPartDone, wireStreamEvent{
 			Type:        evContentPartDone,
 			OutputIndex: item.outputIndex,
 			Part:        &wirePart{Type: partOutputText, Text: item.text},
@@ -286,7 +299,27 @@ func (e *streamEncoder) closeBlockAs(index int, status string) ([][]byte, error)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, frames...)
+		out = append(out, part...)
+	}
+	if item.kind == ir.BlockThinking {
+		sumDone, err := e.frame(evReasoningSummaryTextDone, wireStreamEvent{
+			Type:        evReasoningSummaryTextDone,
+			OutputIndex: item.outputIndex,
+			Text:        item.text,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sumDone...)
+		partDone, err := e.frame(evReasoningSummaryPartDone, wireStreamEvent{
+			Type:        evReasoningSummaryPartDone,
+			OutputIndex: item.outputIndex,
+			Part:        &wirePart{Type: partSummaryText, Text: item.text},
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, partDone...)
 	}
 	frames, err := e.frame(evOutputItemDone, wireStreamEvent{
 		Type:        evOutputItemDone,
