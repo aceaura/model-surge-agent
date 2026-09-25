@@ -19,6 +19,10 @@ type streamEncoder struct {
 	// 错误之后再发内容或 message_stop，客户端会把这轮当成功而存下残缺历史。
 	errored    bool
 	openBlocks map[int]bool
+	// toolPending 记录已开启但还没见过任何 input 增量的 tool_use 块。
+	// 客户端（含官方 SDK）只从 input_json_delta 拼参数，一个 delta 都不发
+	// 等于参数是空串——拼出来不是合法 JSON，关块时要补一个 "{}"。
+	toolPending map[int]bool
 	// blockOrder 让 Finish 按开启顺序闭合，避免 map 遍历顺序不定
 	// 导致同样的输入产出不同的帧序。
 	blockOrder []int
@@ -50,7 +54,7 @@ func (e *streamEncoder) HeartbeatFrame() []byte {
 }
 
 func newStreamEncoder() *streamEncoder {
-	return &streamEncoder{openBlocks: map[int]bool{}}
+	return &streamEncoder{openBlocks: map[int]bool{}, toolPending: map[int]bool{}}
 }
 
 func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
@@ -79,6 +83,7 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			// 内容由后续 input_json_delta 累积。
 			if block.Type == blockToolUse {
 				block.Input = json.RawMessage(`{}`)
+				e.toolPending[ev.Index] = true
 			}
 		}
 		e.open(ev.Index)
@@ -103,20 +108,17 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		}
 		return e.encodeDelta(ev, &streamDelta{Type: deltaSignature, Signature: ev.Text})
 	case ir.EvToolInput:
-		return e.encodeDelta(ev, &streamDelta{Type: deltaInputJSON, PartialJSON: ev.Text})
+		out, err := e.encodeDelta(ev, &streamDelta{Type: deltaInputJSON, PartialJSON: ev.Text})
+		// encodeDelta 可能刚自动开启这个块（置位 pending），所以清标记
+		// 必须放在它之后：见过真实增量的块不再是零增量。
+		delete(e.toolPending, ev.Index)
+		return out, err
 
 	case ir.EvBlockStop:
 		if !e.openBlocks[ev.Index] {
 			return nil, nil
 		}
-		e.close(ev.Index)
-		frame, err := marshalFrame(evContentBlockStop, streamEvent{
-			Type: evContentBlockStop, Index: ev.Index,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return [][]byte{frame}, nil
+		return e.closeFrames(ev.Index), nil
 
 	case ir.EvMessageDelta:
 		// 档位也可能只在收尾帧到达（非流式响应投影成事件时就是这样），
@@ -288,16 +290,34 @@ func (e *streamEncoder) closeAll() [][]byte {
 		if !e.openBlocks[idx] {
 			continue
 		}
-		e.close(idx)
-		frame, err := marshalFrame(evContentBlockStop, streamEvent{
-			Type: evContentBlockStop, Index: idx,
-		})
-		if err != nil {
-			continue
-		}
-		out = append(out, frame)
+		out = append(out, e.closeFrames(idx)...)
 	}
 	return out
+}
+
+// closeFrames 闭合一个块。零增量的 tool_use 块先补一个 "{}" delta：
+// 客户端只从 input_json_delta 拼参数，没补的话拼出空串而非合法 JSON
+// （sub2api 同款：clients assemble tool input exclusively from deltas）。
+func (e *streamEncoder) closeFrames(index int) [][]byte {
+	var out [][]byte
+	if e.toolPending[index] {
+		delete(e.toolPending, index)
+		if frame, err := marshalFrame(evContentBlockDelta, streamEvent{
+			Type:  evContentBlockDelta,
+			Index: index,
+			Delta: &streamDelta{Type: deltaInputJSON, PartialJSON: "{}"},
+		}); err == nil {
+			out = append(out, frame)
+		}
+	}
+	e.close(index)
+	frame, err := marshalFrame(evContentBlockStop, streamEvent{
+		Type: evContentBlockStop, Index: index,
+	})
+	if err != nil {
+		return out
+	}
+	return append(out, frame)
 }
 
 // Finish 补齐流：闭合未关的块，补 message_delta 与 message_stop。

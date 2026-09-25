@@ -2,6 +2,7 @@ package chatcompletions
 
 import (
 	"encoding/json"
+	"sort"
 	"time"
 
 	"github.com/aceaura/model-surge-agent/backend/codec"
@@ -30,6 +31,10 @@ type streamEncoder struct {
 	// sentToolHeader 记录某个工具调用的 id/name 是否已发过：
 	// 本协议只在首片带这两个字段，重复发送会让部分客户端建出两个调用。
 	sentToolHeader map[int]bool
+	// toolPending 记录已开启但还没见过任何 arguments 增量的工具调用。
+	// 客户端只从 delta 拼参数，零增量（无参工具是常态）会拼出 ""，
+	// json.loads 直接崩，关块时要补一个 "{}"。
+	toolPending map[int]bool
 	stopReason     ir.StopReason
 	// serviceTier 是上游回的执行档位，一旦收到就挂在此后的每个 chunk 上。
 	// 不回填已发出的帧——发出去的改不了。
@@ -55,6 +60,7 @@ func newStreamEncoder() *streamEncoder {
 		blockKind:      map[int]ir.BlockType{},
 		toolIndex:      map[int]int{},
 		sentToolHeader: map[int]bool{},
+		toolPending:    map[int]bool{},
 		created:        time.Now().Unix(),
 	}
 }
@@ -96,6 +102,7 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			call.Function.Name = ev.Block.ToolUse.Name
 		}
 		e.sentToolHeader[ev.Index] = true
+		e.toolPending[ev.Index] = true
 		return e.chunk(wireMessage{ToolCalls: []wireToolCall{call}}, "")
 
 	case ir.EvTextDelta:
@@ -125,10 +132,20 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			call.Type = "function"
 			e.sentToolHeader[ev.Index] = true
 		}
+		// 见过真实增量的调用不再是零增量。
+		delete(e.toolPending, ev.Index)
 		return e.chunk(wireMessage{ToolCalls: []wireToolCall{call}}, "")
 
 	case ir.EvBlockStop:
-		// 本协议无块边界概念，块闭合无需表达。
+		// 本协议无块边界概念，块闭合本身无需表达；但零增量的工具调用
+		// 要在此补一个 "{}" 增量，依据见 toolPending 的注释。
+		if e.toolPending[ev.Index] {
+			delete(e.toolPending, ev.Index)
+			n := e.toolSlot(ev.Index)
+			return e.chunk(wireMessage{ToolCalls: []wireToolCall{
+				{Index: &n, Function: wireFunctionCall{Arguments: "{}"}},
+			}}, "")
+		}
 		return nil, nil
 
 	case ir.EvMessageDelta:
@@ -170,10 +187,33 @@ func (e *streamEncoder) finish() ([][]byte, error) {
 	}
 	e.stopped = true
 
+	// 流被掐断时块闭合帧不会来，零增量的工具调用在这里补 "{}"，
+	// 与 EvBlockStop 分支同一口径。
+	var frames [][]byte
+	if len(e.toolPending) > 0 {
+		idxs := make([]int, 0, len(e.toolPending))
+		for idx := range e.toolPending {
+			idxs = append(idxs, idx)
+		}
+		sort.Ints(idxs)
+		for _, idx := range idxs {
+			n := e.toolSlot(idx)
+			frame, err := e.chunk(wireMessage{ToolCalls: []wireToolCall{
+				{Index: &n, Function: wireFunctionCall{Arguments: "{}"}},
+			}}, "")
+			if err != nil {
+				return nil, err
+			}
+			frames = append(frames, frame...)
+		}
+		e.toolPending = map[int]bool{}
+	}
+
 	out, err := e.chunk(wireMessage{}, renderFinishReason(e.stopReason))
 	if err != nil {
 		return nil, err
 	}
+	out = append(frames, out...)
 	if !e.suppressUsageFrame {
 		u := renderUsage(e.usage)
 		frame, err := e.marshal(wireResponse{
