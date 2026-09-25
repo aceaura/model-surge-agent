@@ -181,7 +181,14 @@ func (a *Admin) stats(w http.ResponseWriter, r *http.Request) {
 			ReasoningTokens:    b.ReasoningTokens,
 			CacheWrite5mTokens: b.CacheWrite5mTokens,
 			CacheWrite1hTokens: b.CacheWrite1hTokens,
-			AvgLatencyMS:       avg(b.LatencySumMS, b.Total),
+			// 托管次数与音频/预测明细：逐列直搬，不加权。
+			WebSearchRequests:        b.WebSearchRequests,
+			WebFetchRequests:         b.WebFetchRequests,
+			PromptAudioTokens:        b.PromptAudioTokens,
+			CompletionAudioTokens:    b.CompletionAudioTokens,
+			AcceptedPredictionTokens: b.AcceptedPredictionTokens,
+			RejectedPredictionTokens: b.RejectedPredictionTokens,
+			AvgLatencyMS:             avg(b.LatencySumMS, b.Total),
 		})
 		totals.Total += b.Total
 		totals.InputTokens += b.InputTokens
@@ -191,6 +198,12 @@ func (a *Admin) stats(w http.ResponseWriter, r *http.Request) {
 		totals.ReasoningTokens += b.ReasoningTokens
 		totals.CacheWrite5mTokens += b.CacheWrite5mTokens
 		totals.CacheWrite1hTokens += b.CacheWrite1hTokens
+		totals.WebSearchRequests += b.WebSearchRequests
+		totals.WebFetchRequests += b.WebFetchRequests
+		totals.PromptAudioTokens += b.PromptAudioTokens
+		totals.CompletionAudioTokens += b.CompletionAudioTokens
+		totals.AcceptedPredictionTokens += b.AcceptedPredictionTokens
+		totals.RejectedPredictionTokens += b.RejectedPredictionTokens
 		for k, v := range b.Outcomes {
 			totals.Outcomes[k] += v
 		}
@@ -319,14 +332,21 @@ func summaryOf(rec pipeline.Record) agentv1.RequestSummary {
 		ReasoningTokens:    rec.Usage.ReasoningTokens,
 		CacheWrite5mTokens: rec.Usage.CacheWrite5mTokens,
 		CacheWrite1hTokens: rec.Usage.CacheWrite1hTokens,
-		LatencyMS:          rec.LatencyMS,
-		FirstTokenMS:       rec.FirstTokenMS,
-		DispatchMS:         rec.DispatchMS,
-		UpstreamMS:         rec.UpstreamMS,
-		ErrorCode:          rec.ErrorCode,
-		ErrorMessage:       rec.ErrorMessage,
-		Sanitized:          rec.Sanitized,
-		Lossy:              rec.Lossy,
+		// 托管次数与音频/预测明细：逐列直搬，与明细表的列一一对应。
+		WebSearchRequests:        rec.Usage.WebSearchRequests,
+		WebFetchRequests:         rec.Usage.WebFetchRequests,
+		PromptAudioTokens:        rec.Usage.PromptAudioTokens,
+		CompletionAudioTokens:    rec.Usage.CompletionAudioTokens,
+		AcceptedPredictionTokens: rec.Usage.AcceptedPredictionTokens,
+		RejectedPredictionTokens: rec.Usage.RejectedPredictionTokens,
+		LatencyMS:                rec.LatencyMS,
+		FirstTokenMS:             rec.FirstTokenMS,
+		DispatchMS:               rec.DispatchMS,
+		UpstreamMS:               rec.UpstreamMS,
+		ErrorCode:                rec.ErrorCode,
+		ErrorMessage:             rec.ErrorMessage,
+		Sanitized:                rec.Sanitized,
+		Lossy:                    rec.Lossy,
 	}
 }
 

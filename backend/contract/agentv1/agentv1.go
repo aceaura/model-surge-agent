@@ -83,8 +83,16 @@ type RequestSummary struct {
 	ReasoningTokens    int64 `json:"reasoning_tokens,omitempty"`
 	CacheWrite5mTokens int64 `json:"cache_write_5m_tokens,omitempty"`
 	CacheWrite1hTokens int64 `json:"cache_write_1h_tokens,omitempty"`
-	LatencyMS          int   `json:"latency_ms,omitempty"`
-	FirstTokenMS       int   `json:"first_token_ms,omitempty"`
+	// 托管工具次数（按次计费）与音频/预测明细四位：同 TTL 细分口径，
+	// 非对应族来源恒为零。
+	WebSearchRequests        int64 `json:"web_search_requests,omitempty"`
+	WebFetchRequests         int64 `json:"web_fetch_requests,omitempty"`
+	PromptAudioTokens        int64 `json:"prompt_audio_tokens,omitempty"`
+	CompletionAudioTokens    int64 `json:"completion_audio_tokens,omitempty"`
+	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens,omitempty"`
+	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens,omitempty"`
+	LatencyMS                int   `json:"latency_ms,omitempty"`
+	FirstTokenMS             int   `json:"first_token_ms,omitempty"`
 	// DispatchMS、UpstreamMS 是两段跨进程耗时的累计值（含全部重试）。
 	// latency_ms 减去两段即「本服务自身 + 上游生成」。
 	DispatchMS   int    `json:"dispatch_ms,omitempty"`
@@ -160,12 +168,19 @@ type LiveEntry struct {
 	OutputTokens     int64     `json:"output_tokens,omitempty"`
 	// 后五维与 /admin/requests 的明细列一一对应。少报它们等于少报计费权重
 	// 最偏的那几维，而两个视图都不报错。
-	CacheReadTokens    int64  `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens   int64  `json:"cache_write_tokens,omitempty"`
-	ReasoningTokens    int64  `json:"reasoning_tokens,omitempty"`
-	CacheWrite5mTokens int64  `json:"cache_write_5m_tokens,omitempty"`
-	CacheWrite1hTokens int64  `json:"cache_write_1h_tokens,omitempty"`
-	ErrorCode          string `json:"error_code,omitempty"`
+	CacheReadTokens    int64 `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens   int64 `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens    int64 `json:"reasoning_tokens,omitempty"`
+	CacheWrite5mTokens int64 `json:"cache_write_5m_tokens,omitempty"`
+	CacheWrite1hTokens int64 `json:"cache_write_1h_tokens,omitempty"`
+	// 托管次数与音频/预测明细：与明细列一一对应，少报即对不上账。
+	WebSearchRequests        int64  `json:"web_search_requests,omitempty"`
+	WebFetchRequests         int64  `json:"web_fetch_requests,omitempty"`
+	PromptAudioTokens        int64  `json:"prompt_audio_tokens,omitempty"`
+	CompletionAudioTokens    int64  `json:"completion_audio_tokens,omitempty"`
+	AcceptedPredictionTokens int64  `json:"accepted_prediction_tokens,omitempty"`
+	RejectedPredictionTokens int64  `json:"rejected_prediction_tokens,omitempty"`
+	ErrorCode                string `json:"error_code,omitempty"`
 	// LogPersisted 三态：nil 未配明细表、false 落库失败（这条不在
 	// /admin/requests 里）、true 成功。布尔零值会让「没配」与「失败」同值。
 	LogPersisted *bool `json:"log_persisted,omitempty"`
@@ -190,7 +205,14 @@ type StatBucket struct {
 	ReasoningTokens    int64            `json:"reasoning_tokens"`
 	CacheWrite5mTokens int64            `json:"cache_write_5m_tokens"`
 	CacheWrite1hTokens int64            `json:"cache_write_1h_tokens"`
-	AvgLatencyMS       int64            `json:"avg_latency_ms"`
+	// 托管次数与音频/预测明细：趋势图各占一列，不加权合计。
+	WebSearchRequests        int64 `json:"web_search_requests"`
+	WebFetchRequests         int64 `json:"web_fetch_requests"`
+	PromptAudioTokens        int64 `json:"prompt_audio_tokens"`
+	CompletionAudioTokens    int64 `json:"completion_audio_tokens"`
+	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens"`
+	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens"`
+	AvgLatencyMS             int64 `json:"avg_latency_ms"`
 }
 
 type StatTotals struct {
@@ -203,6 +225,13 @@ type StatTotals struct {
 	ReasoningTokens    int64            `json:"reasoning_tokens"`
 	CacheWrite5mTokens int64            `json:"cache_write_5m_tokens"`
 	CacheWrite1hTokens int64            `json:"cache_write_1h_tokens"`
+	// 与 StatBucket 同列：窗口合计。
+	WebSearchRequests        int64 `json:"web_search_requests"`
+	WebFetchRequests         int64 `json:"web_fetch_requests"`
+	PromptAudioTokens        int64 `json:"prompt_audio_tokens"`
+	CompletionAudioTokens    int64 `json:"completion_audio_tokens"`
+	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens"`
+	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens"`
 	// SuccessRate 是 normal 占比，0 到 1。总数为零时为 0。
 	SuccessRate float64 `json:"success_rate"`
 	// QPS 是窗口内的平均每秒请求数。

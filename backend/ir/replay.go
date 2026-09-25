@@ -15,6 +15,7 @@ func ResponseEvents(resp *Response) []Event {
 	}
 	out := []Event{{Type: EvMessageStart, MessageID: resp.ID, Model: resp.Model,
 		ServiceTier: resp.ServiceTier, Container: resp.Container, Audio: resp.Audio,
+		SystemFingerprint: resp.SystemFingerprint,
 		// 创建时间也要投影：整份响应路径的出站编码器同样从首帧取
 		// Created，漏掉它上游的真实创建时间会被代理本地钟顶替——
 		// 正是 created 保真要防的那件事。
@@ -24,7 +25,7 @@ func ResponseEvents(resp *Response) []Event {
 	}
 	usage := resp.Usage
 	out = append(out, Event{Type: EvMessageDelta, StopReason: resp.StopReason,
-		StopSequence: resp.StopSequence, Usage: &usage})
+		StopSequence: resp.StopSequence, StopDetails: resp.StopDetails, Usage: &usage})
 	return append(out, Event{Type: EvMessageStop})
 }
 

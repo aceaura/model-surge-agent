@@ -18,17 +18,23 @@ func TestLiveEntryCarriesEveryUsageDimension(t *testing.T) {
 	c := open(t)
 	ctx := context.Background()
 	want := LiveEntry{
-		RequestID:        "r-usage",
-		At:               time.Now().UTC().Truncate(time.Second),
-		InboundProtocol:  "anthropic",
-		Outcome:          "normal",
-		InputTokens:      11,
-		OutputTokens:     22,
-		CacheReadTokens:  33,
-		CacheWriteTokens: 44,
-		ReasoningTokens:  55,
-		CacheWrite5mTokens: 66,
-		CacheWrite1hTokens: 77,
+		RequestID:                "r-usage",
+		At:                       time.Now().UTC().Truncate(time.Second),
+		InboundProtocol:          "anthropic",
+		Outcome:                  "normal",
+		InputTokens:              11,
+		OutputTokens:             22,
+		CacheReadTokens:          33,
+		CacheWriteTokens:         44,
+		ReasoningTokens:          55,
+		CacheWrite5mTokens:       66,
+		CacheWrite1hTokens:       77,
+		WebSearchRequests:        88,
+		WebFetchRequests:         99,
+		PromptAudioTokens:        111,
+		CompletionAudioTokens:    222,
+		AcceptedPredictionTokens: 333,
+		RejectedPredictionTokens: 444,
 	}
 	c.PushLive(ctx, want)
 
@@ -45,6 +51,11 @@ func TestLiveEntryCarriesEveryUsageDimension(t *testing.T) {
 		t.Errorf("TTL 明细两维往返丢了：5m %d 1h %d，想要 66/77",
 			got[0].CacheWrite5mTokens, got[0].CacheWrite1hTokens)
 	}
+	if got[0].WebSearchRequests != 88 || got[0].WebFetchRequests != 99 ||
+		got[0].PromptAudioTokens != 111 || got[0].CompletionAudioTokens != 222 ||
+		got[0].AcceptedPredictionTokens != 333 || got[0].RejectedPredictionTokens != 444 {
+		t.Errorf("六维新增往返丢了：%+v", got[0])
+	}
 	if got[0].InputTokens != 11 || got[0].OutputTokens != 22 {
 		t.Errorf("原有两维被改坏了：入 %d 出 %d", got[0].InputTokens, got[0].OutputTokens)
 	}
@@ -59,11 +70,17 @@ func TestBucketAccumulatesEveryUsageDimension(t *testing.T) {
 		InputTokens: 10, OutputTokens: 20,
 		CacheReadTokens: 30, CacheWriteTokens: 40, ReasoningTokens: 50,
 		CacheWrite5mTokens: 60, CacheWrite1hTokens: 70,
+		WebSearchRequests: 80, WebFetchRequests: 90,
+		PromptAudioTokens: 100, CompletionAudioTokens: 110,
+		AcceptedPredictionTokens: 120, RejectedPredictionTokens: 130,
 	}, 100)
 	c.Incr(ctx, now, "normal", relayclient.Usage{
 		InputTokens: 1, OutputTokens: 2,
 		CacheReadTokens: 3, CacheWriteTokens: 4, ReasoningTokens: 5,
 		CacheWrite5mTokens: 6, CacheWrite1hTokens: 7,
+		WebSearchRequests: 8, WebFetchRequests: 9,
+		PromptAudioTokens: 10, CompletionAudioTokens: 11,
+		AcceptedPredictionTokens: 12, RejectedPredictionTokens: 13,
 	}, 10)
 
 	buckets := c.Buckets(ctx, now, time.Minute)
@@ -83,6 +100,12 @@ func TestBucketAccumulatesEveryUsageDimension(t *testing.T) {
 		{"reasoning", b.ReasoningTokens, 55},
 		{"cache_write_5m", b.CacheWrite5mTokens, 66},
 		{"cache_write_1h", b.CacheWrite1hTokens, 77},
+		{"web_search", b.WebSearchRequests, 88},
+		{"web_fetch", b.WebFetchRequests, 99},
+		{"prompt_audio", b.PromptAudioTokens, 110},
+		{"completion_audio", b.CompletionAudioTokens, 121},
+		{"accepted_pred", b.AcceptedPredictionTokens, 132},
+		{"rejected_pred", b.RejectedPredictionTokens, 143},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %d，想要 %d", tc.name, tc.got, tc.want)
@@ -113,6 +136,11 @@ func TestSummaryWithoutNewFieldsStillDecodes(t *testing.T) {
 	if e.CacheWrite5mTokens != 0 || e.CacheWrite1hTokens != 0 {
 		t.Errorf("缺失的 TTL 明细该读作零，实际 %d/%d",
 			e.CacheWrite5mTokens, e.CacheWrite1hTokens)
+	}
+	if e.WebSearchRequests != 0 || e.WebFetchRequests != 0 ||
+		e.PromptAudioTokens != 0 || e.CompletionAudioTokens != 0 ||
+		e.AcceptedPredictionTokens != 0 || e.RejectedPredictionTokens != 0 {
+		t.Errorf("缺失的六维新增该读作零：%+v", e)
 	}
 	// 三态的零值必须是「未知」而不是「落库失败」。
 	if e.LogPersisted != nil {
@@ -146,5 +174,10 @@ func TestBucketWithoutNewFieldsReadsAsZero(t *testing.T) {
 	if b.CacheWrite5mTokens != 0 || b.CacheWrite1hTokens != 0 {
 		t.Errorf("缺失的 TTL 明细键该读作零，实际 %d/%d",
 			b.CacheWrite5mTokens, b.CacheWrite1hTokens)
+	}
+	if b.WebSearchRequests != 0 || b.WebFetchRequests != 0 ||
+		b.PromptAudioTokens != 0 || b.CompletionAudioTokens != 0 ||
+		b.AcceptedPredictionTokens != 0 || b.RejectedPredictionTokens != 0 {
+		t.Errorf("缺失的六维新增键该读作零：%+v", b)
 	}
 }

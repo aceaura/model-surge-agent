@@ -332,6 +332,7 @@ func (e *streamEncoder) messageDelta(ev ir.Event) ([]byte, error) {
 			// 而兜底发生在下面几行，所以这里先按原始终止原因判。
 			StopSequence: adoptStopSequence(ev.StopReason, ev.StopSequence),
 			Container:    encodeContainerInfo(ev.Container),
+			StopDetails:  encodeStopDetails(ev.StopDetails),
 		},
 	}
 	if out.Delta.StopReason == "" {
@@ -435,6 +436,7 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 		Model:        resp.Model,
 		StopReason:   renderStopReason(resp.StopReason),
 		StopSequence: adoptStopSequence(resp.StopReason, resp.StopSequence),
+		StopDetails:  encodeStopDetails(resp.StopDetails),
 		Usage:        renderUsage(resp.Usage),
 		Container:    encodeContainerInfo(resp.Container),
 	}
@@ -546,7 +548,37 @@ func renderUsage(u ir.Usage) wireUsage {
 			Ephemeral1hInputTokens: u.CacheWrite1hTokens,
 		}
 	}
+	// 托管工具次数与推理区域是 anthropic 专属回执：同族往返原样带回，
+	// 异族来源给不出非零值，这里自然不写。
+	if u.WebSearchRequests > 0 || u.WebFetchRequests > 0 {
+		out.ServerToolUse = &wireServerToolUsage{
+			WebSearchRequests: u.WebSearchRequests,
+			WebFetchRequests:  u.WebFetchRequests,
+		}
+	}
+	out.InferenceGeo = u.InferenceGeo
 	return out
+}
+
+// encodeStopDetails 拒绝分类回写。type 恒 "refusal"（官方该对象只在这一档
+// 出现）；空字段省略——上游显式 null 与缺省语义相同，IR 不保留二者之别。
+func encodeStopDetails(sd *ir.StopDetails) *wireStopDetails {
+	if sd == nil {
+		return nil
+	}
+	return &wireStopDetails{
+		Type:        "refusal",
+		Category:    rawStringOrNil(sd.Category),
+		Explanation: rawStringOrNil(sd.Explanation),
+	}
+}
+
+func rawStringOrNil(s string) json.RawMessage {
+	if s == "" {
+		return nil
+	}
+	b, _ := json.Marshal(s)
+	return b
 }
 
 func marshalFrame(event string, payload streamEvent) ([]byte, error) {

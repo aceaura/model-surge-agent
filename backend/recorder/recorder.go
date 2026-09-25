@@ -70,8 +70,16 @@ func (r *Recorder) Record(rec pipeline.Record) {
 		ReasoningTokens:    rec.Usage.ReasoningTokens,
 		CacheWrite5mTokens: rec.Usage.CacheWrite5mTokens,
 		CacheWrite1hTokens: rec.Usage.CacheWrite1hTokens,
-		ErrorCode:          rec.ErrorCode,
-		LogPersisted:       persisted,
+		// 托管次数与音频/预测明细：摘要与明细列一一对应，缺一位就多
+		// 一处两视图长期对不上的账。
+		WebSearchRequests:        rec.Usage.WebSearchRequests,
+		WebFetchRequests:         rec.Usage.WebFetchRequests,
+		PromptAudioTokens:        rec.Usage.PromptAudioTokens,
+		CompletionAudioTokens:    rec.Usage.CompletionAudioTokens,
+		AcceptedPredictionTokens: rec.Usage.AcceptedPredictionTokens,
+		RejectedPredictionTokens: rec.Usage.RejectedPredictionTokens,
+		ErrorCode:                rec.ErrorCode,
+		LogPersisted:             persisted,
 	})
 	r.Cache.Incr(ctx, rec.At, rec.Outcome, rec.Usage, rec.LatencyMS)
 }

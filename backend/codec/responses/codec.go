@@ -191,6 +191,12 @@ func (outboundCodec) NewStreamDecoder() codec.StreamDecoder { return newStreamDe
 
 func (outboundCodec) DecodeResponse(body []byte) (*ir.Response, error) { return DecodeResponse(body) }
 
+// DecodeResponseLossy 实现 codec.LossyResponseDecoder：整份响应路径的
+// 解码损耗（没有映射的托管输出项）由此报出，与流式的 Notes() 对称。
+func (outboundCodec) DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
+	return DecodeResponseLossy(body)
+}
+
 func (outboundCodec) DecodeError(status int, header http.Header, body []byte) *ir.Error {
 	return DecodeError(status, header, body)
 }

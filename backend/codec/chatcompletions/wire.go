@@ -244,6 +244,8 @@ type wireResponse struct {
 	Usage   *wireUsage   `json:"usage,omitempty"`
 	// ServiceTier 是上游实际执行的档位，可能低于请求里点的那个。
 	ServiceTier string `json:"service_tier,omitempty"`
+	// SystemFingerprint 后端配置指纹（系统版本变化信号，排障用）。
+	SystemFingerprint string `json:"system_fingerprint,omitempty"`
 }
 
 type wireChoice struct {
@@ -272,11 +274,19 @@ type wireUsage struct {
 
 type wirePromptDetails struct {
 	CachedTokens int64 `json:"cached_tokens,omitempty"`
+	// AudioTokens 输入音频的 token 量，是 prompt_tokens 的子集。
+	AudioTokens int64 `json:"audio_tokens,omitempty"`
 }
 
 // wireCompletionDetails 的 reasoning_tokens 已含在 completion_tokens 内。
 type wireCompletionDetails struct {
 	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`
+	// AudioTokens 输出音频的 token 量，是 completion_tokens 的子集。
+	AudioTokens int64 `json:"audio_tokens,omitempty"`
+	// AcceptedPredictionTokens / RejectedPredictionTokens 预测加速
+	//（speculative decoding）的命中与拒绝数，同为输出总量的子集。
+	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens,omitempty"`
+	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens,omitempty"`
 }
 
 type wireError struct {

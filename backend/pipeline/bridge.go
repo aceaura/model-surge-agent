@@ -471,5 +471,13 @@ func usageOf(agg *ir.Aggregator) relayclient.Usage {
 		// 分不清真零还是未知，但记账只认非零数，语义无损。
 		CacheWrite5mTokens: u.CacheWrite5mTokens,
 		CacheWrite1hTokens: u.CacheWrite1hTokens,
+		// 托管工具次数与音频/预测明细同理照搬：都是计费或成本归因
+		// 用得到的维度，跨进程时丢一位就多一笔永久对不上的账。
+		WebSearchRequests:        u.WebSearchRequests,
+		WebFetchRequests:         u.WebFetchRequests,
+		PromptAudioTokens:        u.PromptAudioTokens,
+		CompletionAudioTokens:    u.CompletionAudioTokens,
+		AcceptedPredictionTokens: u.AcceptedPredictionTokens,
+		RejectedPredictionTokens: u.RejectedPredictionTokens,
 	}
 }

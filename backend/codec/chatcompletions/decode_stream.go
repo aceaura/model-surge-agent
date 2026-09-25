@@ -44,6 +44,9 @@ type streamDecoder struct {
 	maxCandidate int
 	// serviceTier 是上游回的执行档位，随每个 chunk 顶层给出。
 	serviceTier string
+	// fingerprint 后端配置指纹：与档位同样的到达规律（chunk 顶层，可能
+	// 晚于首帧），随首帧与收尾帧两处交付。
+	fingerprint string
 
 	// stopReason 与 usage 先攒着，到 [DONE] 才发一帧 message_delta。
 	// 本协议把它们分散在不同 chunk（finish_reason 一帧、usage 另一帧），
@@ -108,6 +111,9 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 	if chunk.ServiceTier != "" {
 		d.serviceTier = chunk.ServiceTier
 	}
+	if chunk.SystemFingerprint != "" {
+		d.fingerprint = chunk.SystemFingerprint
+	}
 
 	var out []ir.Event
 	out = append(out, d.ensureStarted(chunk)...)
@@ -149,7 +155,8 @@ func (d *streamDecoder) ensureStarted(chunk wireResponse) []ir.Event {
 	d.started = true
 	d.messageID = chunk.ID
 	return []ir.Event{{Type: ir.EvMessageStart, MessageID: chunk.ID, Model: chunk.Model,
-		ServiceTier: chunk.ServiceTier, Created: chunk.Created}}
+		ServiceTier: chunk.ServiceTier, SystemFingerprint: chunk.SystemFingerprint,
+		Created: chunk.Created}}
 }
 
 func (d *streamDecoder) decodeDelta(delta wireMessage) ([]ir.Event, error) {
@@ -393,7 +400,7 @@ func (d *streamDecoder) finish() []ir.Event {
 	d.done = true
 	out := d.closeAll()
 	delta := ir.Event{Type: ir.EvMessageDelta, StopReason: d.stopReason, Usage: d.usage,
-		ServiceTier: d.serviceTier}
+		ServiceTier: d.serviceTier, SystemFingerprint: d.fingerprint}
 	if delta.StopReason == "" {
 		delta.StopReason = ir.StopEndTurn
 	}
@@ -425,7 +432,8 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 		return nil, nil, convertError(0, &env.Error)
 	}
 	out := &ir.Response{ID: w.ID, Model: w.Model, Content: []ir.Block{},
-		ServiceTier: w.ServiceTier, Created: w.Created}
+		ServiceTier: w.ServiceTier, SystemFingerprint: w.SystemFingerprint,
+		Created: w.Created}
 	if w.Usage != nil {
 		out.Usage = convertUsage(*w.Usage)
 	}
@@ -540,6 +548,7 @@ func convertUsage(u wireUsage) ir.Usage {
 	// 几种缓存字段名同义，按优先级取第一个非零的。
 	if u.PromptTokensDetails != nil {
 		out.CacheReadTokens = u.PromptTokensDetails.CachedTokens
+		out.PromptAudioTokens = u.PromptTokensDetails.AudioTokens
 	}
 	if out.CacheReadTokens == 0 {
 		out.CacheReadTokens = u.PromptCacheHitTokens
@@ -554,6 +563,9 @@ func convertUsage(u wireUsage) ir.Usage {
 	// 本协议的 completion_tokens 已含推理，IR 同口径，故只记维度不做扣减。
 	if u.CompletionTokensDetails != nil {
 		out.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
+		out.CompletionAudioTokens = u.CompletionTokensDetails.AudioTokens
+		out.AcceptedPredictionTokens = u.CompletionTokensDetails.AcceptedPredictionTokens
+		out.RejectedPredictionTokens = u.CompletionTokensDetails.RejectedPredictionTokens
 	}
 	// 本协议的 prompt_tokens 含缓存命中，而 IR 的 InputTokens 定义为
 	// 不含缓存的新鲜输入，故减去。上游数字不自洽时钳到 0，不出负数。
@@ -572,16 +584,26 @@ func renderUsage(u ir.Usage) wireUsage {
 		CompletionTokens: u.OutputTokens,
 		TotalTokens:      prompt + u.OutputTokens,
 	}
-	if u.CacheReadTokens > 0 {
-		out.PromptTokensDetails = &wirePromptDetails{CachedTokens: u.CacheReadTokens}
+	if u.CacheReadTokens > 0 || u.PromptAudioTokens > 0 {
+		out.PromptTokensDetails = &wirePromptDetails{
+			CachedTokens: u.CacheReadTokens,
+			AudioTokens:  u.PromptAudioTokens,
+		}
 	}
 	// 本协议没有官方的缓存写入字段，用兼容层通行的别名给出。
 	if u.CacheWriteTokens > 0 {
 		out.CacheWriteTokens = u.CacheWriteTokens
 	}
 	// 本协议表达得了推理维度，如实写出，让客户端看得见推理占比。
-	if u.ReasoningTokens > 0 {
-		out.CompletionTokensDetails = &wireCompletionDetails{ReasoningTokens: u.ReasoningTokens}
+	// 音频与预测加速明细同为输出侧细分，有值就一并带出。
+	if u.ReasoningTokens > 0 || u.CompletionAudioTokens > 0 ||
+		u.AcceptedPredictionTokens > 0 || u.RejectedPredictionTokens > 0 {
+		out.CompletionTokensDetails = &wireCompletionDetails{
+			ReasoningTokens:          u.ReasoningTokens,
+			AudioTokens:              u.CompletionAudioTokens,
+			AcceptedPredictionTokens: u.AcceptedPredictionTokens,
+			RejectedPredictionTokens: u.RejectedPredictionTokens,
+		}
 	}
 	return out
 }

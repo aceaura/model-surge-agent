@@ -1209,6 +1209,23 @@ func ServerToolDropNote(calls, results int) string {
 		": this protocol's conversion emits no counterpart for Anthropic's hosted-tool blocks, so the receiving side sees neither which hosted search ran nor which pages it returned, and cannot replay either in a later turn"
 }
 
+// HostedOutputItemsNote 托管输出项丢弃注记（responses 解码侧）。
+// web_search_call / file_search_call 之类是上游代执行的托管工具输出项，
+// 本服务的 responses 转换没有为这些 item 类型实现映射：整项丢弃时接收端
+// 既看不到网关代执行了哪次调用，也拿不到它产出的结果。
+//
+// 与 ServerToolDropNote 同一口径：措辞不断言「协议没有槽位」——中立表示
+// 有服务端工具块型，只是这条转换没有实现映射。说的是转换做了什么。
+// 查询串与搜索结果属会话内容，不进注记；执行次数若上游在 usage 里给了
+// （server_tool_use / *_requests 维度），仍照常记账，故措辞只说内容不可见。
+//
+// 两条路径共用：responses 流式解码器 Notes() 与非流式 DecodeResponseLossy。
+// 措辞只此一份，按说明检索流水的人不会把同一件事当成多种故障。
+func HostedOutputItemsNote(n int) string {
+	return fmt.Sprintf(
+		"dropped %d hosted output item(s) (web_search_call and similar): this protocol's conversion maps no counterpart for their item types, so the receiving side sees neither which hosted calls ran nor what they returned", n)
+}
+
 // toolErrorPrefix 是工具结果失败态在无原生标记的协议上的表达。
 //
 // 方括号形态在工具输出里罕见，不易与工具自己打的内容混淆。

@@ -37,6 +37,25 @@ type Usage struct {
 	// 不对它与 OutputTokens 做「不得更大」的钳制：部分上游把两者作为
 	// 独立计量而非包含关系给出，钳制会把上游的真实数字改掉。
 	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`
+	// WebSearchRequests / WebFetchRequests 服务端托管工具的执行次数
+	//（Anthropic 的 usage.server_tool_use）。是次数不是 token，不进任何
+	// 合计；按次计费，看不见就无法对账托管搜索的成本。
+	WebSearchRequests int64 `json:"web_search_requests,omitempty"`
+	WebFetchRequests  int64 `json:"web_fetch_requests,omitempty"`
+	// PromptAudioTokens / CompletionAudioTokens Chat 音频 token 明细
+	//（prompt_tokens_details / completion_tokens_details 的 audio_tokens）。
+	// 各自是所在总量的子集而非另一项，不参与合计。
+	PromptAudioTokens     int64 `json:"prompt_audio_tokens,omitempty"`
+	CompletionAudioTokens int64 `json:"completion_audio_tokens,omitempty"`
+	// AcceptedPredictionTokens / RejectedPredictionTokens Chat 预测加速
+	//（completion_tokens_details 的 accepted/rejected_prediction_tokens），
+	// 同为输出总量的子集。
+	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens,omitempty"`
+	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens,omitempty"`
+	// InferenceGeo Anthropic 响应侧回显的实际推理区域（usage.inference_geo）。
+	// 请求侧的同名偏好字段在 Request 上；这里只是回执，不参与调度，
+	// 也仅同族出站写得回去。
+	InferenceGeo string `json:"inference_geo,omitempty"`
 }
 
 // MergeUsage 把一帧 usage 并入累加器。
@@ -60,6 +79,28 @@ func MergeUsage(into *Usage, u Usage) {
 	if u.ReasoningTokens > 0 {
 		into.ReasoningTokens = u.ReasoningTokens
 	}
+	// 托管工具次数与音频/预测明细同样只在收尾帧出现一次，非零后到覆盖。
+	if u.WebSearchRequests > 0 {
+		into.WebSearchRequests = u.WebSearchRequests
+	}
+	if u.WebFetchRequests > 0 {
+		into.WebFetchRequests = u.WebFetchRequests
+	}
+	if u.PromptAudioTokens > 0 {
+		into.PromptAudioTokens = u.PromptAudioTokens
+	}
+	if u.CompletionAudioTokens > 0 {
+		into.CompletionAudioTokens = u.CompletionAudioTokens
+	}
+	if u.AcceptedPredictionTokens > 0 {
+		into.AcceptedPredictionTokens = u.AcceptedPredictionTokens
+	}
+	if u.RejectedPredictionTokens > 0 {
+		into.RejectedPredictionTokens = u.RejectedPredictionTokens
+	}
+	if u.InferenceGeo != "" {
+		into.InferenceGeo = u.InferenceGeo
+	}
 	if u.CacheReadTokens > into.CacheReadTokens {
 		into.CacheReadTokens = u.CacheReadTokens
 	}
@@ -75,6 +116,17 @@ func MergeUsage(into *Usage, u Usage) {
 	}
 }
 
+// StopDetails 拒绝停止的结构化分类（仅 anthropic：message_delta 与非流式
+// 响应的 stop_details，type 恒 "refusal"）。其余协议无槽位，跨族出站
+// 不投影也不注记——分类文本官方注明不稳定，价值止于同族回显。
+type StopDetails struct {
+	// Category 触发拒绝的策略分类（cyber/bio 等）；上游显式 null 与缺省
+	// 同归空串（官方注明二者语义相同）。
+	Category string `json:"category,omitempty"`
+	// Explanation 人类可读解释，官方注明文本不稳定。
+	Explanation string `json:"explanation,omitempty"`
+}
+
 type Response struct {
 	ID         string     `json:"id,omitempty"`
 	Model      string     `json:"model,omitempty"`
@@ -86,12 +138,17 @@ type Response struct {
 	// 只有 StopReason 为 StopStopSequence 时有意义：按它切分输出的客户端
 	// 拿到一条未触发的序列会切错位置，比拿不到更坏。
 	StopSequence string `json:"stop_sequence,omitempty"`
-	Usage        Usage  `json:"usage"`
+	// StopDetails 拒绝档的结构化分类；非拒绝或上游未给为 nil。
+	StopDetails *StopDetails `json:"stop_details,omitempty"`
+	Usage       Usage        `json:"usage"`
 	// ServiceTier 是上游实际执行时所用的档位，原样回显。
 	//
 	// 绝不拿请求里的值兜底：客户端点了 flex 而上游降到 default 时，
 	// 兜底会把「降档了」伪装成「按你要的档位执行了」，而这一维决定计费。
 	ServiceTier string `json:"service_tier,omitempty"`
+	// SystemFingerprint Chat 后端配置指纹回显（系统版本变化信号，排障用）。
+	// 仅 chat 族有槽位，跨族出站不投影。
+	SystemFingerprint string `json:"system_fingerprint,omitempty"`
 	// Container 实际使用的代码执行容器回显（仅 anthropic：id/expires_at/
 	// 已加载技能）。nil = 上游没用容器。客户端要靠它复用容器续话。
 	Container *Container `json:"container,omitempty"`

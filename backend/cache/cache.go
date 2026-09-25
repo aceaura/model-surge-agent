@@ -142,12 +142,20 @@ type LiveEntry struct {
 	// 于是 /admin/requests 的明细与本摘要长期对不上，而两侧都不报错。
 	// 5m/1h 两位是缓存写入总量的 TTL 细分（1h 档单价通常再翻倍），
 	// 只有 anthropic 上游会给，其余来源恒为零。
-	CacheReadTokens    int64  `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens   int64  `json:"cache_write_tokens,omitempty"`
-	ReasoningTokens    int64  `json:"reasoning_tokens,omitempty"`
-	CacheWrite5mTokens int64  `json:"cache_write_5m_tokens,omitempty"`
-	CacheWrite1hTokens int64  `json:"cache_write_1h_tokens,omitempty"`
-	ErrorCode          string `json:"error_code,omitempty"`
+	CacheReadTokens    int64 `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens   int64 `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens    int64 `json:"reasoning_tokens,omitempty"`
+	CacheWrite5mTokens int64 `json:"cache_write_5m_tokens,omitempty"`
+	CacheWrite1hTokens int64 `json:"cache_write_1h_tokens,omitempty"`
+	// 托管工具次数（按次计费）与音频/预测明细四位：同为「客户端收到了
+	// 而摘要里没有就对不上账」的维度，口径与上面五位一致。
+	WebSearchRequests        int64  `json:"web_search_requests,omitempty"`
+	WebFetchRequests         int64  `json:"web_fetch_requests,omitempty"`
+	PromptAudioTokens        int64  `json:"prompt_audio_tokens,omitempty"`
+	CompletionAudioTokens    int64  `json:"completion_audio_tokens,omitempty"`
+	AcceptedPredictionTokens int64  `json:"accepted_prediction_tokens,omitempty"`
+	RejectedPredictionTokens int64  `json:"rejected_prediction_tokens,omitempty"`
+	ErrorCode                string `json:"error_code,omitempty"`
 	// LogPersisted 是三态：nil 表示没配 PG（未尝试落库），false 表示尝试过
 	// 且失败——这条记录不在 /admin/requests 里，true 表示成功。
 	//
@@ -215,7 +223,14 @@ type Bucket struct {
 	ReasoningTokens    int64 `json:"reasoning_tokens"`
 	CacheWrite5mTokens int64 `json:"cache_write_5m_tokens"`
 	CacheWrite1hTokens int64 `json:"cache_write_1h_tokens"`
-	LatencySumMS       int64 `json:"latency_sum_ms"`
+	// 托管次数与音频/预测明细：各占一个 hash 字段，独立累计不加权。
+	WebSearchRequests        int64 `json:"web_search_requests"`
+	WebFetchRequests         int64 `json:"web_fetch_requests"`
+	PromptAudioTokens        int64 `json:"prompt_audio_tokens"`
+	CompletionAudioTokens    int64 `json:"completion_audio_tokens"`
+	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens"`
+	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens"`
+	LatencySumMS             int64 `json:"latency_sum_ms"`
 }
 
 // 分钟桶里的固定字段名。outcome 的计数键加前缀区分，
@@ -231,8 +246,15 @@ const (
 	// 只在写入时算一次，读侧要能分别还原。
 	fieldCacheWrite5m = "cache_write_5m"
 	fieldCacheWrite1h = "cache_write_1h"
-	fieldLatency      = "latency"
-	outcomeAffix      = "o:"
+	// 托管次数与音频/预测明细同理各占一个字段。
+	fieldWebSearch   = "web_search"
+	fieldWebFetch    = "web_fetch"
+	fieldPromptAudio = "prompt_audio"
+	fieldCompAudio   = "completion_audio"
+	fieldAccPred     = "accepted_pred"
+	fieldRejPred     = "rejected_pred"
+	fieldLatency     = "latency"
+	outcomeAffix     = "o:"
 )
 
 // Incr 累计一分钟桶。
@@ -261,6 +283,12 @@ func (c *Cache) Incr(ctx context.Context, at time.Time, outcome string,
 	pipe.HIncrBy(ctx, key, fieldReasoning, usage.ReasoningTokens)
 	pipe.HIncrBy(ctx, key, fieldCacheWrite5m, usage.CacheWrite5mTokens)
 	pipe.HIncrBy(ctx, key, fieldCacheWrite1h, usage.CacheWrite1hTokens)
+	pipe.HIncrBy(ctx, key, fieldWebSearch, usage.WebSearchRequests)
+	pipe.HIncrBy(ctx, key, fieldWebFetch, usage.WebFetchRequests)
+	pipe.HIncrBy(ctx, key, fieldPromptAudio, usage.PromptAudioTokens)
+	pipe.HIncrBy(ctx, key, fieldCompAudio, usage.CompletionAudioTokens)
+	pipe.HIncrBy(ctx, key, fieldAccPred, usage.AcceptedPredictionTokens)
+	pipe.HIncrBy(ctx, key, fieldRejPred, usage.RejectedPredictionTokens)
 	pipe.HIncrBy(ctx, key, fieldLatency, int64(latencyMS))
 	// TTL 每次刷新：桶写完就不再动，靠过期自行清理，不需要额外的清扫任务。
 	pipe.Expire(ctx, key, statTTL)
@@ -328,6 +356,18 @@ func bucketFrom(minute time.Time, fields map[string]string) Bucket {
 			b.CacheWrite5mTokens = n
 		case fieldCacheWrite1h:
 			b.CacheWrite1hTokens = n
+		case fieldWebSearch:
+			b.WebSearchRequests = n
+		case fieldWebFetch:
+			b.WebFetchRequests = n
+		case fieldPromptAudio:
+			b.PromptAudioTokens = n
+		case fieldCompAudio:
+			b.CompletionAudioTokens = n
+		case fieldAccPred:
+			b.AcceptedPredictionTokens = n
+		case fieldRejPred:
+			b.RejectedPredictionTokens = n
 		case fieldLatency:
 			b.LatencySumMS = n
 		default:

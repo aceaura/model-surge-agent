@@ -54,6 +54,10 @@ type streamEncoder struct {
 	// droppedTier 没能回显的档位原值（越集，如 anthropic 的 batch、
 	// responses 的 ultrafast），Notes() 收尾时报出。
 	droppedTier string
+	// fingerprint 后端配置指纹：与档位同样的回显规律，一旦收到就挂在
+	// 此后的每个 chunk 上。chat 专属维度，异族来源给不出，跨族丢弃
+	// 不报——排障信号，不是计费或内容维度。
+	fingerprint string
 	// usage 跨帧累积：input 与 output 可能来自不同的 IR 事件。
 	usage ir.Usage
 	// droppedImages / droppedFiles 被跳过的模型产出附件块数（image /
@@ -162,6 +166,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		e.id = ev.MessageID
 		e.model = ev.Model
 		e.mapTier(ev.ServiceTier)
+		if ev.SystemFingerprint != "" && e.fingerprint == "" {
+			e.fingerprint = ev.SystemFingerprint
+		}
 		if ev.Container != nil {
 			e.droppedContainer = true
 		}
@@ -309,6 +316,10 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		}
 		// 上游可能只在收尾帧给档位（非流式响应投影成事件时就是这样）。
 		e.mapTier(ev.ServiceTier)
+		// 指纹同理：chat 解码器把它攒到收尾帧交付，晚到的也补得上。
+		if ev.SystemFingerprint != "" && e.fingerprint == "" {
+			e.fingerprint = ev.SystemFingerprint
+		}
 		if ev.Container != nil {
 			e.droppedContainer = true
 		}
@@ -383,7 +394,7 @@ func (e *streamEncoder) finish() ([][]byte, error) {
 		frame, err := e.marshal(wireResponse{
 			ID: e.messageID(), Object: chunkObject, Created: e.created,
 			Model: e.model, Choices: []wireChoice{}, Usage: &u,
-			ServiceTier: e.serviceTier,
+			ServiceTier: e.serviceTier, SystemFingerprint: e.fingerprint,
 		})
 		if err != nil {
 			return nil, err
@@ -439,7 +450,7 @@ func (e *streamEncoder) chunk(delta wireMessage, finish string) ([][]byte, error
 	frame, err := e.marshal(wireResponse{
 		ID: e.messageID(), Object: chunkObject, Created: e.created, Model: e.model,
 		Choices:     []wireChoice{{Index: 0, Delta: &delta, FinishReason: finish}},
-		ServiceTier: e.serviceTier,
+		ServiceTier: e.serviceTier, SystemFingerprint: e.fingerprint,
 	})
 	if err != nil {
 		return nil, err
@@ -565,6 +576,8 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 	if tier, ok := codec.MapServiceTierEcho(resp.ServiceTier, Name); ok {
 		out.ServiceTier = tier
 	}
+	// 指纹原样回写：chat 专属维度，异族来源恒为空串，omitempty 自然不带。
+	out.SystemFingerprint = resp.SystemFingerprint
 	if out.ID == "" {
 		out.ID = "chatcmpl-unknown"
 	}

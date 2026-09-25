@@ -132,6 +132,16 @@ type Usage struct {
 	// 未知，但记账只认非零数，语义无损。
 	CacheWrite5mTokens int64 `json:"cache_write_5m_tokens,omitempty"`
 	CacheWrite1hTokens int64 `json:"cache_write_1h_tokens,omitempty"`
+	// WebSearch/WebFetchRequests 是服务端托管工具的执行次数（anthropic 的
+	// usage.server_tool_use），按次计费；音频与预测加速四位是 chat 的
+	// usage 明细子集。同 TTL 细分的口径：如实交出去，调度层不认识这些键
+	// 也无妨，runstate 只累计前三位，多出来的键被忽略。
+	WebSearchRequests        int64 `json:"web_search_requests,omitempty"`
+	WebFetchRequests         int64 `json:"web_fetch_requests,omitempty"`
+	PromptAudioTokens        int64 `json:"prompt_audio_tokens,omitempty"`
+	CompletionAudioTokens    int64 `json:"completion_audio_tokens,omitempty"`
+	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens,omitempty"`
+	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens,omitempty"`
 }
 
 // Outcome 决定调度层如何更新运行态，语义由 relay 的 runstate 定义。

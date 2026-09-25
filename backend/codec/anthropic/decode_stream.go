@@ -157,6 +157,8 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 			out.StopSequence = adoptStopSequence(out.StopReason, ev.Delta.StopSequence)
 			// 容器回显也可能落在 message_delta 上（官方 Delta.container）。
 			out.Container = decodeContainer(ev.Delta.Container)
+			// 拒绝档的结构化分类同样只随 message_delta 抵达。
+			out.StopDetails = decodeStopDetails(ev.Delta.StopDetails)
 		}
 		if ev.Usage != nil {
 			u := convertUsage(*ev.Usage)
@@ -198,6 +200,7 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 		ID:          w.ID,
 		Model:       w.Model,
 		StopReason:  convertStopReason(w.StopReason),
+		StopDetails: decodeStopDetails(w.StopDetails),
 		Usage:       convertUsage(w.Usage),
 		ServiceTier: w.ServiceTier,
 		Container:   decodeContainer(w.Container),
@@ -270,6 +273,25 @@ func convertUsage(u wireUsage) ir.Usage {
 			out.CacheWriteTokens = out.CacheWrite5mTokens + out.CacheWrite1hTokens
 		}
 	}
+	// 托管工具执行次数按次计费，收下才对得了账。
+	if u.ServerToolUse != nil {
+		out.WebSearchRequests = u.ServerToolUse.WebSearchRequests
+		out.WebFetchRequests = u.ServerToolUse.WebFetchRequests
+	}
+	out.InferenceGeo = u.InferenceGeo
+	return out
+}
+
+// decodeStopDetails 拒绝分类进 IR。category/explanation 官方可显式 null，
+// null 与缺省同归空串（官方注明二者语义相同）；RawMessage 解不进 string
+// 时（上游给了非字符串）保持空串，不让类型怪异连累整个对象。
+func decodeStopDetails(sd *wireStopDetails) *ir.StopDetails {
+	if sd == nil {
+		return nil
+	}
+	out := &ir.StopDetails{}
+	_ = json.Unmarshal(sd.Category, &out.Category)
+	_ = json.Unmarshal(sd.Explanation, &out.Explanation)
 	return out
 }
 

@@ -226,6 +226,8 @@ type wireResponse struct {
 	// ServiceTier 实际执行档位回显（standard/priority/batch）。上游同族
 	// 原值收下；跨族由编码器按 codec.MapServiceTierEcho 翻译或丢弃。
 	ServiceTier string `json:"service_tier,omitempty"`
+	// StopDetails 拒绝档的结构化分类（官方 response.stop_details）。
+	StopDetails *wireStopDetails `json:"stop_details,omitempty"`
 	// Container 代码执行容器回显（按需出场，缺键与 null 同义）。
 	Container *container `json:"container,omitempty"`
 }
@@ -241,6 +243,18 @@ type wireUsage struct {
 	// 内层两键不带 omitempty——上游真回这个对象时两键总是同时出现，
 	// 隐去零值反而会让读者以为明细残缺。
 	CacheCreation *wireCacheCreationUsage `json:"cache_creation,omitempty"`
+	// ServerToolUse 服务端托管工具执行次数（官方 usage.server_tool_use）。
+	// 按次计费，看不见就无法对账托管搜索的成本。
+	ServerToolUse *wireServerToolUsage `json:"server_tool_use,omitempty"`
+	// InferenceGeo 实际推理区域回显（官方 usage.inference_geo）。
+	InferenceGeo string `json:"inference_geo,omitempty"`
+}
+
+// wireServerToolUsage 内层两键与 cache_creation 同理不带 omitempty：
+// 官方回这个对象时两键总是成对出现，隐去零值会显得明细残缺。
+type wireServerToolUsage struct {
+	WebSearchRequests int64 `json:"web_search_requests"`
+	WebFetchRequests  int64 `json:"web_fetch_requests"`
 }
 
 // wireCacheCreationUsage 是 cache_creation 的 TTL 细分对象：
@@ -334,8 +348,19 @@ type streamDelta struct {
 	Citation     json.RawMessage `json:"citation,omitempty"`
 	StopReason   string          `json:"stop_reason,omitempty"`
 	StopSequence string          `json:"stop_sequence,omitempty"`
+	// StopDetails message_delta 上拒绝档的结构化分类（官方 Delta.stop_details）。
+	StopDetails *wireStopDetails `json:"stop_details,omitempty"`
 	// Container message_delta 上晚到的容器回显（官方 Delta.container）。
 	Container *container `json:"container,omitempty"`
+}
+
+// wireStopDetails 拒绝的结构化信息（官方 RefusalStopDetails，type 恒
+// "refusal"）。category/explanation 官方可显式 null，用 RawMessage 收：
+// null 与缺省语义相同（官方注明），解码后同归空串，回写时空串省略。
+type wireStopDetails struct {
+	Type        string          `json:"type"`
+	Category    json.RawMessage `json:"category,omitempty"`
+	Explanation json.RawMessage `json:"explanation,omitempty"`
 }
 
 // delta 类型名。

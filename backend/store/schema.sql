@@ -28,6 +28,14 @@ CREATE TABLE IF NOT EXISTS request_log (
   -- 通常是 5m 的 2 倍，分档定价与对账要靠它。非 anthropic 上游恒为 0。
   cache_write_5m_tokens BIGINT NOT NULL DEFAULT 0,
   cache_write_1h_tokens BIGINT NOT NULL DEFAULT 0,
+  -- 托管工具执行次数（anthropic server_tool_use，按次计费）与 chat 的
+  -- 音频/预测加速明细（各自是所在总量的子集）。非对应族上游恒为 0。
+  web_search_requests         BIGINT NOT NULL DEFAULT 0,
+  web_fetch_requests          BIGINT NOT NULL DEFAULT 0,
+  prompt_audio_tokens         BIGINT NOT NULL DEFAULT 0,
+  completion_audio_tokens     BIGINT NOT NULL DEFAULT 0,
+  accepted_prediction_tokens  BIGINT NOT NULL DEFAULT 0,
+  rejected_prediction_tokens  BIGINT NOT NULL DEFAULT 0,
   latency_ms        INT NOT NULL DEFAULT 0,
   first_token_ms    INT NOT NULL DEFAULT 0,
   -- 两段跨进程耗时的累计值（含全部重试）。latency_ms 减去两段
@@ -57,6 +65,12 @@ ALTER TABLE request_log ADD COLUMN IF NOT EXISTS cache_write_tokens BIGINT NOT N
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS reasoning_tokens BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS cache_write_5m_tokens BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS cache_write_1h_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS web_search_requests BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS web_fetch_requests BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS prompt_audio_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS completion_audio_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS accepted_prediction_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS rejected_prediction_tokens BIGINT NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS request_log_at_idx ON request_log(at DESC);
 CREATE INDEX IF NOT EXISTS request_log_model_idx ON request_log(model_id, at DESC);

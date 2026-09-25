@@ -50,6 +50,10 @@ type Event struct {
 	// 顶层，responses 放在 response 对象里、随 created 与 completed 两次
 	// 出现。哪一帧先到取决于上游，只认一处就会在另一种形态下丢。
 	ServiceTier string `json:"service_tier,omitempty"`
+	// SystemFingerprint Chat 后端配置指纹。到达规律与 ServiceTier 相同
+	//（chunk 顶层逐帧携带，可能晚于首帧），故同样两处都收。仅 chat 族
+	// 有槽位，跨族出站不投影。
+	SystemFingerprint string `json:"system_fingerprint,omitempty"`
 	// Container 代码执行容器回显（EvMessageStart 首帧携带；anthropic 的
 	// message_delta 也可能晚到，EvMessageDelta 上也收，后值覆盖）。
 	Container *Container `json:"container,omitempty"`
@@ -59,9 +63,12 @@ type Event struct {
 	StopReason StopReason   `json:"stop_reason,omitempty"`
 	// StopSequence 与 Response.StopSequence 同义，随收尾帧抵达。
 	StopSequence string `json:"stop_sequence,omitempty"`
-	Usage        *Usage `json:"usage,omitempty"`
-	MessageID    string `json:"message_id,omitempty"`
-	Model        string `json:"model,omitempty"`
+	// StopDetails 拒绝档的结构化分类，仅在 EvMessageDelta 出现
+	//（anthropic 的 message_delta.stop_details）。
+	StopDetails *StopDetails `json:"stop_details,omitempty"`
+	Usage       *Usage       `json:"usage,omitempty"`
+	MessageID   string       `json:"message_id,omitempty"`
+	Model       string       `json:"model,omitempty"`
 	// Created 是上游回显的创建时间（chat created / responses created_at，
 	// Unix 秒），只在 EvMessageStart 上有意义。零值=上游没给，出站才回退
 	// 本地钟——否则同族往返会把上游的真实创建时间换成代理本地钟，

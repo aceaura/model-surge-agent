@@ -50,6 +50,10 @@ type streamDecoder struct {
 	// 可能发生在增量帧上（上游漏发 added 帧），所以两处都要能查到形态，
 	// 且以先见者为准——同一序号不会出现两种形态的条目。
 	customKinds map[int]bool
+	// hostedItems 是本变换没有映射、整项丢弃的托管输出项数
+	//（web_search_call 之类）。只在收尾时生成一条注记：数字要的是整流
+	// 的结论，逐帧生成会让每帧数字不同、去重挡不住。
+	hostedItems int
 }
 
 // slot 把「两级序号构成的键」绑到分配给它的 IR 块索引。
@@ -70,7 +74,14 @@ func newStreamDecoder() *streamDecoder {
 }
 
 // Notes 实现 codec.StreamNotes。
-func (d *streamDecoder) Notes() []string { return codec.DedupeNotes(d.notes) }
+func (d *streamDecoder) Notes() []string {
+	notes := d.notes
+	if d.hostedItems > 0 {
+		notes = append(notes, codec.HostedOutputItemsNote(d.hostedItems))
+		d.hostedItems = 0
+	}
+	return codec.DedupeNotes(notes)
+}
 
 func (d *streamDecoder) Feed(event, data string) ([]ir.Event, error) {
 	out, split, err := codec.FeedWithSplit(event, data, d.feedOne)
@@ -379,6 +390,14 @@ func (d *streamDecoder) itemDone(ev wireStreamEvent) []ir.Event {
 			// 回补必须排在下面的签名增量之前，思考正文才不会落到签名后面。
 			out = append(out, d.backfill(reasoning, ir.BlockThinking,
 				joinSummary(ev.Item.Summary), ir.EvThinkingDelta)...)
+		default:
+			// 托管输出项（web_search_call / file_search_call 等）与未来的
+			// 新条目类型：本变换没有映射，整项不可见。在 done 帧计数（每个
+			// 条目恒有一次 done，added 可能缺席），Notes() 收尾时报出——
+			// 静默丢掉会让客户端对不上「付了托管执行的钱却看不到产出」。
+			if ev.Item.Type != "" {
+				d.hostedItems++
+			}
 		}
 	}
 	for _, s := range d.open {
@@ -652,9 +671,16 @@ func partText(p *wirePart) string {
 // DecodeResponse 解非流式响应。数据面对上游一律流式，
 // 这条路径只在探测之类的接口用到。
 func DecodeResponse(body []byte) (*ir.Response, error) {
+	resp, _, err := DecodeResponseLossy(body)
+	return resp, err
+}
+
+// DecodeResponseLossy 实现 codec.LossyResponseDecoder：除响应外交出解码
+// 损耗说明（当前只有一类——没有映射的托管输出项）。
+func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	var w wireResponse
 	if err := json.Unmarshal(body, &w); err != nil {
-		return nil, ir.NewError(ir.ErrUpstream, 0, "",
+		return nil, nil, ir.NewError(ir.ErrUpstream, 0, "",
 			fmt.Sprintf("undecodable response: %v", err))
 	}
 	// 终态失败的响应不得伪造成 completed：failed/cancelled 的 output 往往
@@ -663,10 +689,10 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 	switch w.Status {
 	case "failed", "cancelled":
 		if w.Error == nil {
-			return nil, ir.NewError(ir.ErrUpstream, 0, "",
+			return nil, nil, ir.NewError(ir.ErrUpstream, 0, "",
 				"upstream response "+w.Status)
 		}
-		return nil, convertError(0, w.Error)
+		return nil, nil, convertError(0, w.Error)
 	}
 	// queued/in_progress 等非终态：上游还没生成完。解下去会得到一份
 	// 内容残缺的「正常」响应，按可重试的上游错误处理，让调用方换目标
@@ -674,7 +700,7 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 	switch w.Status {
 	case "", "completed", "incomplete":
 	default:
-		return nil, ir.NewError(ir.ErrUpstream, 0, "",
+		return nil, nil, ir.NewError(ir.ErrUpstream, 0, "",
 			"upstream returned non-terminal status "+w.Status)
 	}
 	out := &ir.Response{
@@ -688,12 +714,13 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 	if w.Usage != nil {
 		out.Usage = convertUsage(*w.Usage)
 	}
+	hosted := 0
 	for _, item := range w.Output {
 		switch item.Type {
 		case itemMessage:
 			blocks, err := decodeContent(item.Content)
 			if err != nil {
-				return nil, ir.NewError(ir.ErrUpstream, 0, "",
+				return nil, nil, ir.NewError(ir.ErrUpstream, 0, "",
 					fmt.Sprintf("undecodable output content: %v", err))
 			}
 			out.Content = append(out.Content, blocks...)
@@ -719,9 +746,19 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 				Signature:     item.EncryptedContent,
 				SignatureFrom: Name,
 			}})
+		default:
+			// 托管输出项与未来的新条目类型：没有映射，整项丢弃并计数，
+			// 口径与流式 itemDone 的 default 相同。
+			if item.Type != "" {
+				hosted++
+			}
 		}
 	}
-	return out, nil
+	var notes []string
+	if hosted > 0 {
+		notes = append(notes, codec.HostedOutputItemsNote(hosted))
+	}
+	return out, notes, nil
 }
 
 func DecodeError(status int, header http.Header, body []byte) *ir.Error {

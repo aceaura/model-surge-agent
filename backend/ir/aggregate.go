@@ -104,6 +104,9 @@ func (a *Aggregator) Add(ev Event) {
 		a.resp.Model = ev.Model
 		a.mergeServiceTier(ev.ServiceTier)
 		a.mergeContainer(ev.Container)
+		if ev.SystemFingerprint != "" {
+			a.resp.SystemFingerprint = ev.SystemFingerprint
+		}
 		if ev.Audio != nil {
 			// 完整音频只随非流式响应投影出的首帧到达（ResponseEvents），
 			// 真流式的上游给不出这一维。
@@ -210,7 +213,14 @@ func (a *Aggregator) Add(ev Event) {
 		if ev.StopSequence != "" {
 			a.resp.StopSequence = ev.StopSequence
 		}
+		if ev.StopDetails != nil {
+			a.resp.StopDetails = ev.StopDetails
+		}
 		a.mergeServiceTier(ev.ServiceTier)
+		// chat 的指纹与档位同规律：可能晚于首帧才随 chunk 到达。
+		if ev.SystemFingerprint != "" {
+			a.resp.SystemFingerprint = ev.SystemFingerprint
+		}
 		// anthropic 的 container 回显也可能落在 message_delta 上。
 		a.mergeContainer(ev.Container)
 		if ev.Usage != nil {

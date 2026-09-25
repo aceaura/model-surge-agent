@@ -52,9 +52,12 @@ func (l *RequestLog) Insert(ctx context.Context, rec pipeline.Record) error {
 			input_tokens, output_tokens, cache_read_tokens,
 			cache_write_tokens, reasoning_tokens,
 			cache_write_5m_tokens, cache_write_1h_tokens,
+			web_search_requests, web_fetch_requests,
+			prompt_audio_tokens, completion_audio_tokens,
+			accepted_prediction_tokens, rejected_prediction_tokens,
 			latency_ms, first_token_ms, error_code, error_message, sanitized, lossy,
 			retry_after, dispatch_ms, upstream_ms, attempts_trail)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38)
 		ON CONFLICT (request_id) DO UPDATE SET
 			at = EXCLUDED.at, outbound_protocol = EXCLUDED.outbound_protocol,
 			model_id = EXCLUDED.model_id, account = EXCLUDED.account,
@@ -67,6 +70,12 @@ func (l *RequestLog) Insert(ctx context.Context, rec pipeline.Record) error {
 			reasoning_tokens = EXCLUDED.reasoning_tokens,
 			cache_write_5m_tokens = EXCLUDED.cache_write_5m_tokens,
 			cache_write_1h_tokens = EXCLUDED.cache_write_1h_tokens,
+			web_search_requests = EXCLUDED.web_search_requests,
+			web_fetch_requests = EXCLUDED.web_fetch_requests,
+			prompt_audio_tokens = EXCLUDED.prompt_audio_tokens,
+			completion_audio_tokens = EXCLUDED.completion_audio_tokens,
+			accepted_prediction_tokens = EXCLUDED.accepted_prediction_tokens,
+			rejected_prediction_tokens = EXCLUDED.rejected_prediction_tokens,
 			latency_ms = EXCLUDED.latency_ms, first_token_ms = EXCLUDED.first_token_ms,
 			error_code = EXCLUDED.error_code, error_message = EXCLUDED.error_message,
 			sanitized = EXCLUDED.sanitized, lossy = EXCLUDED.lossy,
@@ -79,6 +88,9 @@ func (l *RequestLog) Insert(ctx context.Context, rec pipeline.Record) error {
 		rec.Usage.InputTokens, rec.Usage.OutputTokens, rec.Usage.CacheReadTokens,
 		rec.Usage.CacheWriteTokens, rec.Usage.ReasoningTokens,
 		rec.Usage.CacheWrite5mTokens, rec.Usage.CacheWrite1hTokens,
+		rec.Usage.WebSearchRequests, rec.Usage.WebFetchRequests,
+		rec.Usage.PromptAudioTokens, rec.Usage.CompletionAudioTokens,
+		rec.Usage.AcceptedPredictionTokens, rec.Usage.RejectedPredictionTokens,
 		rec.LatencyMS, rec.FirstTokenMS,
 		textsafe.Clean(rec.ErrorCode), textsafe.Clean(rec.ErrorMessage), sanitized, lossy,
 		zeroTimeAsNull(rec.RetryAfter), rec.DispatchMS, rec.UpstreamMS, trail)
@@ -217,6 +229,9 @@ const recordColumns = `request_id, at, inbound_protocol, path, user_model, outbo
 	input_tokens, output_tokens, cache_read_tokens,
 	cache_write_tokens, reasoning_tokens,
 	cache_write_5m_tokens, cache_write_1h_tokens,
+	web_search_requests, web_fetch_requests,
+	prompt_audio_tokens, completion_audio_tokens,
+	accepted_prediction_tokens, rejected_prediction_tokens,
 	latency_ms, first_token_ms, error_code, error_message, sanitized, lossy, retry_after,
 	dispatch_ms, upstream_ms, attempts_trail`
 
@@ -237,6 +252,9 @@ func scanRecord(rows pgx.Rows) (pipeline.Record, error) {
 		&rec.Usage.InputTokens, &rec.Usage.OutputTokens, &rec.Usage.CacheReadTokens,
 		&rec.Usage.CacheWriteTokens, &rec.Usage.ReasoningTokens,
 		&rec.Usage.CacheWrite5mTokens, &rec.Usage.CacheWrite1hTokens,
+		&rec.Usage.WebSearchRequests, &rec.Usage.WebFetchRequests,
+		&rec.Usage.PromptAudioTokens, &rec.Usage.CompletionAudioTokens,
+		&rec.Usage.AcceptedPredictionTokens, &rec.Usage.RejectedPredictionTokens,
 		&rec.LatencyMS, &rec.FirstTokenMS, &rec.ErrorCode, &rec.ErrorMessage,
 		&sanitized, &lossy, &retryAfter, &rec.DispatchMS, &rec.UpstreamMS, &trail); err != nil {
 		return rec, err
