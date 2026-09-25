@@ -20,6 +20,9 @@ type wireRequest struct {
 	ToolChoice      json.RawMessage `json:"tool_choice,omitempty"`
 	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
 	User            string          `json:"user,omitempty"`
+	// Metadata 客户端自定义键值（官方至多 16 对，随响应回显）。解码进
+	// ir.Request.ClientMetadata，同族回写原样发。
+	Metadata map[string]string `json:"metadata,omitempty"`
 
 	// 调参字段。全部用指针以区分「客户端没给」与「给了零值」：
 	// penalty 的 0 是不惩罚、seed 的 0 是一个具体种子、logprobs 的 false

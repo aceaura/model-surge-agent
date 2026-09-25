@@ -119,6 +119,11 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 			out.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), Effort: w.ReasoningEffort}
 		}
 	}
+	// metadata 是官方文档维度（16 对键值，随响应回显）：整条丢掉等于客户端
+	// 的关联数据再也回不来。进 ClientMetadata 而不是 Metadata：后者只承载
+	// user_id 且被翻译成各协议的用户标识字段（见 ir.Request.ClientMetadata
+	// 注释），混在一起会让 user_id 作为普通元数据再发一遍。
+	out.ClientMetadata = w.Metadata
 	if w.User != "" {
 		out.Metadata = map[string]string{"user_id": w.User}
 	}

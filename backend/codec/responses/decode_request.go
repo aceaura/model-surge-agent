@@ -414,16 +414,65 @@ func decodeToolChoice(raw json.RawMessage) (*ir.ToolChoice, error) {
 		}
 	}
 	var obj struct {
-		Type string `json:"type"`
-		Name string `json:"name"`
+		Type  string            `json:"type"`
+		Name  string            `json:"name"`
+		Mode  string            `json:"mode"`
+		Tools []json.RawMessage `json:"tools"`
 	}
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return nil, fmt.Errorf("must be a string or a function object: %w", err)
+	}
+	// allowed_tools 是 responses/codex 一族的白名单形态：type 说的是「这是
+	// 一条选择策略」而不是某个已声明工具的类型，内层 mode 才说要不要必须
+	// 调。此前对象分支只认 name，这个形态没有 name，于是整个 tool_choice
+	// 被 400 拒掉（"name is required"）——客户端既拿不到限制也拿不到注记。
+	// 收窄落地见 codec.ShapeRequest 的 enforceToolAllowlist。
+	if obj.Type == "allowed_tools" {
+		out := &ir.ToolChoice{Mode: ir.ToolChoiceAuto}
+		if obj.Mode == "required" {
+			out.Mode = ir.ToolChoiceAny
+		}
+		out.AllowedTools = decodeAllowedToolNames(obj.Tools)
+		return out, nil
 	}
 	if obj.Name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
 	return &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: obj.Name}, nil
+}
+
+// decodeAllowedToolNames 取 allowed_tools.tools 里的工具名。条目通常是
+// {"type":"function","name":...}，chat 风格的 {"function":{"name":...}} 与
+// 裸字符串形态也照收——白名单本质是一串名字。认不出来就当没有：宁可少收
+// 窄（无从收窄时整形阶段会报出）也不要凭空捏一个名字进去。
+func decodeAllowedToolNames(list []json.RawMessage) []string {
+	var names []string
+	for _, item := range list {
+		var s string
+		if err := json.Unmarshal(item, &s); err == nil {
+			if s != "" {
+				names = append(names, s)
+			}
+			continue
+		}
+		var obj struct {
+			Name     string `json:"name"`
+			Function struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		}
+		if err := json.Unmarshal(item, &obj); err != nil {
+			continue
+		}
+		name := obj.Name
+		if name == "" {
+			name = obj.Function.Name
+		}
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func badRequest(msg string) error {

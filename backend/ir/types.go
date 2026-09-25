@@ -407,6 +407,70 @@ type ToolChoice struct {
 	Mode ToolChoiceMode `json:"mode"`
 	// Name 仅在 Mode 为 ToolChoiceTool 时有意义。
 	Name string `json:"name,omitempty"`
+	// AllowedTools 允许被调用的工具名白名单（responses/codex 的
+	// tool_choice.type="allowed_tools"、gemini 的
+	// functionCallingConfig.allowedFunctionNames）。与 Mode 正交：Mode 说
+	// 要不要必须调，白名单说能调哪些。
+	//
+	// 四个出站都没有这一维的槽位——anthropic 官方 tool_choice 只有
+	// auto/any/tool/none 四个变体，OpenAI 两系只能指名一个工具——但它可以
+	// 被等价实现：把声明的工具列表收窄成白名单与已声明工具的交集，上游看
+	// 不见别的工具就调不到。收窄见 AllowlistNarrow，落地在 codec.ShapeRequest。
+	// 因此这一维通常不产生损耗，只有白名单与已声明工具全无交集时才无从
+	// 收窄，由整形阶段报出。
+	AllowedTools []string `json:"allowed_tools,omitempty"`
+}
+
+// AllowlistApplies 白名单是否落在「靠收窄实现」的模式上。
+//
+// 指名调用（ToolChoiceTool）上游本来就只会调那一个，禁止调用
+// （ToolChoiceNone）一个都不调，两者都不需要收窄。把它们算进来会让这两
+// 种模式恒报「限制失效」。
+func (tc *ToolChoice) AllowlistApplies() bool {
+	if tc == nil || len(tc.AllowedTools) == 0 {
+		return false
+	}
+	return tc.Mode == ToolChoiceAuto || tc.Mode == ToolChoiceAny
+}
+
+// AllowlistNarrow 按工具白名单收窄已声明的工具，返回收窄后的列表与「限制
+// 是否真的落得下去」。纯函数：整形阶段用它改写请求，测试用它断言判据，
+// 收窄与报错必须出自同一个函数才不会漂移——漂移之后要么明明收窄成功却
+// 照报损耗，要么明明无从收窄却不报（模型照样能调被禁的工具）。
+//
+// 落不下去（第二个返回值为 false）只有一种情形：白名单里的名字一个都不在
+// 已声明的非服务端工具里。此时原样返回整个列表——收窄到零个工具会连锁
+// 触发「零工具丢 tool_choice」乃至工具历史降级，那是比白名单失效大得多
+// 的破坏。白名单里写了未声明的名字本身不算损耗：那个名字压根不存在，
+// 模型调不到它，客户端要的限制照样成立。
+//
+// 服务端工具（ServerType 非空）一律保留且不计入交集：白名单管的是客户
+// 端声明的函数，把托管搜索一类连带删掉是删了客户端声明过的东西，比白
+// 名单失效更糟。
+func (r *Request) AllowlistNarrow() ([]Tool, bool) {
+	if r == nil || !r.ToolChoice.AllowlistApplies() {
+		return nil, false
+	}
+	allowed := make(map[string]bool, len(r.ToolChoice.AllowedTools))
+	for _, name := range r.ToolChoice.AllowedTools {
+		allowed[name] = true
+	}
+	kept := make([]Tool, 0, len(r.Tools))
+	matched := 0
+	for _, t := range r.Tools {
+		if t.ServerType != "" {
+			kept = append(kept, t)
+			continue
+		}
+		if allowed[t.Name] {
+			kept = append(kept, t)
+			matched++
+		}
+	}
+	if matched == 0 {
+		return r.Tools, false
+	}
+	return kept, true
 }
 
 // ThinkingConfig 同时容纳两种风格：Anthropic 用 token 预算，
@@ -638,6 +702,7 @@ func (r *Request) Clone() *Request {
 	}
 	if r.ToolChoice != nil {
 		tc := *r.ToolChoice
+		tc.AllowedTools = append([]string(nil), r.ToolChoice.AllowedTools...)
 		out.ToolChoice = &tc
 	}
 	if r.Temperature != nil {

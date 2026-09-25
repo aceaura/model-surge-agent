@@ -174,6 +174,7 @@ func MergeNotes(groups ...[]string) []string {
 // shapeTools 归一工具 schema，并把 tool_choice 校正到与最终工具集合相容。
 func shapeTools(req *ir.Request, caps Capabilities, c *noteCollector) {
 	dropServerTools(req, caps, c)
+	enforceToolAllowlist(req, c)
 	for i := range req.Tools {
 		if req.Tools[i].ServerType != "" {
 			// 服务端工具不带我方能理解的参数形状，schema 归一对它无意义，
@@ -183,6 +184,35 @@ func shapeTools(req *ir.Request, caps Capabilities, c *noteCollector) {
 		shapeToolSchema(&req.Tools[i], caps, c)
 	}
 	shapeToolChoice(req, c)
+}
+
+// enforceToolAllowlist 把「只能调这些」的工具白名单落成目标协议能表达的
+// 形式：收窄已声明的工具列表（见 ir.Request.AllowlistNarrow）。
+//
+// 四个出站都没有白名单槽位，不收窄而照原样声明，等于把客户端明令禁止的
+// 工具又递了回去：模型随时可能调它，请求里看不出任何异常，客户端也拿不到
+// 注记可循。
+//
+// 排在 dropServerTools 之后、schema 归一之前：被白名单排除的工具压根不会
+// 发给上游，它的 schema 形状不再是这一轮的问题，不必白走一遍归一；也排在
+// shapeToolChoice 之前，让指名调用的校验对着收窄后的最终工具集合。
+//
+// 收窄成功不报有损：限制通过「上游看不见别的工具」等价成立。只有白名单与
+// 已声明的非服务端工具全无交集时无从收窄，照原样发出并报出——那时模型可
+// 能调到客户端排除的工具。
+func enforceToolAllowlist(req *ir.Request, c *noteCollector) {
+	if !req.ToolChoice.AllowlistApplies() {
+		return
+	}
+	kept, ok := req.AllowlistNarrow()
+	if !ok {
+		c.put("tool_choice.allowed_tools", fmt.Sprintf(
+			"could not enforce the tool allowlist of %d name(s): none of them is a declared tool, "+
+				"so the full tool list went through and the model may call tools the client excluded",
+			len(req.ToolChoice.AllowedTools)))
+		return
+	}
+	req.Tools = kept
 }
 
 // dropServerTools 在目标协议表达不了服务端工具时把它们整条剔除。

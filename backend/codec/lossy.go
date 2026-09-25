@@ -130,7 +130,7 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 		note("thinking", "no reasoning mode")
 	}
 	describeThinkingModernLossy(req, name, caps, note)
-	describeParamsLossy(req, caps, note, filled, unreturned)
+	describeParamsLossy(req, name, caps, note, filled, unreturned)
 
 	describeBlocksLossy(req.System, name, caps, note)
 	for _, m := range req.Messages {
@@ -195,6 +195,19 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 		}
 		if len(req.WebSearchOptions) > 0 {
 			note("web_search_options", "no web-search tuning parameter, search behavior follows the upstream default")
+		}
+	} else {
+		// chat 目标的 modalities 值集只有 text/audio：其余值（如 image）被
+		// 编码器滤掉——写出去是上游必 400 的形状，这里报出来。
+		var unsupported []string
+		for _, m := range req.Modalities {
+			if m != "text" && m != "audio" {
+				unsupported = append(unsupported, m)
+			}
+		}
+		if len(unsupported) > 0 {
+			note(fmt.Sprintf("modalities %s", strings.Join(unsupported, "/")),
+				"chat completions accepts only text/audio output modalities, the response will not include that output")
 		}
 	}
 
@@ -595,7 +608,7 @@ func ForeignSignature(t *ir.Thinking, name string) bool {
 // 这一批一律只报不拒：拒绝会把一个能用的回答换成零回答，而目标协议是
 // 调度层按策略选的、客户端无从预知，让它为一个自己控制不了的路由结果
 // 吃 400，故障归因方向是错的。要强制可以用模型配置的 overrides。
-func describeParamsLossy(req *ir.Request, caps Capabilities, note, filled, unreturned func(field, why string)) {
+func describeParamsLossy(req *ir.Request, name string, caps Capabilities, note, filled, unreturned func(field, why string)) {
 	if !caps.Penalties {
 		if req.PresencePenalty != nil {
 			note("presence_penalty", "no presence penalty parameter")
@@ -696,7 +709,13 @@ func describeParamsLossy(req *ir.Request, caps Capabilities, note, filled, unret
 		note("truncation", "no upstream-side truncation parameter")
 	}
 	if len(req.ClientMetadata) > 0 && !caps.ClientMetadata {
-		note("metadata", "no client metadata parameter")
+		if name == ProtocolAnthropic {
+			// anthropic 的 metadata 只有 user_id 一个键：措辞说清是受限而
+			// 非全无槽位，其余键装不下、不会随响应回来。
+			note("metadata", "the target protocol keeps only the end-user id from client metadata, the rest of the client's correlation data will not come back")
+		} else {
+			note("metadata", "no client metadata parameter")
+		}
 	}
 	if req.MaxTokens <= 0 && caps.RequiresMaxTokens && caps.DefaultMaxTokens > 0 {
 		// 兜底不是丢弃，但同样是本服务改了客户端没给的东西，必须留痕：

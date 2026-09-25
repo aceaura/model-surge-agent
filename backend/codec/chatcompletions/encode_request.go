@@ -79,7 +79,14 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	// chat 一族专属四维原样回写（外族编码器不读它们，跨族损耗由
 	// DescribeLossy 报出）。voice 恒写 string 简形：{id} 对象与 string
 	// 语义等价，取最简；没给 voice 不造空串——那会被上游当非法音色名。
-	w.Modalities = req.Modalities
+	//
+	// modalities 的官方值集只有 text/audio：客户端递来别的值（如 image）
+	// 写出去是上游必 400 的形状，滤掉并由 DescribeLossy 报出。
+	for _, m := range req.Modalities {
+		if m == "text" || m == "audio" {
+			w.Modalities = append(w.Modalities, m)
+		}
+	}
 	if req.AudioOut != nil {
 		ao := &wireAudioOut{Format: req.AudioOut.Format}
 		if req.AudioOut.Voice != "" {
@@ -107,6 +114,9 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 		// 而客户端刚刚明确说了不要。
 		w.ReasoningEffort = effortNone
 	}
+	// metadata 同族回吐：客户端的关联数据通道，随响应回显。user_id 同时
+	// 落 user 字段（顶层字段是滥用追踪的官方槽位）。
+	w.Metadata = req.ClientMetadata
 	if id := req.Metadata["user_id"]; id != "" {
 		w.User = id
 	}
