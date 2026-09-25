@@ -46,7 +46,14 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 		})
 	}
 
-	for _, t := range w.Tools {
+	// 服务端工具定义再留一份原文：computer 的 display_*、web_fetch 的
+	// max_content_tokens 等未建模声明参数，同族回写时靠 ServerRaw 整块保真。
+	// 主结构已校验通过，这一遍只按位取原文，解析失败保持 nil 即可。
+	var rawTools struct {
+		Tools []json.RawMessage `json:"tools"`
+	}
+	_ = json.Unmarshal(body, &rawTools)
+	for i, t := range w.Tools {
 		tool := ir.Tool{
 			Name:        t.Name,
 			Description: t.Description,
@@ -61,6 +68,11 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 		// custom 是函数工具的显式写法，与省略同义，不当服务端工具记。
 		if t.Type != "" && t.Type != "custom" {
 			tool.ServerType = t.Type
+			// 原文只随服务端工具走：函数工具的同族往返由逐字段建模全量
+			// 覆盖，吃原文通道反而会把客户端没给的键凭空带上。
+			if i < len(rawTools.Tools) {
+				tool.ServerRaw = rawTools.Tools[i]
+			}
 		}
 		out.Tools = append(out.Tools, tool)
 	}

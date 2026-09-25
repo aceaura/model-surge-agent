@@ -280,6 +280,14 @@ type Tool struct {
 	// 服务端工具不能被当成普通函数工具发出去：上游会把它当成「等客户端
 	// 回结果」的函数，而本服务永远不会回——对话就停在那里，没有报错。
 	ServerType string `json:"server_type,omitempty"`
+	// ServerRaw 服务端工具定义的原始 JSON（仅 anthropic 入站填充）。
+	// 未建模的声明参数（computer 的 display_width_px/display_height_px、
+	// web_fetch 的 citations/max_content_tokens 及未来新增键）逐字段建模
+	// 跟进永远慢半拍，同族回写时整块原样吐出才能全保真。外族出站整条
+	// 剔除该工具（dropServerTools）且线体结构没有原文槽位，天然到不了。
+	// 字节内容视为不可变，Clone 随结构体值拷贝；omitempty 承重——IR 级
+	// JSON 序列化下空值不得变成字面量 null 再被当成原文。
+	ServerRaw json.RawMessage `json:"server_raw,omitempty"`
 	// Strict 工具入参 schema 严格校验开关（anthropic tool.strict、OpenAI 两系
 	// function.strict，同义同形）。三态指针：nil=没给（上游默认），显式
 	// false 是「明确不要严格校验」，与没给语义不同。gemini 的工具定义

@@ -70,6 +70,15 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	}
 
 	for _, t := range req.Tools {
+		if t.ServerType != "" && len(t.ServerRaw) > 0 {
+			// 同族来路且有原文的服务端工具：整块回吐——未建模的声明参数
+			// （computer 的 display_*、web_fetch 的 max_content_tokens 及
+			// 未来新增键）逐字段建模永远慢半拍，重建必丢。ServerRaw 只在
+			// anthropic 入站时填充，走到这里必是同族来路；没有 ServerType
+			// 的原文不吃（函数工具不得走原文通道）。
+			w.Tools = append(w.Tools, wireTool{Raw: t.ServerRaw})
+			continue
+		}
 		tool := wireTool{
 			Name:                t.Name,
 			Description:         t.Description,

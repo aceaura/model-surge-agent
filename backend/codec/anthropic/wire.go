@@ -169,6 +169,20 @@ type wireTool struct {
 	InputExamples []json.RawMessage `json:"input_examples,omitempty"`
 	// AllowedCallers 允许的程序化调用方（direct / code_execution_*）。
 	AllowedCallers []string `json:"allowed_callers,omitempty"`
+	// Raw 同族回写的服务端工具原始定义。标 json:"-" 不参与逐字段序列化：
+	// MarshalJSON 见到它就把整块原样吐出去（与 citation.Raw 原文透传同一手法）。
+	Raw json.RawMessage `json:"-"`
+}
+
+// MarshalJSON 有原文的服务端工具整块原样写出，其余按字段序列化。
+// 逐字段重建会丢掉 wireTool 没建模的声明参数（computer 的 display_width_px/
+// display_height_px、web_fetch 的 citations/max_content_tokens 及未来新增键）。
+func (t wireTool) MarshalJSON() ([]byte, error) {
+	if len(t.Raw) > 0 {
+		return t.Raw, nil
+	}
+	type plain wireTool
+	return json.Marshal(plain(t))
 }
 
 type wireToolChoice struct {

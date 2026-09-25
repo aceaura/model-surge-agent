@@ -208,12 +208,16 @@ func TestClampDoesNotRaiseMaxTokens(t *testing.T) {
 // --- 需求3：服务端工具 ---
 
 // serverToolRequest 是一个声明了服务端工具与普通函数工具的请求。
+// 服务端工具带着原文槽位（anthropic 入站的形态）：外族出站整条剔除时，
+// 原文一并不得泄漏——矩阵里「承载不了的协议 body 不含 web_search」的断言
+// 同时钉住这一点。
 func serverToolRequest() *ir.Request {
 	return &ir.Request{
 		Model:     "m",
 		MaxTokens: 8192,
 		Tools: []ir.Tool{
-			{Name: "web_search", ServerType: "web_search_20250305"},
+			{Name: "web_search", ServerType: "web_search_20250305",
+				ServerRaw: json.RawMessage(`{"type":"web_search_20250305","name":"web_search","max_uses":9}`)},
 			{Name: "alpha", Schema: `{"type":"object"}`},
 		},
 		Messages: []ir.Message{
