@@ -80,9 +80,11 @@ func TestPreflightCarriesTheFullHeaderAllowList(t *testing.T) {
 		t.Error("max-age must be set, otherwise every request preflights again")
 	}
 	// 不暴露则浏览器里的 JS 读不到请求 ID，报障时无从对账。
-	if !strings.EqualFold(resp.Header().Get("Access-Control-Expose-Headers"), "X-Request-Id") {
-		t.Errorf("expose-headers = %q, want X-Request-Id",
-			resp.Header().Get("Access-Control-Expose-Headers"))
+	// 上游侧关联键（改名回传的那个）也要暴露，理由相同。
+	expose := resp.Header().Get("Access-Control-Expose-Headers")
+	if !strings.Contains(expose, "X-Request-Id") ||
+		!strings.Contains(expose, "X-Upstream-Request-Id") {
+		t.Errorf("expose-headers = %q, want X-Request-Id and X-Upstream-Request-Id", expose)
 	}
 }
 

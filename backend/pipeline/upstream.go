@@ -261,24 +261,48 @@ var forwardedHeaderPrefixes = []string{
 	"x-ratelimit-",
 }
 
+// UpstreamRequestIDHeader 是上游 x-request-id 回传给客户端时用的头名。
+//
+// 厂商侧的关联键：客户端报障时拿它才能对上厂商日志，本仓日志里只有
+// 自己的 request_id。不能原名透传——我们自己回显 X-Request-Id（本服务
+// 流水的主键），两个值同名会让客户端引用的追踪 ID 指向上游而不是我们
+// 的流水。改名回传，两个键都保住。
+//
+// 导出给 httpapi：CORS 的 expose 列表要点名它，否则浏览器里的 JS 读不到。
+const UpstreamRequestIDHeader = "X-Upstream-Request-Id"
+
+// forwardedHeaderRenames 是「精确名（小写）→ 改名」的透传表。
+var forwardedHeaderRenames = map[string]string{
+	"x-request-id": UpstreamRequestIDHeader,
+}
+
 // forwardableHeaders 从上游响应头里筛出可以回传的那些。
 //
 // Retry-After 刻意不在白名单里：它已经由 codec/ratelimit 解析、按我们自己
-// 的口径写出，两条路都写会产生两个值。
+// 的口径写出，两条路都写会产生两个值。x-request-id 同理不走原名，按
+// forwardedHeaderRenames 改名回传。
 func forwardableHeaders(h http.Header) http.Header {
 	var out http.Header
 	for k, vs := range h {
 		lower := strings.ToLower(k)
-		for _, prefix := range forwardedHeaderPrefixes {
-			if !strings.HasPrefix(lower, prefix) {
-				continue
+		dst := ""
+		if renamed, ok := forwardedHeaderRenames[lower]; ok {
+			dst = renamed
+		} else {
+			for _, prefix := range forwardedHeaderPrefixes {
+				if strings.HasPrefix(lower, prefix) {
+					dst = http.CanonicalHeaderKey(k)
+					break
+				}
 			}
-			if out == nil {
-				out = make(http.Header, 4)
-			}
-			out[http.CanonicalHeaderKey(k)] = append([]string(nil), vs...)
-			break
 		}
+		if dst == "" {
+			continue
+		}
+		if out == nil {
+			out = make(http.Header, 4)
+		}
+		out[dst] = append([]string(nil), vs...)
 	}
 	return out
 }

@@ -3,6 +3,8 @@ package httpapi
 import (
 	"net/http"
 	"strings"
+
+	"github.com/aceaura/model-surge-agent/backend/pipeline"
 )
 
 // corsAllowHeaders 是预检放行的请求头。
@@ -85,7 +87,9 @@ func (s *Server) setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 	h.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	h.Set("Access-Control-Allow-Headers", corsAllowHeadersValue)
 	// 暴露请求 ID：客户端报障要对账，不暴露则浏览器里的 JS 读不到这个头。
-	h.Set("Access-Control-Expose-Headers", headerRequestID)
+	// 上游侧的关联键（改名回传的那个）一并暴露，理由相同。
+	h.Set("Access-Control-Expose-Headers",
+		headerRequestID+", "+pipeline.UpstreamRequestIDHeader)
 	h.Set("Access-Control-Max-Age", corsMaxAge)
 }
 

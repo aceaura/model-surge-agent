@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aceaura/model-surge-agent/backend/pipeline"
 	"github.com/aceaura/model-surge-agent/backend/relayclient"
 	"github.com/aceaura/model-surge-agent/backend/relaymock"
 )
@@ -302,6 +303,11 @@ func TestRateLimitHeadersReachTheClientOnFailure(t *testing.T) {
 	}
 	if got := h.Get("X-Request-Id"); got == "upstream-only" {
 		t.Errorf("把上游的 request id 当成了本服务的：%q", got)
+	}
+	// 判据 20：厂商侧关联键改名回传。错误终态上它最有价值——报障时
+	// 要对的正是失败那一次的上游日志。
+	if got := h.Get(pipeline.UpstreamRequestIDHeader); got != "upstream-only" {
+		t.Errorf("上游 request id 没按 %q 回传：%q", pipeline.UpstreamRequestIDHeader, got)
 	}
 }
 

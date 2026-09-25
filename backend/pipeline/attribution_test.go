@@ -503,6 +503,7 @@ func TestNonHTMLDecodeFailureNamesTheContentType(t *testing.T) {
 func TestStreamingForwardsRateLimitHeaders(t *testing.T) {
 	up := &fakeUpstream{handler: func(_ int, w http.ResponseWriter) {
 		w.Header().Set("anthropic-ratelimit-unified-remaining", "1500")
+		w.Header().Set("x-request-id", "req_vendor_1")
 		w.Header().Set("Set-Cookie", "session=leak; HttpOnly")
 		writeStream(w, okStream)
 	}}
@@ -517,12 +518,18 @@ func TestStreamingForwardsRateLimitHeaders(t *testing.T) {
 	if got := w.Header().Get("Set-Cookie"); got != "" {
 		t.Errorf("Set-Cookie 被传出去了: %q", got)
 	}
+	// 厂商侧关联键改名回传：客户端报障要拿它对厂商日志，原名会撞我们
+	// 自己回显的 X-Request-Id。
+	if got := w.Header().Get(pipeline.UpstreamRequestIDHeader); got != "req_vendor_1" {
+		t.Errorf("上游 request id 没按 %q 回传: %q", pipeline.UpstreamRequestIDHeader, got)
+	}
 }
 
 // 非流式路径同样要传：两条路各写自己的响应头，漏一条就是一半请求没有。
 func TestNonStreamingForwardsRateLimitHeaders(t *testing.T) {
 	up := &fakeUpstream{handler: func(_ int, w http.ResponseWriter) {
 		w.Header().Set("x-ratelimit-remaining-tokens", "39000")
+		w.Header().Set("x-request-id", "req_vendor_2")
 		writeStream(w, okStream)
 	}}
 	f := newFixture(t, relaymock.Step{Target: target(up.start(t), "kimi-1/k3")})
@@ -535,6 +542,9 @@ func TestNonStreamingForwardsRateLimitHeaders(t *testing.T) {
 	}
 	if got := w.Header().Get("X-Ratelimit-Remaining-Tokens"); got != "39000" {
 		t.Errorf("非流式路径没传限流头: %q", got)
+	}
+	if got := w.Header().Get(pipeline.UpstreamRequestIDHeader); got != "req_vendor_2" {
+		t.Errorf("非流式路径没传上游 request id: %q", got)
 	}
 }
 

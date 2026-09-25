@@ -170,13 +170,19 @@ func TestSetCookieIsNotForwardable(t *testing.T) {
 	}
 }
 
-// 上游的 x-request-id 不能传：我们自己回显一个同名头，两个值会让
-// 客户端拿到的追踪 ID 指向上游而不是我们的流水。
-func TestUpstreamRequestIDIsNotForwardable(t *testing.T) {
+// 上游的 x-request-id 不能按原名传：我们自己回显一个同名头，两个值会让
+// 客户端拿到的追踪 ID 指向上游而不是我们的流水。但厂商侧的关联键本身
+// 有价值（报障时对厂商日志用），所以改名回传，两个键都保住。
+func TestUpstreamRequestIDIsForwardedRenamed(t *testing.T) {
 	h := http.Header{}
 	h.Set("x-request-id", "upstream-abc")
-	if forwardableHeaders(h).Get("X-Request-Id") != "" {
-		t.Error("上游的 x-request-id 被回传，会覆盖我们回显的请求 ID")
+	got := forwardableHeaders(h)
+	if got.Get("X-Request-Id") != "" {
+		t.Error("上游的 x-request-id 按原名回传，会覆盖我们回显的请求 ID")
+	}
+	if got.Get(UpstreamRequestIDHeader) != "upstream-abc" {
+		t.Errorf("改名回传缺席: %q = %q", UpstreamRequestIDHeader,
+			got.Get(UpstreamRequestIDHeader))
 	}
 }
 
