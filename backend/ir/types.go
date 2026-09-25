@@ -472,6 +472,20 @@ type Request struct {
 	// 与 Responses 的 response.completed 带 usage 都是协议固有形状，
 	// 不是可选帧。
 	IncludeUsage *bool `json:"include_usage,omitempty"`
+
+	// 以下四维只有 chat_completions 一族有（responses 全系无对应槽位）。
+	// 收进 IR 只为同族往返与跨族损耗诊断，不作映射尝试。
+	// Modalities 输出模态（"text"/"audio"）。
+	Modalities []string `json:"modalities,omitempty"`
+	// AudioOut 音频输出配置。仅 Modalities 含 "audio" 时有效，
+	// 同给与否都透传让上游判定。
+	AudioOut *AudioOut `json:"audio_out,omitempty"`
+	// Prediction 预测输出配置（重生成场景提速，{type:"content",content:...}）。
+	// 内容嵌套，不透明原文透传；显式 null 归一为没给。omitempty 承重。
+	Prediction json.RawMessage `json:"prediction,omitempty"`
+	// WebSearchOptions 联网搜索选项（{search_context_size,user_location}）。
+	// 不透明原文透传；显式 null 归一为没给。omitempty 承重。
+	WebSearchOptions json.RawMessage `json:"web_search_options,omitempty"`
 }
 
 // ResponseFormatKind 是结构化输出的形态。
@@ -494,6 +508,15 @@ type ResponseFormat struct {
 	// Strict 要求上游严格遵循 schema。三态指针：各家默认值不同，
 	// 客户端没表态时不替它选。
 	Strict *bool `json:"strict,omitempty"`
+}
+
+// AudioOut 是 chat 音频输出配置。Format 取 wav/aac/mp3/flac/opus/pcm16；
+// Voice 是内置音色名或自定义音色 id——官方给两形态（string 或 {id} 对象），
+// 解码时归一成 string（语义等价），回写恒写 string 简形；没给 voice 时
+// 保持空，不造键（空串会被上游当成非法音色名）。
+type AudioOut struct {
+	Format string `json:"format,omitempty"`
+	Voice  string `json:"voice,omitempty"`
 }
 
 // Clone 深拷贝，供换目标重试时复用同一份原始请求。
@@ -525,6 +548,12 @@ func (r *Request) Clone() *Request {
 	}
 	out.StopSequences = append([]string(nil), r.StopSequences...)
 	out.DecodeNotes = append([]string(nil), r.DecodeNotes...)
+	out.Modalities = append([]string(nil), r.Modalities...)
+	// Prediction/WebSearchOptions 字节按 RawMessage 不可变惯例随值共享。
+	if r.AudioOut != nil {
+		ao := *r.AudioOut
+		out.AudioOut = &ao
+	}
 	if r.ToolChoice != nil {
 		tc := *r.ToolChoice
 		out.ToolChoice = &tc

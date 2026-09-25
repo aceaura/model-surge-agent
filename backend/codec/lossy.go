@@ -155,6 +155,22 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 		note("container", "no code-execution container reuse or skill declaration, the upstream starts with a fresh container and no skills loaded")
 	}
 
+	// chat 一族专属四维（modalities/audio/prediction/web_search_options）：
+	// responses 全系没有对应槽位，不作映射尝试，跨族丢了照实报。
+	// audio 依附 modalities：模态丢了音频配置必然随之丢，合并成一则；
+	// prediction 与 web_search_options 各自独立。chat 同族原样往返，不报。
+	if name != ProtocolChatCompletions {
+		if len(req.Modalities) > 0 || req.AudioOut != nil {
+			note("modalities/audio", "no audio-output request, the response will be text-only")
+		}
+		if len(req.Prediction) > 0 {
+			note("prediction", "no predicted-output parameter, the regeneration speedup the client asked for will not happen")
+		}
+		if len(req.WebSearchOptions) > 0 {
+			note("web_search_options", "no web-search tuning parameter, search behavior follows the upstream default")
+		}
+	}
+
 	// 历史里的托管工具块（server_tool_use / web_search_tool_result）：三个
 	// 外族出站编码器都整块跳过。两种块型成对出现、一起丢反而不撕毁
 	// tool_use/tool_result 配平，上游不会拒——但模型看不到自己上一轮让

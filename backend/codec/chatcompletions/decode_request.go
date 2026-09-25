@@ -83,6 +83,33 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	out.ParallelToolCalls = w.ParallelToolCalls
 	out.ResponseFormat = decodeResponseFormat(w.ResponseFormat)
 
+	// chat 一族专属四维：同族往返靠它们，跨族损耗由 DescribeLossy 报出。
+	out.Modalities = w.Modalities
+	// voice 官方两形态（内置名 string / 自定义 {id} 对象），归一成 string：
+	// 两种写法语义等价，IR 与回写只留一种。
+	if w.Audio != nil {
+		ao := &ir.AudioOut{Format: w.Audio.Format}
+		var v string
+		if err := json.Unmarshal(w.Audio.Voice, &v); err == nil {
+			ao.Voice = v
+		} else {
+			var obj struct {
+				ID string `json:"id"`
+			}
+			if err := json.Unmarshal(w.Audio.Voice, &obj); err == nil {
+				ao.Voice = obj.ID
+			}
+		}
+		out.AudioOut = ao
+	}
+	// 显式 null 等同没给（stop/tool_choice 同款先例）。
+	if string(w.Prediction) != "null" {
+		out.Prediction = w.Prediction
+	}
+	if string(w.WebSearchOptions) != "null" {
+		out.WebSearchOptions = w.WebSearchOptions
+	}
+
 	if w.ReasoningEffort != "" {
 		// "none" 是明确关闭，不是一个强度档位：带着它当 Effort 传下去，
 		// 出站会把它折成某个真实档位，等于把关闭请求变成开启。

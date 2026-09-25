@@ -34,6 +34,24 @@ type wireRequest struct {
 	ServiceTier       string              `json:"service_tier,omitempty"`
 	ParallelToolCalls *bool               `json:"parallel_tool_calls,omitempty"`
 	ResponseFormat    *wireResponseFormat `json:"response_format,omitempty"`
+
+	// Modalities 输出模态（"text"/"audio"），chat 一族专属。
+	Modalities []string `json:"modalities,omitempty"`
+	// Audio 音频输出配置（仅 modalities 含 "audio" 时有效）。voice 官方
+	// 两形态（内置名 string / 自定义 {id} 对象），RawMessage 延迟归一。
+	Audio *wireAudioOut `json:"audio,omitempty"`
+	// Prediction 预测输出配置 {type:"content",content}，原文透传。
+	Prediction json.RawMessage `json:"prediction,omitempty"`
+	// WebSearchOptions 联网搜索选项 {search_context_size,user_location}，
+	// 原文透传。
+	WebSearchOptions json.RawMessage `json:"web_search_options,omitempty"`
+}
+
+// wireAudioOut 音频输出配置。Voice 两形态（string / {"id":...}）解码侧
+// 不挑，统一归一进 IR；回写恒写 string 简形。
+type wireAudioOut struct {
+	Format string          `json:"format,omitempty"`
+	Voice  json.RawMessage `json:"voice,omitempty"`
 }
 
 // wireResponseFormat 是结构化输出要求。type 取 text / json_object / json_schema，

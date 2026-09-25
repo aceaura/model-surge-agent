@@ -76,6 +76,24 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	w.ParallelToolCalls = req.ParallelToolCalls
 	w.ResponseFormat = encodeResponseFormat(req.ResponseFormat)
 
+	// chat 一族专属四维原样回写（外族编码器不读它们，跨族损耗由
+	// DescribeLossy 报出）。voice 恒写 string 简形：{id} 对象与 string
+	// 语义等价，取最简；没给 voice 不造空串——那会被上游当非法音色名。
+	w.Modalities = req.Modalities
+	if req.AudioOut != nil {
+		ao := &wireAudioOut{Format: req.AudioOut.Format}
+		if req.AudioOut.Voice != "" {
+			v, err := json.Marshal(req.AudioOut.Voice)
+			if err != nil {
+				return nil, fmt.Errorf("chatcompletions: audio.voice: %w", err)
+			}
+			ao.Voice = v
+		}
+		w.Audio = ao
+	}
+	w.Prediction = req.Prediction
+	w.WebSearchOptions = req.WebSearchOptions
+
 	switch {
 	case req.Thinking.On():
 		w.ReasoningEffort = req.Thinking.Effort
