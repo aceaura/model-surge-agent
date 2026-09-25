@@ -46,6 +46,10 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	notes := codec.DescribeResponseSignatureLoss(resp, Name, true)
 	// 但 function_call 条目上没有签名字段，所以工具调用那一位一律丢弃。
 	notes = append(notes, codec.DescribeResponseToolSignatureLoss(resp, Name, false)...)
+	// 助手回合的 output 条目没有附件形态，模型产出的附件整块消失。
+	if images, files := codec.CountResponseMedia(resp); images > 0 || files > 0 {
+		notes = append(notes, codec.MediaOutputDropNote(images, files))
+	}
 	return body, codec.DedupeNotes(notes), nil
 }
 

@@ -33,12 +33,26 @@ type streamEncoder struct {
 	usage      ir.Usage
 	// serviceTier 是上游回的执行档位，随 snapshot 一并写进 response 对象。
 	serviceTier string
+	// droppedImages / droppedFiles 被跳过的模型产出附件块数（image /
+	// audio+document+file）。本族编码器给助手回合输出的 part 只有
+	// output_text / refusal，没有附件形态。不显式拦住会落进 default(text)
+	// 分支，凭空多出一个 content 为 [] 的空 message item：客户端读到一条
+	// 没有内容的助手消息，它还占掉一个 output_index，把后续真块的序号
+	// 一起推后。计数在 Notes() 收尾时报出。
+	droppedImages int
+	droppedFiles  int
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
 }
 
 // Notes 实现 codec.StreamNotes。
-func (e *streamEncoder) Notes() []string { return codec.DedupeNotes(e.notes) }
+func (e *streamEncoder) Notes() []string {
+	notes := e.notes
+	if e.droppedImages > 0 || e.droppedFiles > 0 {
+		notes = append(notes, codec.MediaOutputDropNote(e.droppedImages, e.droppedFiles))
+	}
+	return codec.DedupeNotes(notes)
+}
 
 // openItem 记录一个已开启条目的状态，用于闭合时补齐 done 帧并累积最终 response。
 type openItem struct {
@@ -83,6 +97,15 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		kind := ir.BlockText
 		if ev.Block != nil {
 			kind = ev.Block.Type
+		}
+		switch kind {
+		case ir.BlockImage:
+			// 模型产出的附件没有本族输出形态：整块跳过但计数，Notes() 报出。
+			e.droppedImages++
+			return nil, nil
+		case ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
+			e.droppedFiles++
+			return nil, nil
 		}
 		return e.openBlock(ev.Index, kind, ev.Block)
 
@@ -517,6 +540,11 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 				Type: itemFunctionCall, Status: "completed",
 				CallID: b.ToolUse.ID, Name: b.ToolUse.Name, Arguments: args,
 			})
+		case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
+			// 助手回合的 output 条目没有附件形态：整块跳过，损耗由
+			// EncodeResponseLossy 经 CountResponseMedia 报出。编不出去还硬编
+			// 就是 default 分支那条路——凭空造一个空 message 条目。
+			continue
 		default:
 			return nil, fmt.Errorf("responses: cannot encode block type %q", b.Type)
 		}

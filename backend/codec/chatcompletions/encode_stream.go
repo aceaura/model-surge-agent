@@ -41,6 +41,12 @@ type streamEncoder struct {
 	serviceTier string
 	// usage 跨帧累积：input 与 output 可能来自不同的 IR 事件。
 	usage ir.Usage
+	// droppedImages / droppedFiles 被跳过的模型产出附件块数（image /
+	// audio+document+file）：delta.message 只有 content / refusal /
+	// tool_calls / 思考几个槽位，附件没有对应形态，整块跳过。
+	// 计数在 Notes() 收尾时报出。
+	droppedImages int
+	droppedFiles  int
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
 	// suppressUsageFrame 为真表示客户端明确说了不要那一帧单独的 usage
@@ -53,7 +59,13 @@ type streamEncoder struct {
 }
 
 // Notes 实现 codec.StreamNotes。
-func (e *streamEncoder) Notes() []string { return codec.DedupeNotes(e.notes) }
+func (e *streamEncoder) Notes() []string {
+	notes := e.notes
+	if e.droppedImages > 0 || e.droppedFiles > 0 {
+		notes = append(notes, codec.MediaOutputDropNote(e.droppedImages, e.droppedFiles))
+	}
+	return codec.DedupeNotes(notes)
+}
 
 func newStreamEncoder() *streamEncoder {
 	return &streamEncoder{
@@ -90,6 +102,15 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			kind = ev.Block.Type
 		}
 		e.blockKind[ev.Index] = kind
+		switch kind {
+		case ir.BlockImage:
+			// 模型产出的附件没有本族增量形态：整块跳过但计数，Notes() 报出。
+			e.droppedImages++
+			return nil, nil
+		case ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
+			e.droppedFiles++
+			return nil, nil
+		}
 		if kind != ir.BlockToolUse {
 			return nil, nil
 		}
@@ -304,6 +325,11 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 				Index: &n, ID: b.ToolUse.ID, Type: "function",
 				Function: wireFunctionCall{Name: b.ToolUse.Name, Arguments: args},
 			})
+		case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
+			// 助手消息的 content 只有文本/拒绝两种合法形态：附件块落进
+			// default 会被 encodeContent 编成用户侧才有的 image_url part，
+			// 那是非法的助手消息形状。跳过，损耗由 EncodeResponseLossy 报出。
+			continue
 		default:
 			text = append(text, b)
 		}

@@ -482,6 +482,46 @@ func DroppedServiceTierNote(name string) string {
 	return "dropped service_tier from the response (" + name + " has no such field)"
 }
 
+// MediaOutputDropNote 是模型产出附件丢失的说明：图片与非图片附件分开计数，
+// 合成一个数字会让排障时分不清丢的是哪一类——两者在源协议里是不同块型，
+// 处置路径也不同。
+//
+// 两类调用方共用：助手回合没有任何附件形态的编码器（chat_completions /
+// responses 两族），流式与非流式两条路径。
+//
+// 措辞刻意不断言「目标协议没有附件槽位」：只陈述本服务的转换带不过去。
+// 文件名与 base64 本体属会话内容，不进说明。
+func MediaOutputDropNote(images, files int) string {
+	var subject string
+	switch {
+	case images > 0 && files > 0:
+		subject = fmt.Sprintf("%d image(s) and %d non-image attachment(s)", images, files)
+	case images > 0:
+		subject = fmt.Sprintf("%d image(s)", images)
+	default:
+		subject = fmt.Sprintf("%d non-image attachment(s)", files)
+	}
+	return "dropped " + subject +
+		" from the model output: this protocol's conversion has no way to carry them in an assistant turn, so the receiving side sees only the text the model produced"
+}
+
+// CountResponseMedia 数出响应里模型产出的附件块：图片单列，音频/文档/文件
+// 合列——与 MediaOutputDropNote 的两类计数一一对应。
+func CountResponseMedia(resp *ir.Response) (images, files int) {
+	if resp == nil {
+		return 0, 0
+	}
+	for _, b := range resp.Content {
+		switch b.Type {
+		case ir.BlockImage:
+			images++
+		case ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
+			files++
+		}
+	}
+	return images, files
+}
+
 // toolErrorPrefix 是工具结果失败态在无原生标记的协议上的表达。
 //
 // 方括号形态在工具输出里罕见，不易与工具自己打的内容混淆。
