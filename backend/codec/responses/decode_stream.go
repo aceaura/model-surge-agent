@@ -369,6 +369,26 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 		return nil, ir.NewError(ir.ErrUpstream, 0, "",
 			fmt.Sprintf("undecodable response: %v", err))
 	}
+	// 终态失败的响应不得伪造成 completed：failed/cancelled 的 output 往往
+	// 是空的，错误只在 error 字段上，照解会产出一份 200 空「成功」，
+	// 与流式路径遇到 failed 帧的口径相反。错误归类与 decodeErrorBody 同源。
+	switch w.Status {
+	case "failed", "cancelled":
+		if w.Error == nil {
+			return nil, ir.NewError(ir.ErrUpstream, 0, "",
+				"upstream response "+w.Status)
+		}
+		return nil, convertError(0, w.Error)
+	}
+	// queued/in_progress 等非终态：上游还没生成完。解下去会得到一份
+	// 内容残缺的「正常」响应，按可重试的上游错误处理，让调用方换目标
+	// 或稍后重试。
+	switch w.Status {
+	case "", "completed", "incomplete":
+	default:
+		return nil, ir.NewError(ir.ErrUpstream, 0, "",
+			"upstream returned non-terminal status "+w.Status)
+	}
 	out := &ir.Response{
 		ID:          w.ID,
 		Model:       w.Model,
