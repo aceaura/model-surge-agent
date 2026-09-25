@@ -96,7 +96,12 @@ type wireItem struct {
 	Arguments string `json:"arguments,omitempty"`
 
 	// function_call_output
-	Output string `json:"output,omitempty"`
+	//
+	// 指针而非字符串：output 是 Required 键（官方 response_input_item_param），
+	// 空文本/纯媒体的工具结果也必须写 ""。string + omitempty 会把空串的键
+	// 丢掉，编出 {"type":"function_call_output","call_id":...} 的非法形状。
+	// nil 表示该条目类型本就没有这个键，照常缺席。
+	Output *string `json:"output,omitempty"`
 
 	// reasoning
 	Summary []wireSummary `json:"summary,omitempty"`

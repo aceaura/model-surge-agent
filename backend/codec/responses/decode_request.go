@@ -155,8 +155,8 @@ func appendItem(out *ir.Request, item wireItem) error {
 	case itemFunctionCallOutput:
 		// output 是纯字符串，无结构。
 		var content []ir.Block
-		if item.Output != "" {
-			content = []ir.Block{{Type: ir.BlockText, Text: item.Output}}
+		if item.Output != nil && *item.Output != "" {
+			content = []ir.Block{{Type: ir.BlockText, Text: *item.Output}}
 		}
 		// 本协议没有失败标记字段，失败态是我们出站时写进正文的前缀，
 		// 这里认回来：不认的话换目标重试时模型会把失败当成功。
