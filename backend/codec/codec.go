@@ -135,8 +135,13 @@ type Capabilities struct {
 	LogitBias         bool
 	ServiceTier       bool
 	ParallelToolCalls bool
-	// ResponseFormat 为真表示支持「输出必须是合法 JSON」；ResponseSchema
-	// 为真表示还支持按 JSON Schema 约束结构。后者蕴含前者。
+	// ResponseFormat 为真表示支持「输出必须是合法 JSON」这一档（纯 JSON 模式）；
+	// ResponseSchema 为真表示支持按 JSON Schema 约束结构。
+	//
+	// 两位相互独立，不蕴含：anthropic 的 output_config.format 只有 json_schema
+	// 一种 type（ResponseSchema 真而 ResponseFormat 假），纯 JSON 模式在它这里
+	// 没有槽位；其余三家两位都真。分两位而不是用「schema 蕴含 JSON」的假设，
+	// 正是为了让 anthropic 这个受限者能照实报出「只接 schema 约束形态」。
 	ResponseFormat bool
 	ResponseSchema bool
 	Verbosity      bool

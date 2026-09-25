@@ -534,13 +534,34 @@ func describeParamsLossy(req *ir.Request, caps Capabilities, note, filled, unret
 	if req.ParallelToolCalls != nil && !caps.ParallelToolCalls {
 		note("parallel_tool_calls", "no parallel tool call switch")
 	}
-	if req.ResponseFormat != nil {
-		switch {
-		case !caps.ResponseFormat:
-			// 后果最重的一条：客户端会按 JSON 解析响应，拿到自然语言就崩。
-			note("response_format", "no structured output parameter, the response may not be JSON")
-		case req.ResponseFormat.Kind == ir.ResponseFormatSchema && !caps.ResponseSchema:
-			note("response_format.schema", "structured output is supported but not schema constraints, downgraded to plain JSON")
+	if rf := req.ResponseFormat; rf != nil {
+		// 两档语义分开：带 schema 与只要求合法 JSON，读者的补救动作不同
+		//（前者要把 schema 写进提示，后者只需一句话要求输出 JSON）。
+		// 这一条比别的更要紧：客户端会直接 JSON.parse 响应，拿到自由文本就是
+		// 硬失败而非降级。
+		if rf.Kind == ir.ResponseFormatSchema {
+			switch {
+			case caps.ResponseSchema:
+				// schema 约束原样送达（含 anthropic 的 output_config.format）。
+			case caps.ResponseFormat:
+				// 支持 JSON 但不支持 schema：降级成「只要求是 JSON」，
+				// 客户端的最低要求仍满足。
+				note("response_format.schema", "structured output is supported but not schema constraints, downgraded to plain JSON")
+			default:
+				note("response_format", "no structured output parameter, the response may not be JSON")
+			}
+		} else {
+			switch {
+			case caps.ResponseFormat:
+				// 纯 JSON 模式原样送达。
+			case caps.ResponseSchema:
+				// anthropic 的 output_config.format 只接 json_schema 一种 type：
+				// 「只要求合法 JSON、不约束结构」这一档给不出。措辞说清是受限
+				// 而非全无槽位——读者补一个 schema 就能用上。
+				note("response_format", "upstream protocol accepts only schema-constrained structured output, the response will be free-form text")
+			default:
+				note("response_format", "no structured output parameter, the response may not be JSON")
+			}
 		}
 	}
 	if req.Verbosity != "" && !caps.Verbosity {

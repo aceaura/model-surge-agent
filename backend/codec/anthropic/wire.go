@@ -18,6 +18,22 @@ type wireRequest struct {
 	Stream        bool            `json:"stream,omitempty"`
 	Thinking      *wireThinking   `json:"thinking,omitempty"`
 	Metadata      *wireMetadata   `json:"metadata,omitempty"`
+	// OutputConfig 2026 新增的输出控制：format 是结构化输出槽位。
+	// effort 子字段暂不解码（IR 没有 anthropic 输出级 effort 的对应维度，
+	// 那是 #28 思考现代化的事）。
+	OutputConfig *wireOutputConfig `json:"output_config,omitempty"`
+}
+
+// wireOutputConfig 输出控制。format 只定义了 json_schema 一种 type：
+// 本协议没有「只要求合法 JSON、不约束结构」那一档（Capabilities 里
+// ResponseSchema 真而 ResponseFormat 假，纯 JSON 模式由诊断报受限）。
+type wireOutputConfig struct {
+	Format *wireJSONOutputFormat `json:"format,omitempty"`
+}
+
+type wireJSONOutputFormat struct {
+	Type   string          `json:"type"` // 恒为 "json_schema"
+	Schema json.RawMessage `json:"schema,omitempty"`
 }
 
 type wireMessage struct {

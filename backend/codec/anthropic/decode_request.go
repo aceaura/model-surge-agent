@@ -72,6 +72,20 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	if w.Metadata != nil && w.Metadata.UserID != "" {
 		out.Metadata = map[string]string{"user_id": w.Metadata.UserID}
 	}
+	// output_config.format 只有 json_schema 一种 type，且恒为严格语义
+	//（没有 strict 开关也没有名称位，与 gemini 的 responseSchema 同款）。
+	// 非 json_schema 的 type 与空 schema 都按没给处理：空约束写出来上游也是
+	// 自由文本，不能凭空发明一个不存在的诉求进 IR。
+	if f := w.OutputConfig; f != nil && f.Format != nil &&
+		f.Format.Type == "json_schema" && len(f.Format.Schema) > 0 &&
+		string(f.Format.Schema) != "null" {
+		out.ResponseFormat = &ir.ResponseFormat{
+			Kind:   ir.ResponseFormatSchema,
+			Schema: string(f.Format.Schema),
+		}
+		strict := true
+		out.ResponseFormat.Strict = &strict
+	}
 	return out, nil
 }
 

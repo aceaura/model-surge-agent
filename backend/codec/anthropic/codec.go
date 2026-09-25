@@ -97,6 +97,10 @@ func (outboundCodec) Caps() codec.Capabilities {
 		// text.citations 是本协议的来源标注槽位，四族里信息最全的一档
 		// （含 cited_text 与 rune 偏移量）。
 		Citations: true,
+		// output_config.format（2026 新增）只接 json_schema 一种形态：schema
+		// 约束有槽位（ResponseSchema 真），但「只要求合法 JSON、不给 schema」
+		// 那一档没有落点（ResponseFormat 假），纯 JSON 模式由诊断报受限。
+		ResponseSchema: true,
 		// 本协议的 max_tokens 必填，缺了直接 400。
 		RequiresMaxTokens: true,
 		// 4096 是个保守取值：宁可截断也不超出任何已知模型的输出上限。
@@ -104,10 +108,11 @@ func (outboundCodec) Caps() codec.Capabilities {
 		// 而截断至少给出部分回答、且 stop_reason 说明了原因。
 		// 兜底一旦发生会报一条有损诊断，客户端能看出这个上限不是它给的。
 		DefaultMaxTokens: 4096,
-		// 调参能力位全留假：本协议的请求体只有 model/messages/system/
+		// 调参能力位大多留假：本协议的请求体只有 model/messages/system/
 		// max_tokens/metadata/stop_sequences/stream/temperature/top_k/top_p/
-		// tools/tool_choice/thinking，没有承载 penalty、seed、n、logprobs、
-		// logit_bias、service_tier、parallel_tool_calls、结构化输出的字段。
+		// tools/tool_choice/thinking/output_config，没有承载 penalty、seed、n、
+		// logprobs、logit_bias、service_tier、parallel_tool_calls 的字段。
+		// 结构化输出走 output_config.format，但只接 schema 约束形态（见上）。
 		// 这是照官方请求体核实的结果，不是没填。
 		// SchemaDialect 留零值：本协议接受完整 JSON Schema。
 		// 本协议只读图片与 PDF；音频与其他附件在编码时降级为文本。

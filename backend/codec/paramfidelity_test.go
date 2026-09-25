@@ -301,19 +301,23 @@ func TestSchemaDowngradeKeepsJSONRequirement(t *testing.T) {
 			}
 			body := []byte(bodyStr)
 			switch {
-			case !caps.ResponseFormat:
-				if !containsField(notes, "response_format") {
-					t.Errorf("表达不了结构化输出必须报有损: %v", notes)
+			case caps.ResponseSchema:
+				// 支持 schema：约束必须真的出现在请求体里，只写「要 JSON」
+				// 等于悄悄放弃了结构约束。anthropic 走 output_config.format
+				// 也在这一档。
+				if !strings.Contains(string(body), `"a"`) {
+					t.Errorf("声称支持 schema 但请求体里没有约束: %s", body)
 				}
-			case !caps.ResponseSchema:
+			case caps.ResponseFormat:
+				// 支持 JSON 但不支持 schema：降级成纯 JSON 模式，
+				// 客户端的最低要求仍满足。
 				if !strings.Contains(string(body), "json") {
 					t.Errorf("支持 JSON 就必须保住 JSON 要求: %s", body)
 				}
 			default:
-				// 支持 schema：约束必须真的出现在请求体里，
-				// 只写「要 JSON」等于悄悄放弃了结构约束。
-				if !strings.Contains(string(body), `"a"`) {
-					t.Errorf("声称支持 schema 但请求体里没有约束: %s", body)
+				// 两档都表达不了：必须报有损。
+				if !containsField(notes, "response_format") {
+					t.Errorf("表达不了结构化输出必须报有损: %v", notes)
 				}
 			}
 		})
@@ -342,7 +346,74 @@ func TestGeminiSchemaGoesThroughDialect(t *testing.T) {
 	}
 }
 
-// TestGeminiLogprobsSwitchIsFilledIn：本协议的 logprobs 字段在开关为假时
+// TestChatSchemaSurvivesThroughAnthropic：chat 入站的 schema 经 anthropic 出站
+// 再回解，约束不丢。anthropic 的 output_config.format 只有 json_schema 形态，
+// 恰好接得住 chat 的 schema 档（name/strict 没有槽位，丢掉是预期）。
+func TestChatSchemaSurvivesThroughAnthropic(t *testing.T) {
+	const schema = `{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}`
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],` +
+		`"response_format":{"type":"json_schema","json_schema":{"name":"weather","strict":true,"schema":` + schema + `}}}`)
+	ic, ok := codec.Inbound(codec.ProtocolChatCompletions)
+	if !ok {
+		t.Fatal("inbound chat_completions not registered")
+	}
+	req, err := ic.DecodeRequest(body)
+	if err != nil {
+		t.Fatalf("chat DecodeRequest: %v", err)
+	}
+	req.MaxTokens = 100
+	oc, ok := codec.Outbound(codec.ProtocolAnthropic)
+	if !ok {
+		t.Fatal("outbound anthropic not registered")
+	}
+	out, err := oc.EncodeRequest(req)
+	if err != nil {
+		t.Fatalf("anthropic EncodeRequest: %v", err)
+	}
+	if !strings.Contains(string(out), `"city"`) {
+		t.Fatalf("schema 本体没过去：%s", out)
+	}
+	aic, ok := codec.Inbound(codec.ProtocolAnthropic)
+	if !ok {
+		t.Fatal("inbound anthropic not registered")
+	}
+	back, err := aic.DecodeRequest(out)
+	if err != nil {
+		t.Fatalf("回解: %v", err)
+	}
+	if back.ResponseFormat == nil || back.ResponseFormat.Kind != ir.ResponseFormatSchema {
+		t.Fatalf("往返后约束丢了：%+v", back.ResponseFormat)
+	}
+	if back.ResponseFormat.Schema != schema {
+		t.Errorf("往返后 schema 变了：%q", back.ResponseFormat.Schema)
+	}
+}
+
+// TestAnthropicStructuredOutputIsSchemaOnly：anthropic 的 output_config.format
+// 只接 json_schema。schema 档原样送达、诊断闭嘴；纯 JSON 模式没有落点，
+// 必须报「只接 schema 约束形态」的受限措辞，而不是笼统的「无结构化输出」。
+func TestAnthropicStructuredOutputIsSchemaOnly(t *testing.T) {
+	const schema = `{"type":"object","properties":{"a":{"type":"string"}}}`
+
+	schemaReq := paramBase()
+	schemaReq.ResponseFormat = &ir.ResponseFormat{Kind: ir.ResponseFormatSchema, Schema: schema}
+	for _, n := range paramNotes(t, codec.ProtocolAnthropic, schemaReq) {
+		if strings.Contains(n, "response_format") {
+			t.Errorf("anthropic 接得住 schema 档，误报有损：%s", n)
+		}
+	}
+
+	jsonReq := paramBase()
+	jsonReq.ResponseFormat = &ir.ResponseFormat{Kind: ir.ResponseFormatJSON}
+	notes := paramNotes(t, codec.ProtocolAnthropic, jsonReq)
+	if !containsDroppedField(notes, "response_format") {
+		t.Fatalf("anthropic 纯 JSON 模式必须报丢弃：%v", notes)
+	}
+	if !strings.Contains(strings.Join(notes, "; "), "only schema-constrained structured output") {
+		t.Errorf("anthropic 纯 JSON 模式未报受限措辞：%v", notes)
+	}
+}
+
 // 不生效，只给了 top_logprobs 时必须补上开关，否则要求被丢掉。
 func TestGeminiLogprobsSwitchIsFilledIn(t *testing.T) {
 	req := paramBase()

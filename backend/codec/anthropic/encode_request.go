@@ -99,6 +99,15 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	if id := req.Metadata["user_id"]; id != "" {
 		w.Metadata = &wireMetadata{UserID: id}
 	}
+	// 只回写 schema 约束形态：纯 JSON 模式（没给 schema）在 anthropic 没有
+	// 对应物，写出来上游也读不懂——那一档由诊断报出（ResponseSchema 真而
+	// ResponseFormat 假）。Name / Strict 也没有槽位，不带过去。
+	if rf := req.ResponseFormat; rf != nil && rf.Kind == ir.ResponseFormatSchema && rf.Schema != "" {
+		w.OutputConfig = &wireOutputConfig{Format: &wireJSONOutputFormat{
+			Type:   "json_schema",
+			Schema: json.RawMessage(rf.Schema),
+		}}
+	}
 	return json.Marshal(w)
 }
 
