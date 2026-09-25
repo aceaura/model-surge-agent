@@ -108,8 +108,11 @@ func (outboundCodec) Caps() codec.Capabilities {
 		ResponseSchema:    true,
 		Verbosity:         true,
 		Include:           true,
-		Truncation:        true,
-		ClientMetadata:    true,
+		// background 是本协议独有的后台运行模式槽位。槽位存在但本服务兑现
+		// 不了（对上游一律流式 + store:false），注记措辞由此位区分。
+		Background:     true,
+		Truncation:     true,
+		ClientMetadata: true,
 		// output_text.annotations 是本协议的来源标注槽位（扁平 url_citation，
 		// 无 cited_text）。流式增量走 response.output_text.annotation.added。
 		Citations: true,

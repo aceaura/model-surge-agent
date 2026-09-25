@@ -29,8 +29,12 @@ type wireRequest struct {
 
 	// 本协议特有的调参字段。Text 下嵌结构化输出与详略两项，
 	// 与 Chat Completions 的顶层 response_format 不同位。
-	Text              *wireText         `json:"text,omitempty"`
-	Include           []string          `json:"include,omitempty"`
+	Text    *wireText `json:"text,omitempty"`
+	Include []string  `json:"include,omitempty"`
+	// Background 后台运行模式。只进不出：解码收进 IR 供诊断报出，出站
+	// 永不写键——本服务对上游一律 stream:true + store:false，与官方
+	// background 的前置条件相反，写回去是保证被上游 400 的矛盾请求。
+	Background        *bool             `json:"background,omitempty"`
 	Truncation        string            `json:"truncation,omitempty"`
 	Metadata          map[string]string `json:"metadata,omitempty"`
 	ServiceTier       string            `json:"service_tier,omitempty"`

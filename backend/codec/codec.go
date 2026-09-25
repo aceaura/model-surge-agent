@@ -150,6 +150,12 @@ type Capabilities struct {
 	ResponseSchema bool
 	Verbosity      bool
 	Include        bool
+	// Background 为真表示协议本身有「后台运行模式」槽位（responses 的
+	// background）。注意这位不用于丢弃门控：本服务对上游一律流式请求且
+	// store:false，而 background 要求非流式 + 服务端留存，因此即使同族也
+	// 兑现不了，显式 true 一律报出（这位只区分注记措辞：有槽位而兑现不了，
+	// 还是连槽位都没有）。其他三族连概念对应物都不存在。
+	Background     bool
 	Truncation     bool
 	ClientMetadata bool
 

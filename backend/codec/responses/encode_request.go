@@ -64,6 +64,9 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	w.ToolChoice = choice
 
 	w.Include = req.Include
+	// req.Background 刻意不回写：本函数对上游恒写 stream:true + store:false，
+	// 官方 background 与二者都不相容，写回去是保证 400 的矛盾请求。
+	// 丢弃由 DescribeLossy 报出（见 wireRequest.Background 注释）。
 	w.Truncation = req.Truncation
 	w.Metadata = req.ClientMetadata
 	w.ServiceTier = req.ServiceTier

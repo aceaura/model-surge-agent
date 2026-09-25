@@ -468,6 +468,12 @@ type Request struct {
 	Verbosity string `json:"verbosity,omitempty"`
 	// Include 要求上游额外返回哪些内容（responses 的 include）。
 	Include []string `json:"include,omitempty"`
+	// Background 是后台运行模式（responses 的 background）。三态指针：
+	// nil = 客户端没提；显式 false 等同默认，都不算表态。显式 true 时
+	// 客户端期待的是「立刻拿任务 id、稍后取回」的异步行为；本服务是同步
+	// 流式中继（对上游一律 stream + store:false），兑现不了任何协议的
+	// background，出站一律不回写并由诊断报出。收进 IR 只为可见与可报。
+	Background *bool `json:"background,omitempty"`
 	// Truncation 是上游侧的历史截断策略（responses 的 truncation）。
 	Truncation string `json:"truncation,omitempty"`
 	// ClientMetadata 是客户端自定义元数据。与 Metadata 分开：后者只承载
@@ -614,6 +620,7 @@ func (r *Request) Clone() *Request {
 	out.TopLogProbs = cloneInt(r.TopLogProbs)
 	out.LogProbs = cloneBool(r.LogProbs)
 	out.ParallelToolCalls = cloneBool(r.ParallelToolCalls)
+	out.Background = cloneBool(r.Background)
 	if r.LogitBias != nil {
 		out.LogitBias = make(map[string]float64, len(r.LogitBias))
 		for k, v := range r.LogitBias {

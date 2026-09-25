@@ -663,6 +663,18 @@ func describeParamsLossy(req *ir.Request, caps Capabilities, note, filled, unret
 	if len(req.Include) > 0 && !caps.Include {
 		note("include", "no include parameter")
 	}
+	if req.Background != nil && *req.Background {
+		// 显式 false 等同默认，不报。true 则无论目标是哪一族都必须报：
+		// 本服务对上游一律流式请求且不留存（stream:true + store:false），
+		// 与官方 background 的前置条件相反——responses 有槽位也兑现不了，
+		// 出站不回写；其余三族连槽位都没有。客户端期待的异步任务在这里
+		// 一律变成同步阻塞等待，静默兑现等于让它对着一个不存在的任务 id 等回调。
+		if caps.Background {
+			note("background", "background mode cannot be honored: this service relays synchronously (upstream requests are always streamed and never stored), the client expecting an async job gets a blocking response")
+		} else {
+			note("background", "no background mode, the request runs synchronously and the client expecting an async job gets a blocking response")
+		}
+	}
 	if req.Truncation != "" && !caps.Truncation {
 		note("truncation", "no upstream-side truncation parameter")
 	}

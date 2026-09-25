@@ -71,6 +71,10 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	out.ToolChoice = choice
 
 	out.Include = w.Include
+	// background 收进 IR 只为可见与可报：本服务是同步流式中继，出站
+	// 永不回写（写回与强制的 stream:true + store:false 矛盾），丢弃由
+	// DescribeLossy 报出。
+	out.Background = w.Background
 	out.Truncation = w.Truncation
 	out.ClientMetadata = w.Metadata
 	out.ServiceTier = w.ServiceTier
