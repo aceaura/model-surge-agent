@@ -27,6 +27,8 @@ func TestLiveEntryCarriesEveryUsageDimension(t *testing.T) {
 		CacheReadTokens:  33,
 		CacheWriteTokens: 44,
 		ReasoningTokens:  55,
+		CacheWrite5mTokens: 66,
+		CacheWrite1hTokens: 77,
 	}
 	c.PushLive(ctx, want)
 
@@ -38,6 +40,10 @@ func TestLiveEntryCarriesEveryUsageDimension(t *testing.T) {
 		got[0].ReasoningTokens != 55 {
 		t.Errorf("三维往返丢了：读 %d 写 %d 推理 %d，想要 33/44/55",
 			got[0].CacheReadTokens, got[0].CacheWriteTokens, got[0].ReasoningTokens)
+	}
+	if got[0].CacheWrite5mTokens != 66 || got[0].CacheWrite1hTokens != 77 {
+		t.Errorf("TTL 明细两维往返丢了：5m %d 1h %d，想要 66/77",
+			got[0].CacheWrite5mTokens, got[0].CacheWrite1hTokens)
 	}
 	if got[0].InputTokens != 11 || got[0].OutputTokens != 22 {
 		t.Errorf("原有两维被改坏了：入 %d 出 %d", got[0].InputTokens, got[0].OutputTokens)
@@ -52,10 +58,12 @@ func TestBucketAccumulatesEveryUsageDimension(t *testing.T) {
 	c.Incr(ctx, now, "normal", relayclient.Usage{
 		InputTokens: 10, OutputTokens: 20,
 		CacheReadTokens: 30, CacheWriteTokens: 40, ReasoningTokens: 50,
+		CacheWrite5mTokens: 60, CacheWrite1hTokens: 70,
 	}, 100)
 	c.Incr(ctx, now, "normal", relayclient.Usage{
 		InputTokens: 1, OutputTokens: 2,
 		CacheReadTokens: 3, CacheWriteTokens: 4, ReasoningTokens: 5,
+		CacheWrite5mTokens: 6, CacheWrite1hTokens: 7,
 	}, 10)
 
 	buckets := c.Buckets(ctx, now, time.Minute)
@@ -73,6 +81,8 @@ func TestBucketAccumulatesEveryUsageDimension(t *testing.T) {
 		{"cache_read", b.CacheReadTokens, 33},
 		{"cache_write", b.CacheWriteTokens, 44},
 		{"reasoning", b.ReasoningTokens, 55},
+		{"cache_write_5m", b.CacheWrite5mTokens, 66},
+		{"cache_write_1h", b.CacheWrite1hTokens, 77},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %d，想要 %d", tc.name, tc.got, tc.want)
@@ -99,6 +109,10 @@ func TestSummaryWithoutNewFieldsStillDecodes(t *testing.T) {
 	if e.CacheReadTokens != 0 || e.CacheWriteTokens != 0 || e.ReasoningTokens != 0 {
 		t.Errorf("缺失的新字段该读作零，实际 %d/%d/%d",
 			e.CacheReadTokens, e.CacheWriteTokens, e.ReasoningTokens)
+	}
+	if e.CacheWrite5mTokens != 0 || e.CacheWrite1hTokens != 0 {
+		t.Errorf("缺失的 TTL 明细该读作零，实际 %d/%d",
+			e.CacheWrite5mTokens, e.CacheWrite1hTokens)
 	}
 	// 三态的零值必须是「未知」而不是「落库失败」。
 	if e.LogPersisted != nil {
@@ -128,5 +142,9 @@ func TestBucketWithoutNewFieldsReadsAsZero(t *testing.T) {
 	if b.CacheReadTokens != 0 || b.CacheWriteTokens != 0 || b.ReasoningTokens != 0 {
 		t.Errorf("缺失的新键该读作零，实际 %d/%d/%d",
 			b.CacheReadTokens, b.CacheWriteTokens, b.ReasoningTokens)
+	}
+	if b.CacheWrite5mTokens != 0 || b.CacheWrite1hTokens != 0 {
+		t.Errorf("缺失的 TTL 明细键该读作零，实际 %d/%d",
+			b.CacheWrite5mTokens, b.CacheWrite1hTokens)
 	}
 }

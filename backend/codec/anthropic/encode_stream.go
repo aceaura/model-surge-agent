@@ -532,12 +532,21 @@ func errorTypeForKind(kind ir.ErrorKind) string {
 }
 
 func renderUsage(u ir.Usage) wireUsage {
-	return wireUsage{
+	out := wireUsage{
 		InputTokens:              u.InputTokens,
 		OutputTokens:             u.OutputTokens,
 		CacheReadInputTokens:     u.CacheReadTokens,
 		CacheCreationInputTokens: u.CacheWriteTokens,
 	}
+	// TTL 明细只在「已知」时写出：异族来源没这个维度，凭总量拆不出
+	// 5m/1h 各占多少，伪造一个全零对象等于谎报「明细已知且都是零」。
+	if u.CacheWriteDetailsKnown {
+		out.CacheCreation = &wireCacheCreationUsage{
+			Ephemeral5mInputTokens: u.CacheWrite5mTokens,
+			Ephemeral1hInputTokens: u.CacheWrite1hTokens,
+		}
+	}
+	return out
 }
 
 func marshalFrame(event string, payload streamEvent) ([]byte, error) {

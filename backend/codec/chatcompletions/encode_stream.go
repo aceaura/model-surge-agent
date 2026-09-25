@@ -80,6 +80,9 @@ type streamEncoder struct {
 	// droppedUploads 被跳过的容器文件引用块（container_upload）数：本协议
 	// 没有 file_id 槽位，整块跳过，Notes() 收尾时报出。
 	droppedUploads int
+	// droppedCacheDetails 缓存写入 TTL 明细（anthropic 专属维度）被丢标记：
+	// 本协议 usage 没有 5m/1h 细分槽位，写入总量仍完整保留。
+	droppedCacheDetails bool
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
 	// suppressUsageFrame 为真表示客户端明确说了不要那一帧单独的 usage
@@ -114,6 +117,9 @@ func (e *streamEncoder) Notes() []string {
 	}
 	if e.droppedUploads > 0 {
 		notes = append(notes, codec.ContainerUploadDropNote(e.droppedUploads))
+	}
+	if e.droppedCacheDetails {
+		notes = append(notes, codec.CacheCreationDetailsDropNote())
 	}
 	if e.droppedTier != "" {
 		notes = append(notes, codec.TierEchoDropNote(e.droppedTier))
@@ -170,6 +176,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		// 不在这里收下就永远丢了。
 		if ev.Usage != nil {
 			ir.MergeUsage(&e.usage, *ev.Usage)
+			if ev.Usage.CacheWriteDetailsKnown {
+				e.droppedCacheDetails = true
+			}
 		}
 		// 本协议的首帧就是一个带 role 的 delta，没有独立的消息头帧。
 		return e.chunk(wireMessage{Role: roleAssistant}, "")
@@ -305,6 +314,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		}
 		if ev.Usage != nil {
 			ir.MergeUsage(&e.usage, *ev.Usage)
+			if ev.Usage.CacheWriteDetailsKnown {
+				e.droppedCacheDetails = true
+			}
 		}
 		return nil, nil
 

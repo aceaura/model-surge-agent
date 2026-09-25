@@ -24,6 +24,10 @@ CREATE TABLE IF NOT EXISTS request_log (
   -- 与客户端看到的账不一致，而差额随 prompt caching 使用率放大。
   cache_write_tokens BIGINT NOT NULL DEFAULT 0,
   reasoning_tokens   BIGINT NOT NULL DEFAULT 0,
+  -- 缓存写入总量的 TTL 细分（anthropic cache_creation 明细）：1h 档单价
+  -- 通常是 5m 的 2 倍，分档定价与对账要靠它。非 anthropic 上游恒为 0。
+  cache_write_5m_tokens BIGINT NOT NULL DEFAULT 0,
+  cache_write_1h_tokens BIGINT NOT NULL DEFAULT 0,
   latency_ms        INT NOT NULL DEFAULT 0,
   first_token_ms    INT NOT NULL DEFAULT 0,
   -- 两段跨进程耗时的累计值（含全部重试）。latency_ms 减去两段
@@ -51,6 +55,8 @@ ALTER TABLE request_log ADD COLUMN IF NOT EXISTS upstream_ms INT NOT NULL DEFAUL
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS attempts_trail JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS cache_write_tokens BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS reasoning_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS cache_write_5m_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS cache_write_1h_tokens BIGINT NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS request_log_at_idx ON request_log(at DESC);
 CREATE INDEX IF NOT EXISTS request_log_model_idx ON request_log(model_id, at DESC);

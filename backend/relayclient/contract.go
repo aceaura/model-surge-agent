@@ -124,6 +124,14 @@ type Usage struct {
 	// 配置中心）。这里如实交出去，让将来做分档定价时数据已经在库里。
 	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
 	ReasoningTokens  int64 `json:"reasoning_tokens,omitempty"`
+	// CacheWrite5m/1hTokens 是缓存写入总量的 TTL 细分（anthropic 上游的
+	// cache_creation 明细），1h 档单价通常是 5m 的 2 倍，分档定价要靠它。
+	// 与上面两位同理如实交出去；调度层不认识这两个键也无妨——runstate
+	// 只累计前三位，多出来的键被忽略，本服务的 request_log 照记。
+	// IR 侧的「明细已知」标记不过这条边界：下游拿到零值分不清真零还是
+	// 未知，但记账只认非零数，语义无损。
+	CacheWrite5mTokens int64 `json:"cache_write_5m_tokens,omitempty"`
+	CacheWrite1hTokens int64 `json:"cache_write_1h_tokens,omitempty"`
 }
 
 // Outcome 决定调度层如何更新运行态，语义由 relay 的 runstate 定义。

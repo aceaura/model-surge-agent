@@ -1144,6 +1144,27 @@ func AudioOutputDropNote() string {
 	return "dropped model audio output: this response format has no complete-audio slot, the client cannot play the generated audio or recover its transcript and replay id"
 }
 
+// CacheCreationDetailsDropNote 缓存写入 TTL 明细丢失注记。5m/1h 细分只有
+// anthropic 响应有这个槽位；转到其他协议时细分消失，但写入总量
+// （cache_write_tokens）仍完整保留，故措辞明说「合计不丢」。
+//
+// 两条路径共用：流式编码器 Notes() 与非流式 EncodeResponseLossy。
+// 措辞只此一份，按说明检索流水的人不会把同一件事当成多种故障。
+func CacheCreationDetailsDropNote() string {
+	return "dropped Anthropic cache-creation TTL details: this response format has no 5-minute/1-hour cache-write usage fields; aggregate input token totals remain preserved"
+}
+
+// DescribeResponseCacheDetailsLoss 非流式 EncodeResponseLossy 报缓存写入
+// TTL 明细损耗：5m/1h 细分只有 anthropic 的响应有槽位，其余协议收到
+// 明细已知的用量只能丢掉细分（合计不受影响）。流式路径由各编码器在
+// 合并用量的位置自行置位标记。
+func DescribeResponseCacheDetailsLoss(resp *ir.Response, name string) []string {
+	if resp == nil || name == ProtocolAnthropic || !resp.Usage.CacheWriteDetailsKnown {
+		return nil
+	}
+	return []string{CacheCreationDetailsDropNote()}
+}
+
 // ServerToolDropNote 服务端托管工具块丢失注记。server_tool_use 与
 // web_search_tool_result 是**有 IR 块型**的，三个外族编码器都没有为它们
 // 输出任何对应形态：整块消失且不计数时，接收端既看不到网关代执行了哪次

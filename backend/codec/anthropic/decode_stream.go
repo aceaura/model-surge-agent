@@ -245,12 +245,24 @@ func convertError(status int, e *wireError) *ir.Error {
 }
 
 func convertUsage(u wireUsage) ir.Usage {
-	return ir.Usage{
+	out := ir.Usage{
 		InputTokens:      u.InputTokens,
 		OutputTokens:     u.OutputTokens,
 		CacheReadTokens:  u.CacheReadInputTokens,
 		CacheWriteTokens: u.CacheCreationInputTokens,
 	}
+	// TTL 明细：上游给了 cache_creation 对象就照实收下。明细已知时
+	// 总量若缺席（上游只回细分不回合计的形态），用两档之和补齐——
+	// 记账侧只认总量字段，不补就等于把这笔写入用量丢了。
+	if u.CacheCreation != nil {
+		out.CacheWrite5mTokens = u.CacheCreation.Ephemeral5mInputTokens
+		out.CacheWrite1hTokens = u.CacheCreation.Ephemeral1hInputTokens
+		out.CacheWriteDetailsKnown = true
+		if out.CacheWriteTokens == 0 {
+			out.CacheWriteTokens = out.CacheWrite5mTokens + out.CacheWrite1hTokens
+		}
+	}
+	return out
 }
 
 // adoptStopSequence 只在终止原因确实是停止序列时采纳上游给的那条序列。

@@ -467,5 +467,9 @@ func usageOf(agg *ir.Aggregator) relayclient.Usage {
 		CacheReadTokens:  u.CacheReadTokens,
 		CacheWriteTokens: u.CacheWriteTokens,
 		ReasoningTokens:  u.ReasoningTokens,
+		// TTL 明细两位照搬。「明细已知」标记不过边界：下游拿到零值
+		// 分不清真零还是未知，但记账只认非零数，语义无损。
+		CacheWrite5mTokens: u.CacheWrite5mTokens,
+		CacheWrite1hTokens: u.CacheWrite1hTokens,
 	}
 }

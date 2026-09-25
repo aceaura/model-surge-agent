@@ -51,7 +51,9 @@ func usageColumnsInSchema(t *testing.T) []string {
 	}
 	// 同时覆盖 CREATE TABLE 里的列与 ALTER TABLE ADD COLUMN 补上的列：
 	// 老库走的是后一条路径，只扫前者会漏掉升级加的维度。
-	re := regexp.MustCompile(`(?m)^\s*(?:ALTER TABLE request_log ADD COLUMN IF NOT EXISTS\s+)?([a-z_]+_tokens)\b`)
+	// 列名字符集含数字（cache_write_5m_tokens）：只写 [a-z_] 会静默漏配，
+	// 解析出的清单缺一维反而让三层断言假绿。
+	re := regexp.MustCompile(`(?m)^\s*(?:ALTER TABLE request_log ADD COLUMN IF NOT EXISTS\s+)?([a-z0-9_]+_tokens)\b`)
 	seen := map[string]bool{}
 	var out []string
 	for _, m := range re.FindAllStringSubmatch(string(ddl), -1) {

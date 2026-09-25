@@ -70,6 +70,9 @@ type streamEncoder struct {
 	// badToolArgs 是关块时判定畸形的函数调用入参数（增量已发出、改写
 	// 不了，只能计数），Notes() 报出。
 	badToolArgs int
+	// droppedCacheDetails 缓存写入 TTL 明细（anthropic 专属维度）被丢标记：
+	// 本协议 usage 没有 5m/1h 细分槽位，写入总量仍完整保留。
+	droppedCacheDetails bool
 	// skipIdx 记录被整块跳过的块索引（服务端托管工具块与容器文件引用块）。
 	// 跳过发生在开条目之前，output_index 因此不被烧掉；但托管工具块后续的
 	// 查询串增量仍会经 EvToolInput 到来，不挡住会被 ensureOpen 补开成一个
@@ -106,6 +109,9 @@ func (e *streamEncoder) Notes() []string {
 	if e.droppedTier != "" {
 		notes = append(notes, codec.TierEchoDropNote(e.droppedTier))
 		e.droppedTier = ""
+	}
+	if e.droppedCacheDetails {
+		notes = append(notes, codec.CacheCreationDetailsDropNote())
 	}
 	return codec.DedupeNotes(notes)
 }
@@ -172,6 +178,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		// 不在这里收下就永远丢了。
 		if ev.Usage != nil {
 			ir.MergeUsage(&e.usage, *ev.Usage)
+			if ev.Usage.CacheWriteDetailsKnown {
+				e.droppedCacheDetails = true
+			}
 		}
 		return e.frame(evCreated, wireStreamEvent{
 			Type: evCreated, Response: e.snapshot("in_progress"),
@@ -352,6 +361,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		}
 		if ev.Usage != nil {
 			ir.MergeUsage(&e.usage, *ev.Usage)
+			if ev.Usage.CacheWriteDetailsKnown {
+				e.droppedCacheDetails = true
+			}
 		}
 		// 本协议把 stop_reason 与 usage 都放在终止帧的 response 对象里，
 		// 没有对应的中间帧。

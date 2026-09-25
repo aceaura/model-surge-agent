@@ -137,13 +137,17 @@ type LiveEntry struct {
 	UpstreamMS       int       `json:"upstream_ms,omitempty"`
 	InputTokens      int64     `json:"input_tokens,omitempty"`
 	OutputTokens     int64     `json:"output_tokens,omitempty"`
-	// 后三维与明细表（store.RequestLog）的列一一对应。少报它们正是少报
+	// 后五维与明细表（store.RequestLog）的列一一对应。少报它们正是少报
 	// 计费权重最偏的那几维（缓存写通常 1.25×、缓存读 0.1×、推理计入输出），
 	// 于是 /admin/requests 的明细与本摘要长期对不上，而两侧都不报错。
-	CacheReadTokens  int64  `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens int64  `json:"cache_write_tokens,omitempty"`
-	ReasoningTokens  int64  `json:"reasoning_tokens,omitempty"`
-	ErrorCode        string `json:"error_code,omitempty"`
+	// 5m/1h 两位是缓存写入总量的 TTL 细分（1h 档单价通常再翻倍），
+	// 只有 anthropic 上游会给，其余来源恒为零。
+	CacheReadTokens    int64  `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens   int64  `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens    int64  `json:"reasoning_tokens,omitempty"`
+	CacheWrite5mTokens int64  `json:"cache_write_5m_tokens,omitempty"`
+	CacheWrite1hTokens int64  `json:"cache_write_1h_tokens,omitempty"`
+	ErrorCode          string `json:"error_code,omitempty"`
 	// LogPersisted 是三态：nil 表示没配 PG（未尝试落库），false 表示尝试过
 	// 且失败——这条记录不在 /admin/requests 里，true 表示成功。
 	//
@@ -205,11 +209,13 @@ type Bucket struct {
 	Outcomes     map[string]int64 `json:"outcomes,omitempty"`
 	InputTokens  int64            `json:"input_tokens"`
 	OutputTokens int64            `json:"output_tokens"`
-	// 与 LiveEntry 同理：这三维不补齐，趋势图的用量就系统性少报。
-	CacheReadTokens  int64 `json:"cache_read_tokens"`
-	CacheWriteTokens int64 `json:"cache_write_tokens"`
-	ReasoningTokens  int64 `json:"reasoning_tokens"`
-	LatencySumMS     int64 `json:"latency_sum_ms"`
+	// 与 LiveEntry 同理：这几维不补齐，趋势图的用量就系统性少报。
+	CacheReadTokens    int64 `json:"cache_read_tokens"`
+	CacheWriteTokens   int64 `json:"cache_write_tokens"`
+	ReasoningTokens    int64 `json:"reasoning_tokens"`
+	CacheWrite5mTokens int64 `json:"cache_write_5m_tokens"`
+	CacheWrite1hTokens int64 `json:"cache_write_1h_tokens"`
+	LatencySumMS       int64 `json:"latency_sum_ms"`
 }
 
 // 分钟桶里的固定字段名。outcome 的计数键加前缀区分，
@@ -221,8 +227,12 @@ const (
 	fieldCacheRead  = "cache_read"
 	fieldCacheWrite = "cache_write"
 	fieldReasoning  = "reasoning"
-	fieldLatency    = "latency"
-	outcomeAffix    = "o:"
+	// TTL 细分两位各占一个 hash 字段，不与合计复用：合计是三者之和
+	// 只在写入时算一次，读侧要能分别还原。
+	fieldCacheWrite5m = "cache_write_5m"
+	fieldCacheWrite1h = "cache_write_1h"
+	fieldLatency      = "latency"
+	outcomeAffix      = "o:"
 )
 
 // Incr 累计一分钟桶。
@@ -249,6 +259,8 @@ func (c *Cache) Incr(ctx context.Context, at time.Time, outcome string,
 	pipe.HIncrBy(ctx, key, fieldCacheRead, usage.CacheReadTokens)
 	pipe.HIncrBy(ctx, key, fieldCacheWrite, usage.CacheWriteTokens)
 	pipe.HIncrBy(ctx, key, fieldReasoning, usage.ReasoningTokens)
+	pipe.HIncrBy(ctx, key, fieldCacheWrite5m, usage.CacheWrite5mTokens)
+	pipe.HIncrBy(ctx, key, fieldCacheWrite1h, usage.CacheWrite1hTokens)
 	pipe.HIncrBy(ctx, key, fieldLatency, int64(latencyMS))
 	// TTL 每次刷新：桶写完就不再动，靠过期自行清理，不需要额外的清扫任务。
 	pipe.Expire(ctx, key, statTTL)
@@ -312,6 +324,10 @@ func bucketFrom(minute time.Time, fields map[string]string) Bucket {
 			b.CacheWriteTokens = n
 		case fieldReasoning:
 			b.ReasoningTokens = n
+		case fieldCacheWrite5m:
+			b.CacheWrite5mTokens = n
+		case fieldCacheWrite1h:
+			b.CacheWrite1hTokens = n
 		case fieldLatency:
 			b.LatencySumMS = n
 		default:

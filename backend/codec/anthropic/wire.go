@@ -237,6 +237,17 @@ type wireUsage struct {
 	OutputTokens             int64 `json:"output_tokens,omitempty"`
 	CacheReadInputTokens     int64 `json:"cache_read_input_tokens,omitempty"`
 	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens,omitempty"`
+	// CacheCreation 写入用量的 TTL 明细。只在 IR 侧标记「明细已知」时写出；
+	// 内层两键不带 omitempty——上游真回这个对象时两键总是同时出现，
+	// 隐去零值反而会让读者以为明细残缺。
+	CacheCreation *wireCacheCreationUsage `json:"cache_creation,omitempty"`
+}
+
+// wireCacheCreationUsage 是 cache_creation 的 TTL 细分对象：
+// ephemeral_5m / ephemeral_1h 两档写入量，1h 档单价通常是 5m 的 2 倍。
+type wireCacheCreationUsage struct {
+	Ephemeral5mInputTokens int64 `json:"ephemeral_5m_input_tokens"`
+	Ephemeral1hInputTokens int64 `json:"ephemeral_1h_input_tokens"`
 }
 
 // SSE 事件名。

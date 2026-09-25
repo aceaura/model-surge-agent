@@ -55,3 +55,26 @@ func TestMergeUsageKeepsLargestCacheCounts(t *testing.T) {
 		t.Errorf("cache_write = %d, want the larger value", got.CacheWriteTokens)
 	}
 }
+
+// TTL 明细整组随「已知」标记走：带明细的帧到达时两位一起覆盖（含清零），
+// 不带明细的帧既不清零已知明细，也不把标记伪造成已知。
+//
+// 覆盖而非取 max：明细两档是同一个对象的两半，各取 max 会把两帧的
+// 明细拼成一个上游从没说过的组合。
+func TestMergeUsageCacheWriteDetailsMoveAsAGroup(t *testing.T) {
+	got := Usage{CacheWriteTokens: 30, CacheWrite5mTokens: 20,
+		CacheWrite1hTokens: 10, CacheWriteDetailsKnown: true}
+	MergeUsage(&got, Usage{OutputTokens: 5})
+	if got.CacheWrite5mTokens != 20 || got.CacheWrite1hTokens != 10 || !got.CacheWriteDetailsKnown {
+		t.Errorf("a frame without details changed the known group: %+v", got)
+	}
+	MergeUsage(&got, Usage{CacheWriteTokens: 25, CacheWrite5mTokens: 25, CacheWriteDetailsKnown: true})
+	if got.CacheWrite5mTokens != 25 || got.CacheWrite1hTokens != 0 {
+		t.Errorf("the later known frame must replace both halves, zero included: %+v", got)
+	}
+	var fresh Usage
+	MergeUsage(&fresh, Usage{CacheWriteTokens: 7})
+	if fresh.CacheWriteDetailsKnown || fresh.CacheWrite5mTokens != 0 || fresh.CacheWrite1hTokens != 0 {
+		t.Errorf("a frame without details must not fake the known flag: %+v", fresh)
+	}
+}

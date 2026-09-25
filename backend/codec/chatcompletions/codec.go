@@ -75,6 +75,9 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	// 实际执行档位回显：值集装不下的（anthropic 的 batch、responses 的
 	// ultrafast）被编码器丢弃，照实报出——这一维决定计费。
 	notes = append(notes, codec.DescribeResponseTierLoss(resp, Name)...)
+	// 缓存写入 TTL 明细是 anthropic 专属维度：本协议 usage 没有 5m/1h
+	// 细分槽位，写入总量仍完整保留。
+	notes = append(notes, codec.DescribeResponseCacheDetailsLoss(resp, Name)...)
 	return body, codec.DedupeNotes(notes), nil
 }
 

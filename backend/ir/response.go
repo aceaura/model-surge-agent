@@ -21,6 +21,16 @@ type Usage struct {
 	OutputTokens     int64 `json:"output_tokens,omitempty"`
 	CacheReadTokens  int64 `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+	// CacheWrite5mTokens / CacheWrite1hTokens 是缓存写入按 TTL 档的明细
+	//（Anthropic 的 cache_creation.ephemeral_5m/1h_input_tokens），两档
+	// 单价不同（1h 写入通常 2×、5m 1.25×），只有总量时成本归因做不了。
+	// 仅 anthropic 上游给得出；跨族投影时明细丢弃、总量保留，丢弃由诊断报出。
+	CacheWrite5mTokens int64 `json:"cache_write_5m_tokens,omitempty"`
+	CacheWrite1hTokens int64 `json:"cache_write_1h_tokens,omitempty"`
+	// CacheWriteDetailsKnown 标记上面两位明细可信（含「明细确实是零」）。
+	// 没有它，全零的明细与「上游没给明细」无法区分：前者出站要照实写出
+	// cache_creation 对象，后者写了等于伪造精度。
+	CacheWriteDetailsKnown bool `json:"cache_write_details_known,omitempty"`
 	// ReasoningTokens 是推理消耗，计费上属于输出，故已计入 OutputTokens。
 	// 独立承载只为成本归因：推理占比看不见时，一个模型贵在哪儿无从判断。
 	//
@@ -55,6 +65,13 @@ func MergeUsage(into *Usage, u Usage) {
 	}
 	if u.CacheWriteTokens > into.CacheWriteTokens {
 		into.CacheWriteTokens = u.CacheWriteTokens
+	}
+	// TTL 明细整组随「已知」标记走：带明细的帧到达时两位一起覆盖，
+	// 不带明细的帧不清零已知的明细（同输入输出的「缺帧不清零」口径）。
+	if u.CacheWriteDetailsKnown {
+		into.CacheWrite5mTokens = u.CacheWrite5mTokens
+		into.CacheWrite1hTokens = u.CacheWrite1hTokens
+		into.CacheWriteDetailsKnown = true
 	}
 }
 

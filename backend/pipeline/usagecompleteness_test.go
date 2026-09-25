@@ -9,12 +9,16 @@ import (
 	"github.com/aceaura/model-surge-agent/backend/relayclient"
 )
 
-// irUsageFields 是 ir.Usage 当前的维度数。
+// irUsageFields 是 ir.Usage 当前的字段数。
 //
-// 钉这个数字不是为了它本身，而是为了让「ir.Usage 加了第六位」这件事在这里变红。
+// 钉这个数字不是为了它本身，而是为了让「ir.Usage 加了新位」这件事在这里变红。
 // 只逐字段穷举不够：加字段不会让任何既有断言失败，于是新维度会在 usageOf 里被
 // 静默丢掉，症状是客户端收到那个数字而流水与调度层记零——一个所有测试都绿的缺口。
-const irUsageFields = 5
+//
+// 8 = 五个 _tokens 维度 + 缓存写入 TTL 明细两位（5m/1h）+「明细已知」布尔标记。
+// 标记位不过进程边界（下游拿到零值分不清真零还是未知，但记账只认非零数），
+// 过边界的是七位数字里的六位：reasoning 之外的两位明细也在 relayclient.Usage 上。
+const irUsageFields = 8
 
 // 判据 1：usageOf 必须搬全 ir.Usage 的每一位。
 //
@@ -29,20 +33,26 @@ func TestUsageOfCarriesEveryDimension(t *testing.T) {
 	agg := &ir.Aggregator{}
 	agg.Add(ir.Event{Type: ir.EvMessageStart})
 	agg.Add(ir.Event{Type: ir.EvMessageDelta, Usage: &ir.Usage{
-		InputTokens:      11,
-		OutputTokens:     22,
-		CacheReadTokens:  33,
-		CacheWriteTokens: 44,
-		ReasoningTokens:  55,
+		InputTokens:            11,
+		OutputTokens:           22,
+		CacheReadTokens:        33,
+		CacheWriteTokens:       44,
+		ReasoningTokens:        55,
+		CacheWrite5mTokens:     66,
+		CacheWrite1hTokens:     77,
+		CacheWriteDetailsKnown: true,
 	}})
 
 	got := usageOf(agg)
+	// want 里没有「明细已知」标记位：它不过进程边界。
 	want := relayclient.Usage{
-		InputTokens:      11,
-		OutputTokens:     22,
-		CacheReadTokens:  33,
-		CacheWriteTokens: 44,
-		ReasoningTokens:  55,
+		InputTokens:        11,
+		OutputTokens:       22,
+		CacheReadTokens:    33,
+		CacheWriteTokens:   44,
+		ReasoningTokens:    55,
+		CacheWrite5mTokens: 66,
+		CacheWrite1hTokens: 77,
 	}
 	if got != want {
 		t.Errorf("usageOf = %+v，want %+v；漏掉的那一位客户端本来就收到了，"+
@@ -57,11 +67,13 @@ func TestUsageOfCarriesEveryDimension(t *testing.T) {
 // R20 capture 键名、R21 轨迹键名——这是第五次遇到同型缺口。
 func TestUsageWireKeys(t *testing.T) {
 	raw, err := json.Marshal(relayclient.Usage{
-		InputTokens:      1,
-		OutputTokens:     2,
-		CacheReadTokens:  3,
-		CacheWriteTokens: 4,
-		ReasoningTokens:  5,
+		InputTokens:        1,
+		OutputTokens:       2,
+		CacheReadTokens:    3,
+		CacheWriteTokens:   4,
+		ReasoningTokens:    5,
+		CacheWrite5mTokens: 6,
+		CacheWrite1hTokens: 7,
 	})
 	if err != nil {
 		t.Fatalf("编码：%v", err)
@@ -71,11 +83,13 @@ func TestUsageWireKeys(t *testing.T) {
 		t.Fatalf("解码：%v", err)
 	}
 	want := map[string]int64{
-		"input_tokens":       1,
-		"output_tokens":      2,
-		"cache_read_tokens":  3,
-		"cache_write_tokens": 4,
-		"reasoning_tokens":   5,
+		"input_tokens":          1,
+		"output_tokens":         2,
+		"cache_read_tokens":     3,
+		"cache_write_tokens":    4,
+		"reasoning_tokens":      5,
+		"cache_write_5m_tokens": 6,
+		"cache_write_1h_tokens": 7,
 	}
 	if len(keys) != len(want) {
 		t.Errorf("线上键 = %v，want 恰好 %d 个：%v", keys, len(want), want)

@@ -171,15 +171,17 @@ func (a *Admin) stats(w http.ResponseWriter, r *http.Request) {
 	totals := agentv1.StatTotals{Outcomes: map[string]int64{}}
 	for _, b := range buckets {
 		out.Buckets = append(out.Buckets, agentv1.StatBucket{
-			Minute:           b.Minute,
-			Total:            b.Total,
-			Outcomes:         b.Outcomes,
-			InputTokens:      b.InputTokens,
-			OutputTokens:     b.OutputTokens,
-			CacheReadTokens:  b.CacheReadTokens,
-			CacheWriteTokens: b.CacheWriteTokens,
-			ReasoningTokens:  b.ReasoningTokens,
-			AvgLatencyMS:     avg(b.LatencySumMS, b.Total),
+			Minute:             b.Minute,
+			Total:              b.Total,
+			Outcomes:           b.Outcomes,
+			InputTokens:        b.InputTokens,
+			OutputTokens:       b.OutputTokens,
+			CacheReadTokens:    b.CacheReadTokens,
+			CacheWriteTokens:   b.CacheWriteTokens,
+			ReasoningTokens:    b.ReasoningTokens,
+			CacheWrite5mTokens: b.CacheWrite5mTokens,
+			CacheWrite1hTokens: b.CacheWrite1hTokens,
+			AvgLatencyMS:       avg(b.LatencySumMS, b.Total),
 		})
 		totals.Total += b.Total
 		totals.InputTokens += b.InputTokens
@@ -187,6 +189,8 @@ func (a *Admin) stats(w http.ResponseWriter, r *http.Request) {
 		totals.CacheReadTokens += b.CacheReadTokens
 		totals.CacheWriteTokens += b.CacheWriteTokens
 		totals.ReasoningTokens += b.ReasoningTokens
+		totals.CacheWrite5mTokens += b.CacheWrite5mTokens
+		totals.CacheWrite1hTokens += b.CacheWrite1hTokens
 		for k, v := range b.Outcomes {
 			totals.Outcomes[k] += v
 		}
@@ -293,34 +297,36 @@ func (a *Admin) listModels(w http.ResponseWriter, r *http.Request) {
 
 func summaryOf(rec pipeline.Record) agentv1.RequestSummary {
 	return agentv1.RequestSummary{
-		RequestID:        rec.RequestID,
-		At:               rec.At,
-		InboundProtocol:  rec.InboundProtocol,
-		Path:             rec.Path,
-		OutboundProtocol: rec.OutboundProtocol,
-		UserModel:        rec.UserModel,
-		ModelID:          rec.ModelID,
-		Account:          rec.Account,
-		Outcome:          rec.Outcome,
-		StatusCode:       rec.StatusCode,
-		Attempts:         rec.Attempts,
-		TriedIDs:         rec.TriedIDs,
-		Committed:        rec.Committed,
-		Stream:           rec.Stream,
-		UsageEstimated:   rec.UsageEstimated,
-		InputTokens:      rec.Usage.InputTokens,
-		OutputTokens:     rec.Usage.OutputTokens,
-		CacheReadTokens:  rec.Usage.CacheReadTokens,
-		CacheWriteTokens: rec.Usage.CacheWriteTokens,
-		ReasoningTokens:  rec.Usage.ReasoningTokens,
-		LatencyMS:        rec.LatencyMS,
-		FirstTokenMS:     rec.FirstTokenMS,
-		DispatchMS:       rec.DispatchMS,
-		UpstreamMS:       rec.UpstreamMS,
-		ErrorCode:        rec.ErrorCode,
-		ErrorMessage:     rec.ErrorMessage,
-		Sanitized:        rec.Sanitized,
-		Lossy:            rec.Lossy,
+		RequestID:          rec.RequestID,
+		At:                 rec.At,
+		InboundProtocol:    rec.InboundProtocol,
+		Path:               rec.Path,
+		OutboundProtocol:   rec.OutboundProtocol,
+		UserModel:          rec.UserModel,
+		ModelID:            rec.ModelID,
+		Account:            rec.Account,
+		Outcome:            rec.Outcome,
+		StatusCode:         rec.StatusCode,
+		Attempts:           rec.Attempts,
+		TriedIDs:           rec.TriedIDs,
+		Committed:          rec.Committed,
+		Stream:             rec.Stream,
+		UsageEstimated:     rec.UsageEstimated,
+		InputTokens:        rec.Usage.InputTokens,
+		OutputTokens:       rec.Usage.OutputTokens,
+		CacheReadTokens:    rec.Usage.CacheReadTokens,
+		CacheWriteTokens:   rec.Usage.CacheWriteTokens,
+		ReasoningTokens:    rec.Usage.ReasoningTokens,
+		CacheWrite5mTokens: rec.Usage.CacheWrite5mTokens,
+		CacheWrite1hTokens: rec.Usage.CacheWrite1hTokens,
+		LatencyMS:          rec.LatencyMS,
+		FirstTokenMS:       rec.FirstTokenMS,
+		DispatchMS:         rec.DispatchMS,
+		UpstreamMS:         rec.UpstreamMS,
+		ErrorCode:          rec.ErrorCode,
+		ErrorMessage:       rec.ErrorMessage,
+		Sanitized:          rec.Sanitized,
+		Lossy:              rec.Lossy,
 	}
 }
 
