@@ -48,6 +48,10 @@ type streamEncoder struct {
 	// badToolArgs 是关块时判定畸形的函数调用入参数（增量已发出、改写
 	// 不了，只能计数），Notes() 报出。
 	badToolArgs int
+	// skipIdx 记录被整块跳过的服务端托管工具块索引。跳过发生在开条目
+	// 之前，output_index 因此不被烧掉；但该块后续的查询串增量仍会经
+	// EvToolInput 到来，不挡住会被 ensureOpen 补开成一个凭空的条目。
+	skipIdx map[int]bool
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
 }
@@ -79,7 +83,7 @@ type openItem struct {
 }
 
 func newStreamEncoder() *streamEncoder {
-	return &streamEncoder{items: map[int]*openItem{}, created: time.Now().Unix()}
+	return &streamEncoder{items: map[int]*openItem{}, skipIdx: map[int]bool{}, created: time.Now().Unix()}
 }
 
 func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
@@ -120,10 +124,19 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		case ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
 			e.droppedFiles++
 			return nil, nil
+		case ir.BlockServerToolUse, ir.BlockWebSearchToolResult:
+			// 服务端托管工具块没有本族输出形态：整块跳过，且不进 openBlock
+			// ——那会烧掉一个 output_index 把后续真块序号推后。记下索引，
+			// 后续查询串增量一并丢弃。损耗报出见 #61。
+			e.skipIdx[ev.Index] = true
+			return nil, nil
 		}
 		return e.openBlock(ev.Index, kind, ev.Block)
 
 	case ir.EvTextDelta:
+		if e.skipIdx[ev.Index] {
+			return nil, nil
+		}
 		out, item, err := e.ensureOpen(ev.Index, ir.BlockText)
 		if err != nil {
 			return nil, err
@@ -140,6 +153,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		return append(out, frames...), nil
 
 	case ir.EvThinkingDelta:
+		if e.skipIdx[ev.Index] {
+			return nil, nil
+		}
 		out, item, err := e.ensureOpen(ev.Index, ir.BlockThinking)
 		if err != nil {
 			return nil, err
@@ -170,6 +186,11 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		return nil, nil
 
 	case ir.EvToolInput:
+		if e.skipIdx[ev.Index] {
+			// 托管工具块的查询串走同一条增量通道：整块已跳过，
+			// 这里必须一起丢，否则 ensureOpen 会把它补开成一个凭空的条目。
+			return nil, nil
+		}
 		out, item, err := e.ensureOpen(ev.Index, ir.BlockToolUse)
 		if err != nil {
 			return nil, err
@@ -606,6 +627,10 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			// 助手回合的 output 条目没有附件形态：整块跳过，损耗由
 			// EncodeResponseLossy 经 CountResponseMedia 报出。编不出去还硬编
 			// 就是 default 分支那条路——凭空造一个空 message 条目。
+			continue
+		case ir.BlockServerToolUse, ir.BlockWebSearchToolResult:
+			// 服务端托管工具块没有本族输出条目形态：整块跳过。落进 default
+			// 会硬报错，编成 message 条目则凭空多出一个空助手消息。
 			continue
 		default:
 			return nil, fmt.Errorf("responses: cannot encode block type %q", b.Type)

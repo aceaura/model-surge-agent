@@ -165,6 +165,11 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 			if b.Thinking != nil {
 				thinking.WriteString(b.Thinking.Text)
 			}
+		case ir.BlockServerToolUse, ir.BlockWebSearchToolResult:
+			// 服务端托管工具块没有本族槽位：整块跳过。落进 plain 会让
+			// encodeContent 直接报错，伪装成 tool_calls 则是伪造一场
+			// 客户端从未发起、也永远等不到结果的调用。
+			continue
 		default:
 			plain = append(plain, b)
 		}

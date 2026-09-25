@@ -209,6 +209,44 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 		if !codec.ForeignSignature(b.Thinking, Name) {
 			out.Signature = b.Thinking.Signature
 		}
+	case ir.BlockServerToolUse:
+		if b.ServerToolUse == nil {
+			return out, false, fmt.Errorf("server_tool_use block without payload")
+		}
+		out.Type = blockServerToolUse
+		out.ID = b.ServerToolUse.ID
+		out.Name = b.ServerToolUse.Name
+		// 与 tool_use 同口径：对象槽位，空与畸形都要规整（空补 {}，
+		// 畸形挪进 RawArgsKey），否则整份请求体 marshal 失败。
+		out.Input, _ = ir.NormalizeToolInput([]byte(b.ServerToolUse.Input))
+	case ir.BlockWebSearchToolResult:
+		if b.WebSearchToolResult == nil {
+			return out, false, fmt.Errorf("web_search_tool_result block without payload")
+		}
+		out.Type = blockWebSearchToolResult
+		out.ToolUseID = b.WebSearchToolResult.ToolUseID
+		// content 是 union：错误形态回错误对象，结果形态回子块数组。
+		// 把错误编成空数组就是把「搜索失败」伪造成「成功但没找到」。
+		var content any
+		if b.WebSearchToolResult.ErrorCode != "" {
+			content = webSearchToolErrorBlock{
+				Type: "web_search_tool_result_error", ErrorCode: b.WebSearchToolResult.ErrorCode,
+			}
+		} else {
+			rs := make([]webSearchResultBlock, 0, len(b.WebSearchToolResult.Results))
+			for _, r := range b.WebSearchToolResult.Results {
+				rs = append(rs, webSearchResultBlock{
+					Type: "web_search_result", Title: r.Title, URL: r.URL,
+					EncryptedContent: r.Snippet, PageAge: r.PageAge,
+				})
+			}
+			content = rs
+		}
+		raw, err := json.Marshal(content)
+		if err != nil {
+			return out, false, fmt.Errorf("web_search_tool_result content: %w", err)
+		}
+		out.Content = raw
 	default:
 		return out, false, fmt.Errorf("cannot encode block type %q", b.Type)
 	}

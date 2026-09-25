@@ -30,7 +30,28 @@ const (
 	BlockToolUse    BlockType = "tool_use"
 	BlockToolResult BlockType = "tool_result"
 	BlockThinking   BlockType = "thinking"
+	// BlockServerToolUse / BlockWebSearchToolResult 是上游自己执行的服务端
+	// 托管工具块（Anthropic 的 web_search 一族）：调用与结果都发生在上游，
+	// 客户端从不回结果。与 BlockToolUse/BlockToolResult 分开建模是因为
+	// 配平契约相反——普通工具调用缺结果会让上游拒整轮，托管工具没有
+	// 「客户端欠一个结果」的概念；外族协议也没有对应槽位，只能整块跳过。
+	// 不进 IR 会让 anthropic 上游真用 web_search 时整流报 unknown block，
+	// 多轮历史里带这类块的同族往返直接 400。
+	BlockServerToolUse       BlockType = "server_tool_use"
+	BlockWebSearchToolResult BlockType = "web_search_tool_result"
 )
+
+// IsServerTool 判断块是否为服务端托管工具产物（调用或结果）。
+// 外族编码器靠它整块跳过：托管工具的查询串没有本族槽位，
+// 落进正文或工具调用槽都是伪造。
+func (t BlockType) IsServerTool() bool {
+	switch t {
+	case BlockServerToolUse, BlockWebSearchToolResult:
+		return true
+	default:
+		return false
+	}
+}
 
 // IsMedia 判断块是否由 Media 字段承载内容。
 func (t BlockType) IsMedia() bool {
@@ -51,9 +72,42 @@ type Block struct {
 	ToolUse    *ToolUse    `json:"tool_use,omitempty"`
 	ToolResult *ToolResult `json:"tool_result,omitempty"`
 	Thinking   *Thinking   `json:"thinking,omitempty"`
+	// ServerToolUse / WebSearchToolResult 承载服务端托管工具块，
+	// 仅 Anthropic 一族可往返，外族编码整块跳过（见 IsServerTool）。
+	ServerToolUse       *ServerToolUse       `json:"server_tool_use,omitempty"`
+	WebSearchToolResult *WebSearchToolResult `json:"web_search_tool_result,omitempty"`
 	// CacheCtl 是 Anthropic 的 cache_control 类型（通常 "ephemeral"）。
 	// 其他协议无此概念，编码时丢弃。
 	CacheCtl string `json:"cache_ctl,omitempty"`
+}
+
+// ServerToolUse 服务端托管工具调用（如上游代执行的 web_search）。
+// 外形同 ToolUse，但结果由上游自己给出（BlockWebSearchToolResult），
+// 客户端从不回结果。Input 与 ToolUse.Input 同规矩：流式期间逐片累积，
+// 只有 BlockStop 之后才保证可解析。
+type ServerToolUse struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Input string `json:"input,omitempty"`
+}
+
+// WebSearchToolResult web_search 托管工具的结果块。content 在上游是 union：
+// 结果数组 或 错误对象（web_search_tool_result_error）。用 ErrorCode 判别——
+// 缺这一维会把「搜索失败」按空结果数组解成「搜索成功但没找到东西」，
+// 客户端基于假成功继续规划下一步。ErrorCode 非空时 Results 必为空。
+type WebSearchToolResult struct {
+	ToolUseID string            `json:"tool_use_id"`
+	Results   []WebSearchResult `json:"results,omitempty"`
+	ErrorCode string            `json:"error_code,omitempty"`
+}
+
+// WebSearchResult 单条搜索结果。Snippet 对应上游的 encrypted_content 字段
+// （原文摘要，非加密，原样透传）。
+type WebSearchResult struct {
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+	Snippet string `json:"snippet,omitempty"`
+	PageAge string `json:"page_age,omitempty"`
 }
 
 // Media 承载四类媒体块的内容。用一个结构而非每类各开一个字段：
@@ -411,6 +465,17 @@ func cloneBlocks(in []Block) []Block {
 		if b.Thinking != nil {
 			v := *b.Thinking
 			out[i].Thinking = &v
+		}
+		if b.ServerToolUse != nil {
+			v := *b.ServerToolUse
+			out[i].ServerToolUse = &v
+		}
+		if b.WebSearchToolResult != nil {
+			v := *b.WebSearchToolResult
+			if b.WebSearchToolResult.Results != nil {
+				v.Results = append([]WebSearchResult(nil), b.WebSearchToolResult.Results...)
+			}
+			out[i].WebSearchToolResult = &v
 		}
 	}
 	return out

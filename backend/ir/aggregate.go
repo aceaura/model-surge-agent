@@ -171,7 +171,14 @@ func (a *Aggregator) Add(ev Event) {
 			return
 		}
 		if b := a.block(ev.Index, BlockToolUse); b != nil {
-			if b.ToolUse == nil {
+			// 托管工具调用的查询串走同一条增量通道（anthropic 流式的
+			// server_tool_use 就是这个形态）：块已在时按块型归位，
+			// 给它伪造 ToolUse 会让物化把查询串写进错误的槽位。
+			if b.Type == BlockServerToolUse {
+				if b.ServerToolUse == nil {
+					b.ServerToolUse = &ServerToolUse{}
+				}
+			} else if b.ToolUse == nil {
 				b.ToolUse = &ToolUse{}
 			}
 			a.accOf(ev.Index).input.WriteString(ev.Text)
@@ -225,6 +232,9 @@ func (a *Aggregator) seed(index int, b *Block) {
 	if b.ToolUse != nil {
 		n += len(b.ToolUse.Input)
 	}
+	if b.ServerToolUse != nil {
+		n += len(b.ServerToolUse.Input)
+	}
 	if !a.admit(n) {
 		return
 	}
@@ -236,6 +246,9 @@ func (a *Aggregator) seed(index int, b *Block) {
 	}
 	if b.ToolUse != nil {
 		x.input.WriteString(b.ToolUse.Input)
+	}
+	if b.ServerToolUse != nil {
+		x.input.WriteString(b.ServerToolUse.Input)
 	}
 }
 
@@ -262,6 +275,9 @@ func (a *Aggregator) materialize() {
 		}
 		if b.ToolUse != nil {
 			b.ToolUse.Input = x.input.String()
+		}
+		if b.ServerToolUse != nil {
+			b.ServerToolUse.Input = x.input.String()
 		}
 	}
 }

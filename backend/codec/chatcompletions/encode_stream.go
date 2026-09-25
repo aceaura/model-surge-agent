@@ -125,6 +125,11 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		case ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
 			e.droppedFiles++
 			return nil, nil
+		case ir.BlockServerToolUse, ir.BlockWebSearchToolResult:
+			// 服务端托管工具块没有本族形态：整块跳过。kind 已记进
+			// blockKind，该索引后续的查询串增量一律丢弃——否则会被
+			// toolSlot 编成一场客户端从未发起的伪工具调用。
+			return nil, nil
 		}
 		if kind != ir.BlockToolUse {
 			return nil, nil
@@ -143,6 +148,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		return e.chunk(wireMessage{ToolCalls: []wireToolCall{call}}, "")
 
 	case ir.EvTextDelta:
+		if e.skipDelta(ev.Index) {
+			return nil, nil
+		}
 		content, err := json.Marshal(ev.Text)
 		if err != nil {
 			return nil, err
@@ -150,6 +158,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		return e.chunk(wireMessage{Content: content}, "")
 
 	case ir.EvThinkingDelta:
+		if e.skipDelta(ev.Index) {
+			return nil, nil
+		}
 		return e.chunk(wireMessage{ReasoningContent: ev.Text}, "")
 
 	case ir.EvSigDelta:
@@ -162,6 +173,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		return nil, nil
 
 	case ir.EvToolInput:
+		if e.skipDelta(ev.Index) {
+			return nil, nil
+		}
 		n := e.toolSlot(ev.Index)
 		e.toolArgs[ev.Index] = append(e.toolArgs[ev.Index], ev.Text...)
 		call := wireToolCall{Index: &n, Function: wireFunctionCall{Arguments: ev.Text}}
@@ -281,6 +295,13 @@ func (e *streamEncoder) Finish() [][]byte {
 	return out
 }
 
+// skipDelta 报告某个块索引是否属于服务端托管工具块：那类块在 EvBlockStart
+// 已被整块跳过，但它的查询串仍会经 EvToolInput 通道续传，不挡住就会被
+// toolSlot 编成一场客户端从未发起的伪工具调用。
+func (e *streamEncoder) skipDelta(blockIndex int) bool {
+	return e.blockKind[blockIndex].IsServerTool()
+}
+
 // toolSlot 把块索引映射成连续的工具调用序号。
 func (e *streamEncoder) toolSlot(blockIndex int) int {
 	if n, ok := e.toolIndex[blockIndex]; ok {
@@ -366,6 +387,10 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			// 助手消息的 content 只有文本/拒绝两种合法形态：附件块落进
 			// default 会被 encodeContent 编成用户侧才有的 image_url part，
 			// 那是非法的助手消息形状。跳过，损耗由 EncodeResponseLossy 报出。
+			continue
+		case ir.BlockServerToolUse, ir.BlockWebSearchToolResult:
+			// 服务端托管工具块没有本族输出形态：整块跳过，落进 default
+			// 会被当正文编成一段凭空的查询串或搜索结果。损耗报出见 #61。
 			continue
 		default:
 			text = append(text, b)

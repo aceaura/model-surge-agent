@@ -94,8 +94,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			}
 			block = wb
 			// 块开启时入参尚未到齐，Anthropic 要求这里是空对象，
-			// 内容由后续 input_json_delta 累积。
-			if block.Type == blockToolUse {
+			// 内容由后续 input_json_delta 累积。server_tool_use 的查询串
+			// 走同一条通道，同款处置。
+			if block.Type == blockToolUse || block.Type == blockServerToolUse {
 				block.Input = json.RawMessage(`{}`)
 				e.toolPending[ev.Index] = true
 				e.toolArgs[ev.Index] = nil

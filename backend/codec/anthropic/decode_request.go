@@ -157,10 +157,44 @@ func decodeBlock(b wireBlock) (ir.Block, bool, error) {
 		// 解码期丢掉就再没有痕迹可查了。
 		out.Type = ir.BlockThinking
 		out.Thinking = &ir.Thinking{Redacted: true, SignatureFrom: Name}
+	case blockServerToolUse:
+		// 托管工具调用：放行而不是报 unknown——多轮历史里带 web_search
+		// 痕迹的同族往返是合法输入，拒收会让客户端整轮 400。
+		out.Type = ir.BlockServerToolUse
+		out.ServerToolUse = &ir.ServerToolUse{ID: b.ID, Name: b.Name, Input: string(b.Input)}
+	case blockWebSearchToolResult:
+		out.Type = ir.BlockWebSearchToolResult
+		out.WebSearchToolResult = decodeWebSearchToolResult(b.ToolUseID, b.Content)
 	default:
 		return out, false, fmt.Errorf("unknown block type %q", b.Type)
 	}
 	return out, true, nil
+}
+
+// decodeWebSearchToolResult web_search_tool_result.content -> IR 结果。
+// content 是 union：错误形态是单个对象（web_search_tool_result_error），
+// 结果形态是子块数组。只按数组解会把错误对象解出零条结果——「搜索失败」
+// 被伪造成「搜索成功但没找到东西」，两种语义对客户端完全不同。
+func decodeWebSearchToolResult(toolUseID string, raw json.RawMessage) *ir.WebSearchToolResult {
+	out := &ir.WebSearchToolResult{ToolUseID: toolUseID}
+	if len(raw) == 0 {
+		return out
+	}
+	var eb webSearchToolErrorBlock
+	if json.Unmarshal(raw, &eb) == nil && eb.ErrorCode != "" {
+		out.ErrorCode = eb.ErrorCode
+		return out
+	}
+	var rs []webSearchResultBlock
+	if err := json.Unmarshal(raw, &rs); err != nil {
+		return out
+	}
+	for _, r := range rs {
+		out.Results = append(out.Results, ir.WebSearchResult{
+			Title: r.Title, URL: r.URL, Snippet: r.EncryptedContent, PageAge: r.PageAge,
+		})
+	}
+	return out
 }
 
 func decodeToolChoice(tc *wireToolChoice) *ir.ToolChoice {

@@ -67,6 +67,17 @@ func splitBlock(index int, b Block) (Block, []Event) {
 			u.Input = ""
 			b.ToolUse = &u
 		}
+	case BlockServerToolUse:
+		// 托管工具调用的查询串与普通入参同一条增量通道：流式编码器约定
+		// 开启帧的 input 为空对象，整串留在块上会被下游丢掉。
+		if b.ServerToolUse != nil {
+			s := *b.ServerToolUse
+			if s.Input != "" {
+				deltas = append(deltas, Event{Type: EvToolInput, Index: index, Text: s.Input})
+			}
+			s.Input = ""
+			b.ServerToolUse = &s
+		}
 	}
 	return b, deltas
 }

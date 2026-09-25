@@ -91,6 +91,10 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 			if block.ToolUse != nil && isPlaceholderInput(block.ToolUse.Input) {
 				block.ToolUse.Input = ""
 			}
+			// server_tool_use 同款：查询串同样经 input_json_delta 续传。
+			if block.ServerToolUse != nil && isPlaceholderInput(block.ServerToolUse.Input) {
+				block.ServerToolUse.Input = ""
+			}
 		}
 		out := []ir.Event{{Type: ir.EvBlockStart, Index: ev.Index, Block: &block}}
 		// 有实现在开启帧就给出完整入参且不再发增量。IR 约定入参只走增量事件，
@@ -98,6 +102,11 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		if block.ToolUse != nil && block.ToolUse.Input != "" {
 			input := block.ToolUse.Input
 			block.ToolUse.Input = ""
+			out = append(out, ir.Event{Type: ir.EvToolInput, Index: ev.Index, Text: input})
+		}
+		if block.ServerToolUse != nil && block.ServerToolUse.Input != "" {
+			input := block.ServerToolUse.Input
+			block.ServerToolUse.Input = ""
 			out = append(out, ir.Event{Type: ir.EvToolInput, Index: ev.Index, Text: input})
 		}
 		return out, nil

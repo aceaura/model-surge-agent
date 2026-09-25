@@ -128,7 +128,29 @@ const (
 	blockToolResult       = "tool_result"
 	blockThinking         = "thinking"
 	blockRedactedThinking = "redacted_thinking"
+	// 服务端托管工具块：server_tool_use 复用 wireBlock 的 ID/Name/Input，
+	// web_search_tool_result 复用 ToolUseID/Content（Content 是结果子块数组
+	// 与错误对象的 union）。
+	blockServerToolUse       = "server_tool_use"
+	blockWebSearchToolResult = "web_search_tool_result"
 )
+
+// webSearchResultBlock web_search_tool_result.content 的结果子块形态。
+// EncryptedContent 是原文摘要（上游侧加密，原样透传，非本服务加密）。
+type webSearchResultBlock struct {
+	Type             string `json:"type"` // "web_search_result"
+	Title            string `json:"title"`
+	URL              string `json:"url"`
+	EncryptedContent string `json:"encrypted_content"`
+	PageAge          string `json:"page_age,omitempty"`
+}
+
+// webSearchToolErrorBlock web_search_tool_result.content 的错误形态：
+// content 是结果数组与本对象的 union，判别靠 error_code 非空。
+type webSearchToolErrorBlock struct {
+	Type      string `json:"type"` // "web_search_tool_result_error"
+	ErrorCode string `json:"error_code"`
+}
 
 // streamEvent 是所有流帧的联合体。Anthropic 每种帧字段不同，
 // 但字段名不冲突，用一个结构体解全部帧比每帧一个类型更短。
