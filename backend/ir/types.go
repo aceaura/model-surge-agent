@@ -274,6 +274,16 @@ type ThinkingConfig struct {
 	Enabled      *bool  `json:"enabled,omitempty"`
 	Effort       string `json:"effort,omitempty"`
 	BudgetTokens int    `json:"budget_tokens,omitempty"`
+
+	// Adaptive 模型自主决定思考量（Anthropic thinking.type=adaptive，官方
+	// 已标 enabled 废弃）。与 BudgetTokens 互斥：adaptive 不带预算。其余
+	// 协议没有「自适应」这一档——OpenAI 的 effort 是显式档位，跨族时降级
+	// 成固定档并由诊断报出。
+	Adaptive bool `json:"adaptive,omitempty"`
+	// Display 思考内容回显形态（Anthropic thinking.display：
+	// "summarized"=正常回显 / "omitted"=只回签名供多轮续接）。仅 Anthropic
+	// 有这一维，跨族丢弃并报出。
+	Display string `json:"display,omitempty"`
 }
 
 // On 判定明确开启。nil 接收者与 nil Enabled 都算「没明确开启」。

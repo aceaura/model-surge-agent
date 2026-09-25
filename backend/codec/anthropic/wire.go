@@ -29,6 +29,9 @@ type wireRequest struct {
 // ResponseSchema 真而 ResponseFormat 假，纯 JSON 模式由诊断报受限）。
 type wireOutputConfig struct {
 	Format *wireJSONOutputFormat `json:"format,omitempty"`
+	// Effort 思考档位（low/medium/high/xhigh/max，官方 OutputConfig.effort，
+	// 是 OpenAI reasoning_effort 值集的子集——没有 none/minimal）。
+	Effort string `json:"effort,omitempty"`
 }
 
 type wireJSONOutputFormat struct {
@@ -130,8 +133,10 @@ type wireToolChoice struct {
 }
 
 type wireThinking struct {
-	Type         string `json:"type"`
+	Type         string `json:"type"` // "enabled" / "disabled" / "adaptive"
 	BudgetTokens int    `json:"budget_tokens,omitempty"`
+	// Display 思考内容回显形态（"summarized"=正常回显 / "omitted"=只回签名）。
+	Display string `json:"display,omitempty"`
 }
 
 type wireMetadata struct {

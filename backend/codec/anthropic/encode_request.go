@@ -88,13 +88,19 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 		// 而部分模型默认开启推理。
 		w.Thinking = &wireThinking{Type: "disabled"}
 	case req.Thinking.On():
-		th := &wireThinking{Type: "enabled", BudgetTokens: req.Thinking.BudgetTokens}
-		// 只有 effort 没有预算时（来自 responses/gemini 客户端）也必须给出预算：
-		// Anthropic 的 thinking 无 effort 概念，缺 budget_tokens 会被拒。
-		if th.BudgetTokens <= 0 {
-			th.BudgetTokens = budgetForEffort(req.Thinking.Effort, w.MaxTokens)
+		if req.Thinking.Adaptive {
+			// adaptive 是官方推荐的现代形态（enabled 已标废弃）：模型自主
+			// 决定思考量，不带预算；display 仅在本族有意义，原样回写。
+			w.Thinking = &wireThinking{Type: "adaptive", Display: req.Thinking.Display}
+		} else {
+			th := &wireThinking{Type: "enabled", BudgetTokens: req.Thinking.BudgetTokens, Display: req.Thinking.Display}
+			// 只有 effort 没有预算时（来自 responses/gemini 客户端）也必须给出预算：
+			// Anthropic 的 enabled 档无 effort 概念，缺 budget_tokens 会被拒。
+			if th.BudgetTokens <= 0 {
+				th.BudgetTokens = budgetForEffort(req.Thinking.Effort, w.MaxTokens)
+			}
+			w.Thinking = th
 		}
-		w.Thinking = th
 	}
 	if id := req.Metadata["user_id"]; id != "" {
 		w.Metadata = &wireMetadata{UserID: id}
@@ -107,6 +113,18 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 			Type:   "json_schema",
 			Schema: json.RawMessage(rf.Schema),
 		}}
+	}
+	// effort 在 anthropic 是封闭五值集（low/medium/high/xhigh/max，没有
+	// none/minimal）：装不下的档位丢弃，由诊断报出；"none" 与未开思考同义，
+	// 静默即可。复用上面可能已建的 output_config。
+	if req.Thinking != nil {
+		switch req.Thinking.Effort {
+		case "low", "medium", "high", "xhigh", "max":
+			if w.OutputConfig == nil {
+				w.OutputConfig = &wireOutputConfig{}
+			}
+			w.OutputConfig.Effort = req.Thinking.Effort
+		}
 	}
 	return json.Marshal(w)
 }

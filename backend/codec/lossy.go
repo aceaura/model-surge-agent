@@ -98,6 +98,7 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	if req.Thinking.On() && !caps.Thinking {
 		note("thinking", "no reasoning mode")
 	}
+	describeThinkingModernLossy(req, name, caps, note)
 	describeParamsLossy(req, caps, note, filled, unreturned)
 
 	describeBlocksLossy(req.System, name, caps, note)
@@ -580,6 +581,43 @@ func describeParamsLossy(req *ir.Request, caps Capabilities, note, filled, unret
 		// 兜底不是丢弃，但同样是本服务改了客户端没给的东西，必须留痕：
 		// 否则长回答在一个客户端从未设过的上限处被截断，无从查证。
 		filled("max_tokens", fmt.Sprintf("the client gave none, defaulted to %d", caps.DefaultMaxTokens))
+	}
+}
+
+// describeThinkingModernLossy 报思考配置现代化三维（adaptive / display /
+// effort）的跨族与越集丢弃。
+//
+// adaptive（模型自主决定思考量）与 display（思考回显形态）都是 anthropic
+// 专属维度：OpenAI 的 effort 是显式档位、reasoning.summary 是啰嗦程度而非
+// 可见性，都不构成等价物，不映射只报出。只在目标支持思考时报——目标连
+// 推理模式都没有时，上面已经报过一条 "thinking / no reasoning mode"，
+// 再报这两条是同一件事说三遍。
+//
+// effort 值集诊断只管 anthropic 本族：它的 effort 是封闭五值
+// （low/medium/high/xhigh/max），minimal 与未知值 provably 装不下；
+// "none" 与未开思考同义，静默。其余协议 effort 直通或走自己的维度，不报。
+func describeThinkingModernLossy(req *ir.Request, name string, caps Capabilities, note func(field, why string)) {
+	t := req.Thinking
+	if t == nil {
+		return
+	}
+	if name != ProtocolAnthropic {
+		if caps.Thinking {
+			if t.Adaptive {
+				note("adaptive thinking", "the target protocol only takes an explicit effort level, a fixed level will be used instead of the model choosing")
+			}
+			if t.Display != "" {
+				note("thinking display preference", "the target protocol has no visibility control for reasoning content, thinking is echoed in the upstream default form")
+			}
+		}
+		return
+	}
+	switch t.Effort {
+	case "", "none", "low", "medium", "high", "xhigh", "max":
+	case "minimal":
+		note("minimal thinking effort", "the effort set starts at low, the upstream default level applies")
+	default:
+		note(fmt.Sprintf("thinking effort %q", t.Effort), "anthropic only accepts low, medium, high, xhigh or max, the upstream default level applies")
 	}
 }
 

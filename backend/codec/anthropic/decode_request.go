@@ -61,11 +61,15 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	out.ToolChoice = decodeToolChoice(w.ToolChoice)
 
 	if w.Thinking != nil {
-		// type 只有 enabled / disabled 两种取值，都是客户端的明确表态，
-		// 所以这里一定给出 true 或 false，绝不留 nil——nil 是「没提」那一档。
-		enabled := w.Thinking.Type == "enabled"
+		// type 有 enabled / disabled / adaptive 三种取值，都是客户端的明确
+		// 表态，所以这里一定给出 true 或 false，绝不留 nil——nil 是「没提」
+		// 那一档。adaptive 是官方推荐的现代形态（enabled 已标废弃）：模型
+		// 自主决定思考量，不带预算。
+		enabled := w.Thinking.Type == "enabled" || w.Thinking.Type == "adaptive"
 		out.Thinking = &ir.ThinkingConfig{
 			Enabled:      &enabled,
+			Adaptive:     w.Thinking.Type == "adaptive",
+			Display:      w.Thinking.Display,
 			BudgetTokens: w.Thinking.BudgetTokens,
 		}
 	}
@@ -85,6 +89,14 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 		}
 		strict := true
 		out.ResponseFormat.Strict = &strict
+	}
+	// output_config.effort 原值进 IR Thinking.Effort（值集是 OpenAI 的子集，
+	// 无需翻译）。effort 独立出现（没带 thinking 块）也算开了思考。
+	if f := w.OutputConfig; f != nil && f.Effort != "" {
+		if out.Thinking == nil {
+			out.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOn()}
+		}
+		out.Thinking.Effort = f.Effort
 	}
 	return out, nil
 }
