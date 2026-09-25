@@ -288,6 +288,10 @@ type Tool struct {
 	// 字节内容视为不可变，Clone 随结构体值拷贝；omitempty 承重——IR 级
 	// JSON 序列化下空值不得变成字面量 null 再被当成原文。
 	ServerRaw json.RawMessage `json:"server_raw,omitempty"`
+	// ServerParams 服务端工具的声明参数；nil 表示客户端一个参数都没给，
+	// 同族回写时一个键也不造（缺省保持缺省）。同族往返优先走 ServerRaw
+	// 整块原文，本槽位承担的是 IR 层的结构化可见性与无原文工具的可编码性。
+	ServerParams *ServerParams `json:"server_params,omitempty"`
 	// Strict 工具入参 schema 严格校验开关（anthropic tool.strict、OpenAI 两系
 	// function.strict，同义同形）。三态指针：nil=没给（上游默认），显式
 	// false 是「明确不要严格校验」，与没给语义不同。gemini 的工具定义
@@ -303,6 +307,29 @@ type Tool struct {
 	InputExamples []json.RawMessage `json:"input_examples,omitempty"`
 	// AllowedCallers 允许的程序化调用方（direct / code_execution_*）。
 	AllowedCallers []string `json:"allowed_callers,omitempty"`
+}
+
+// ServerParams 服务端托管工具（web_search 一族）的声明参数。同族往返以
+// Tool.ServerRaw 整块原文优先；本结构是参数的结构化视图——观测面（落库/
+// 诊断）读它，内部构造的服务端工具（没有原文）靠它把参数编上线。
+type ServerParams struct {
+	// MaxUses 本回合最多调用次数（anthropic max_uses）。responses 无槽位。
+	MaxUses int `json:"max_uses,omitempty"`
+	// AllowedDomains 域名白名单（anthropic allowed_domains ⇔ responses
+	// filters.allowed_domains，两族语义相同）。
+	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	// BlockedDomains 域名黑名单（anthropic blocked_domains，与白名单互斥）。
+	// responses 无槽位。
+	BlockedDomains []string `json:"blocked_domains,omitempty"`
+	// UserLocation 粗粒度地理位置（anthropic 与 responses 同为
+	// {"type":"approximate",...} 形状，原文透传）。omitempty 承重：
+	// RawMessage 不得伪造字面量 null。
+	UserLocation json.RawMessage `json:"user_location,omitempty"`
+	// SearchContextSize 检索规模档位 low/medium/high（responses 原生
+	// search_context_size）。anthropic 无槽位；本仓 responses 入站对内建
+	// 工具声明是跳过+注记，该字段暂无生产者——留着对齐参数全集，
+	// responses 同族对称落地时启用。
+	SearchContextSize string `json:"search_context_size,omitempty"`
 }
 
 type ToolChoiceMode string
@@ -485,6 +512,14 @@ func (r *Request) Clone() *Request {
 			tl.EagerInputStreaming = cloneBool(tl.EagerInputStreaming)
 			tl.InputExamples = append([]json.RawMessage(nil), tl.InputExamples...)
 			tl.AllowedCallers = append([]string(nil), tl.AllowedCallers...)
+			if tl.ServerParams != nil {
+				// ServerRaw 字节视为不可变随值共享；ServerParams 是指针，
+				// 必须换头，切片容器照 InputExamples 的惯例各自复制。
+				sp := *tl.ServerParams
+				sp.AllowedDomains = append([]string(nil), sp.AllowedDomains...)
+				sp.BlockedDomains = append([]string(nil), sp.BlockedDomains...)
+				tl.ServerParams = &sp
+			}
 			out.Tools[i] = tl
 		}
 	}

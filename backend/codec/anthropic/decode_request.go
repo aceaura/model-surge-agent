@@ -73,6 +73,9 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 			if i < len(rawTools.Tools) {
 				tool.ServerRaw = rawTools.Tools[i]
 			}
+			// 声明参数同时收成结构化视图：原文是不透明字节，观测面与
+			// 内部构造路径要的是可寻址的字段。
+			tool.ServerParams = serverParamsOf(t)
 		}
 		out.Tools = append(out.Tools, tool)
 	}
@@ -319,6 +322,21 @@ func decodeToolChoice(tc *wireToolChoice) *ir.ToolChoice {
 		return &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: tc.Name}
 	default:
 		return nil
+	}
+}
+
+// serverParamsOf 把服务端工具的声明参数收进 IR；一个都没给时保持 nil，
+// 同族回写一个键也不造（缺省保持缺省）。search_context_size 是 responses
+// 原生维度，本协议线体上没有，不进这里。
+func serverParamsOf(t wireTool) *ir.ServerParams {
+	if t.MaxUses == 0 && len(t.AllowedDomains) == 0 && len(t.BlockedDomains) == 0 && len(t.UserLocation) == 0 {
+		return nil
+	}
+	return &ir.ServerParams{
+		MaxUses:        t.MaxUses,
+		AllowedDomains: t.AllowedDomains,
+		BlockedDomains: t.BlockedDomains,
+		UserLocation:   t.UserLocation,
 	}
 }
 

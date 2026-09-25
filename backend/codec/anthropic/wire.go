@@ -169,6 +169,12 @@ type wireTool struct {
 	InputExamples []json.RawMessage `json:"input_examples,omitempty"`
 	// AllowedCallers 允许的程序化调用方（direct / code_execution_*）。
 	AllowedCallers []string `json:"allowed_callers,omitempty"`
+	// 以下四维是 web_search_* 服务端工具的声明参数（官方
+	// WebSearchTool20250305）。函数工具上这些键不存在。
+	MaxUses        int             `json:"max_uses,omitempty"`
+	AllowedDomains []string        `json:"allowed_domains,omitempty"`
+	BlockedDomains []string        `json:"blocked_domains,omitempty"`
+	UserLocation   json.RawMessage `json:"user_location,omitempty"`
 	// Raw 同族回写的服务端工具原始定义。标 json:"-" 不参与逐字段序列化：
 	// MarshalJSON 见到它就把整块原样吐出去（与 citation.Raw 原文透传同一手法）。
 	Raw json.RawMessage `json:"-"`

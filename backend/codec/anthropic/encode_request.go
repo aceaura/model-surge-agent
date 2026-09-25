@@ -92,6 +92,16 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 			// 服务端工具的 type 原样写回，不带 input_schema：参数形状由
 			// 上游那一版工具自己定义，我方给出的任何 schema 都可能与它冲突。
 			tool.Type = t.ServerType
+			// 声明参数只在服务端工具上写（函数工具线体没有这些键）。有原文
+			// 的已在上面整块回吐，这条路径服务的是无原文的内部构造工具；
+			// ServerParams 为 nil 时一个键也不造（缺省保持缺省）。
+			// SearchContextSize 是 responses 原生维度，本协议无槽位不造键。
+			if p := t.ServerParams; p != nil {
+				tool.MaxUses = p.MaxUses
+				tool.AllowedDomains = p.AllowedDomains
+				tool.BlockedDomains = p.BlockedDomains
+				tool.UserLocation = p.UserLocation
+			}
 		} else if t.Schema != "" {
 			tool.InputSchema = json.RawMessage(t.Schema)
 		}
