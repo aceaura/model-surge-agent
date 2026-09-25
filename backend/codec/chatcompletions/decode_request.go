@@ -173,6 +173,12 @@ func appendMessage(out *ir.Request, m wireMessage) error {
 		}
 		// 消息级标注落到最后一个文本块：IR 的引用挂块上，本协议挂消息上。
 		blocks = attachCitations(blocks, decodeAnnotations(m.Annotations))
+		// 拒绝正文是独立槽位：官方在拒绝时把 content 置 null、正文放
+		// refusal。不读会让历史里的拒绝变成一条空消息，模型看不到自己
+		// 拒绝过，可能被同样的追问绕过。
+		if m.Refusal != "" {
+			blocks = append(blocks, ir.Block{Type: ir.BlockRefusal, Text: m.Refusal})
+		}
 		// 推理内容排在正文之前：这是各家推理模型的实际输出顺序，
 		// 转成 Anthropic 时 thinking 块也必须在 text 块之前。
 		if m.ReasoningContent != "" {

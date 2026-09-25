@@ -115,6 +115,9 @@ func (outboundCodec) Caps() codec.Capabilities {
 		// message.annotations 是本协议的来源标注槽位（url_citation）。
 		// 允许无范围标注，比 anthropic 宽松，比 responses 多 cited_text。
 		Citations: true,
+		// message.refusal 是本协议的拒绝正文槽位：同族往返原样回到 refusal
+		// 字段，客户端能区分「模型拒绝了」与「模型这么答的」。
+		Refusal: true,
 		// 显式写出 false：实测本协议允许推理与强制工具共存（deepseek 上
 		// tool_choice 具名 + 思考开启回 200，同时给出文本与 tool_use）。
 		// 留空会让后来者以为只是没填，照 anthropic 抄成 true 就白丢推理。

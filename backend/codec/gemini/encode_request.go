@@ -155,7 +155,10 @@ func encodeMessage(m ir.Message, names map[string]string) ([]wireContent, error)
 	)
 	for _, b := range m.Content {
 		switch b.Type {
-		case ir.BlockText:
+		case ir.BlockText, ir.BlockRefusal:
+			// 本协议没有 refusal part：拒绝正文并入文本而不是丢弃，
+			// 「这是拒绝」由 finishReason=SAFETY 承载。丢正文会让历史里
+			// 这一轮变成空回复，模型看不到自己拒绝过。
 			parts = append(parts, wirePart{Text: b.Text})
 		case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
 			if b.Media == nil {

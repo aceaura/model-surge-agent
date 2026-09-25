@@ -161,6 +161,13 @@ type Capabilities struct {
 	// 模型的自由发挥。
 	Citations bool
 
+	// Refusal 为真表示本协议有独立的「模型拒绝作答」槽位：chat 的
+	// message.refusal、responses 的 refusal content part。anthropic 与
+	// gemini 没有——那两家只有终止原因能表达「这是拒绝」，正文只能并入
+	// 普通文本。装不下时降级为文本而非丢弃：拒绝正文是模型真正说出的话，
+	// 丢了客户端只剩一条空消息配一个拒绝标记，像成功的空回复。
+	Refusal bool
+
 	// RequiresMaxTokens 为真表示本协议的输出上限必填，不能省略。
 	RequiresMaxTokens bool
 	// DefaultMaxTokens 是必填协议在客户端没给时的兜底值。

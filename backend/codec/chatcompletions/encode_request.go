@@ -147,6 +147,9 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 		// 拼接顺序与 encodeContent 的全文本收敛一致（按块序串接）。
 		cites    []ir.Citation
 		citeText strings.Builder
+		// refusal 收集历史里的拒绝正文：本族有专属槽位（message.refusal），
+		// 落进 plain 会被编成普通文本，客户端就无法区分拒绝与正常回答。
+		refusal strings.Builder
 	)
 	for _, b := range m.Content {
 		switch b.Type {
@@ -203,6 +206,10 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 			cites = append(cites, shiftCitations(b.Citations, citeText.String(), b.Text)...)
 			citeText.WriteString(b.Text)
 			plain = append(plain, b)
+		case ir.BlockRefusal:
+			// 历史里的拒绝也要带回：上一轮模型拒绝过是下一轮的上下文，
+			// 丢了会让模型看不到自己拒绝过，可能被同样的追问绕过。
+			refusal.WriteString(b.Text)
 		default:
 			plain = append(plain, b)
 		}
@@ -212,9 +219,11 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 	// 而 IR 把工具结果放在 user 消息里，所以先发它们。
 	out = append(out, toolMsgs...)
 
-	// 音频引用单独算内容：只带 {audio:{id}} 而无正文的 assistant 历史消息
-	// 是官方合法形态，按空消息跳过等于撕掉上一轮的音频凭证。
-	if len(plain) == 0 && len(calls) == 0 && thinking.Len() == 0 && m.AudioID == "" {
+	// 音频引用与拒绝正文都单独算内容：只带 {audio:{id}} 或只带 refusal
+	// 而无正文的 assistant 历史消息是官方合法形态，按空消息跳过等于撕掉
+	// 上一轮的音频凭证 / 抹掉模型拒绝过的记录。
+	if len(plain) == 0 && len(calls) == 0 && thinking.Len() == 0 &&
+		m.AudioID == "" && refusal.Len() == 0 {
 		return out, nil
 	}
 	msg := wireMessage{Role: string(m.Role), ToolCalls: calls, ReasoningContent: thinking.String()}
@@ -222,6 +231,7 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 	// （跨协议转换的罕见形态）也不写，写出去是非法的消息形状。
 	if m.Role == ir.RoleAssistant {
 		msg.Annotations = encodeAnnotations(citeText.String(), cites)
+		msg.Refusal = refusal.String()
 		if m.AudioID != "" {
 			// 请求侧只回 {id} 引用形态：完整音频数据不重复回传。
 			ref, err := json.Marshal(audioRef{ID: m.AudioID})

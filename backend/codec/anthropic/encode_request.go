@@ -233,6 +233,13 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 			}
 			out.Citations = raw
 		}
+	case ir.BlockRefusal:
+		// 本协议没有 refusal 槽位（只有 stop_reason=refusal），正文降级为
+		// 文本而不是丢弃——拒绝正文是模型真正说出的话，丢了客户端只剩
+		// 空消息配一个拒绝标记。不加标注前缀：正文会成为模型后续轮次
+		// 读到的自己说过的话，前缀会污染它。
+		out.Type = blockText
+		out.Text = b.Text
 	case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
 		if b.Media == nil {
 			return out, false, fmt.Errorf("%s block without payload", b.Type)

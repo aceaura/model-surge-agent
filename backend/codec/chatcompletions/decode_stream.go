@@ -161,6 +161,14 @@ func (d *streamDecoder) decodeDelta(delta wireMessage) ([]ir.Event, error) {
 		out = append(out, ir.Event{Type: ir.EvThinkingDelta, Index: idx, Text: delta.ReasoningContent})
 	}
 
+	if delta.Refusal != "" {
+		// 拒绝正文自成一块：并入 text 槽位会让客户端把拒绝渲染成普通
+		// 回答，只凭 finish_reason 无法区分「模型拒绝了」与「模型这么答的」。
+		idx, opened := d.slot("refusal", ir.BlockRefusal)
+		out = append(out, opened...)
+		out = append(out, ir.Event{Type: ir.EvTextDelta, Index: idx, Text: delta.Refusal})
+	}
+
 	if len(delta.Content) > 0 {
 		blocks, err := decodeContent(delta.Content)
 		if err != nil {
@@ -454,6 +462,11 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 		}
 		blocks = attachCitations(blocks, decodeAnnotations(m.Annotations))
 		out.Content = append(out.Content, blocks...)
+		// 拒绝正文是独立槽位：官方在拒绝时把 content 置 null、正文放
+		// refusal。不读会让客户端收到终止原因却内容为空，像成功的空回复。
+		if m.Refusal != "" {
+			out.Content = append(out.Content, ir.Block{Type: ir.BlockRefusal, Text: m.Refusal})
+		}
 		for _, tc := range m.ToolCalls {
 			out.Content = append(out.Content, ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
 				ID:    tc.ID,

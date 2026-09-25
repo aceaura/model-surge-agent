@@ -140,6 +140,10 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 		case ir.BlockText:
 			parts = append(parts, wirePart{Type: textPartType(m.Role), Text: b.Text,
 				Annotations: encodeAnnotations(b.Text, b.Citations)})
+		case ir.BlockRefusal:
+			// 历史里的拒绝回本族专属槽位：并进 output_text 会让上游与
+			// 客户端都把拒绝当普通回答，「模型拒绝过」这一事实丢失。
+			parts = append(parts, wirePart{Type: partRefusal, Refusal: b.Text})
 		case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
 			if b.Media == nil {
 				return nil, fmt.Errorf("%s block without payload", b.Type)

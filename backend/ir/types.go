@@ -47,6 +47,14 @@ const (
 	// file_id 与「进容器」的语义，塞进 Media.FileID 会让外族把它当普通附件
 	// 投递，上游按内容解码后 400。外族没有容器概念，整块跳过并计损耗。
 	BlockContainerUpload BlockType = "container_upload"
+	// BlockRefusal 模型拒绝作答的正文。文本放 Text 字段。
+	// 与 BlockText 分开是因为 OpenAI 两系有独立槽位（chat 的 message.refusal、
+	// responses 的 refusal content part），而 anthropic 与 gemini 没有——合进
+	// BlockText 会让同协议往返把拒绝降级成普通回答，客户端无法区分「模型拒绝了」
+	// 和「模型这么答的」。只靠终止原因也不够：正文若丢，客户端看到的是一条
+	// 空消息配一个拒绝标记，像成功的空回复。无槽位协议降级为文本而非丢弃，
+	// 且不加标注前缀——正文会成为模型后续轮次读到的自己说过的话。
+	BlockRefusal BlockType = "refusal"
 )
 
 // IsServerTool 判断块是否为服务端托管工具产物（调用或结果）。

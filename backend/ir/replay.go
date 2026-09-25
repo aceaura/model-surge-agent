@@ -41,7 +41,9 @@ func splitBlock(index int, b Block) (Block, []Event) {
 	cites := b.Citations
 	b.Citations = nil
 	switch b.Type {
-	case BlockText:
+	case BlockText, BlockRefusal:
+		// 拒绝块也用 Text 承载。漏掉这一档会让「上游非流式、客户端流式」
+		// 这条路径只发出空的块开合，拒绝正文整条不见。
 		if b.Text != "" {
 			deltas = append(deltas, Event{Type: EvTextDelta, Index: index, Text: b.Text})
 		}

@@ -105,10 +105,14 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		}
 		switch ev.Part.Type {
 		case partOutputText, partRefusal:
+			kind := ir.BlockText
 			if ev.Part.Type == partRefusal {
+				// 拒绝正文自成一块：并入文本块会让客户端把拒绝渲染成
+				// 普通回答，只凭终止原因无法区分。
 				d.refused = true
+				kind = ir.BlockRefusal
 			}
-			idx, opened := d.slot(partKey(ev.OutputIndex, ev.ContentIndex), ir.BlockText)
+			idx, opened := d.slot(partKey(ev.OutputIndex, ev.ContentIndex), kind)
 			out := d.start(ev)
 			out = append(out, opened...)
 			// part 开启帧可能已带完整文本（非增量实现），带了就当一次 delta 发出。
@@ -122,11 +126,13 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		}
 
 	case evOutputTextDelta, evRefusalDelta:
+		kind := ir.BlockText
 		if ev.Type == evRefusalDelta {
 			// part 开启帧可能整个缺席（上游只发 delta），所以两处都要记。
 			d.refused = true
+			kind = ir.BlockRefusal
 		}
-		idx, opened := d.slot(partKey(ev.OutputIndex, ev.ContentIndex), ir.BlockText)
+		idx, opened := d.slot(partKey(ev.OutputIndex, ev.ContentIndex), kind)
 		out := append(d.start(ev), opened...)
 		d.accText(idx, ev.Delta)
 		return append(out, ir.Event{Type: ir.EvTextDelta, Index: idx, Text: ev.Delta}), nil
@@ -179,9 +185,9 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 			ev.Text, ir.EvTextDelta), nil
 
 	case evRefusalDone:
-		// 拒绝正文与文本增量同键同块：本协议实现里没有独立的拒答块类型，
-		// 拒答 part 在开启帧就并进了文本块。
-		return d.backfill(partKey(ev.OutputIndex, ev.ContentIndex), ir.BlockText,
+		// 终态帧携带完整拒绝正文：done-only 上游全靠这一帧。块型与
+		// delta 路径一致（refusal 独立块），backfill 只补缺失后缀。
+		return d.backfill(partKey(ev.OutputIndex, ev.ContentIndex), ir.BlockRefusal,
 			ev.Refusal, ir.EvTextDelta), nil
 
 	case evContentPartDone:
@@ -193,7 +199,11 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		}
 		switch ev.Part.Type {
 		case partOutputText, partRefusal, "":
-			out := d.backfill(partKey(ev.OutputIndex, ev.ContentIndex), ir.BlockText,
+			kind := ir.BlockText
+			if ev.Part.Type == partRefusal {
+				kind = ir.BlockRefusal
+			}
+			out := d.backfill(partKey(ev.OutputIndex, ev.ContentIndex), kind,
 				partText(ev.Part), ir.EvTextDelta)
 			return append(out, d.doneCitations(
 				partKey(ev.OutputIndex, ev.ContentIndex), ev.Part)...), nil
@@ -442,7 +452,11 @@ func (d *streamDecoder) completeItemParts(oi int, raw json.RawMessage) []ir.Even
 	for n := range parts {
 		switch parts[n].Type {
 		case partOutputText, partRefusal, "":
-			out = append(out, d.backfill(partKey(oi, n), ir.BlockText,
+			kind := ir.BlockText
+			if parts[n].Type == partRefusal {
+				kind = ir.BlockRefusal
+			}
+			out = append(out, d.backfill(partKey(oi, n), kind,
 				partText(&parts[n]), ir.EvTextDelta)...)
 			out = append(out, d.doneCitations(partKey(oi, n), &parts[n])...)
 		}

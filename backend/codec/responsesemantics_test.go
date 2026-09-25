@@ -428,9 +428,10 @@ func TestResponsesRefusalBecomesContentFilter(t *testing.T) {
 	if resp.StopReason != ir.StopContentFilter {
 		t.Errorf("stop_reason = %q，想要 %q", resp.StopReason, ir.StopContentFilter)
 	}
-	// 4.3：文字仍要并入文本块，客户端要看到拒答说了什么。
-	if !responseHasText(resp, "I cannot help with that.") {
-		t.Errorf("拒答文字没有并入文本块：%+v", resp.Content)
+	// 拒绝正文进独立的 refusal 块（不再并入文本块）：客户端要看到拒答
+	// 说了什么，且要能区分「模型拒绝了」与「模型这么答的」。
+	if !responseHasRefusal(resp, "I cannot help with that.") {
+		t.Errorf("拒答文字没有落进 refusal 块：%+v", resp.Content)
 	}
 }
 
@@ -449,8 +450,8 @@ func TestResponsesStreamRefusalBecomesContentFilter(t *testing.T) {
 	if resp.StopReason != ir.StopContentFilter {
 		t.Errorf("流式 stop_reason = %q，想要 %q", resp.StopReason, ir.StopContentFilter)
 	}
-	if !responseHasText(resp, "I cannot") {
-		t.Errorf("流式拒答文字没有并入文本块：%+v", resp.Content)
+	if !responseHasRefusal(resp, "I cannot") {
+		t.Errorf("流式拒答文字没有落进 refusal 块：%+v", resp.Content)
 	}
 }
 
@@ -557,6 +558,19 @@ func responseHasText(resp *ir.Response, want string) bool {
 	}
 	for _, b := range resp.Content {
 		if b.Type == ir.BlockText && strings.Contains(b.Text, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// responseHasRefusal 判定拒绝正文是否落进了独立的 refusal 块。
+func responseHasRefusal(resp *ir.Response, want string) bool {
+	if resp == nil {
+		return false
+	}
+	for _, b := range resp.Content {
+		if b.Type == ir.BlockRefusal && strings.Contains(b.Text, want) {
 			return true
 		}
 	}

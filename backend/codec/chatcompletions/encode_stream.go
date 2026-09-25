@@ -206,6 +206,11 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		if e.skipDelta(ev.Index) {
 			return nil, nil
 		}
+		if e.blockKind[ev.Index] == ir.BlockRefusal {
+			// 拒绝块的增量走 delta.refusal 而不是 delta.content：
+			// 写进 content 会被客户端渲染成普通回答，拒绝标记就丢了。
+			return e.chunk(wireMessage{Refusal: ev.Text}, "")
+		}
 		// 先累积再编帧：随后的标注要用这份文本解析偏移量。
 		e.text[ev.Index] += ev.Text
 		content, err := json.Marshal(ev.Text)
@@ -460,6 +465,10 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			if b.Thinking != nil {
 				msg.ReasoningContent += b.Thinking.Text
 			}
+		case ir.BlockRefusal:
+			// 拒绝正文回本族专属槽位：落进 content 会被客户端渲染成普通
+			// 回答，「模型拒绝了」这个事实就丢了。
+			msg.Refusal += b.Text
 		case ir.BlockToolUse:
 			if b.ToolUse == nil {
 				continue

@@ -201,8 +201,14 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			return nil, err
 		}
 		item.text += ev.Text
-		frames, err := e.frame(evOutputTextDelta, wireStreamEvent{
-			Type:        evOutputTextDelta,
+		// 拒绝块的增量走专属事件名：output_text.delta 会让客户端把拒绝
+		// 正文渲染成普通回答。
+		deltaKind := evOutputTextDelta
+		if item.kind == ir.BlockRefusal {
+			deltaKind = evRefusalDelta
+		}
+		frames, err := e.frame(deltaKind, wireStreamEvent{
+			Type:        deltaKind,
 			OutputIndex: item.outputIndex,
 			Delta:       ev.Text,
 		})
@@ -368,13 +374,19 @@ func (e *streamEncoder) openBlock(index int, kind ir.BlockType, block *ir.Block)
 	if err != nil {
 		return nil, err
 	}
-	if kind != ir.BlockText {
+	if kind != ir.BlockText && kind != ir.BlockRefusal {
 		return out, nil
+	}
+	// 拒绝有独立的 part 类型与独立的 delta/done 事件名：走 output_text
+	// 那条会让客户端把拒绝当普通回答渲染。
+	partType := partOutputText
+	if kind == ir.BlockRefusal {
+		partType = partRefusal
 	}
 	part, err := e.frame(evContentPartAdded, wireStreamEvent{
 		Type:        evContentPartAdded,
 		OutputIndex: item.outputIndex,
-		Part:        &wirePart{Type: partOutputText},
+		Part:        &wirePart{Type: partType},
 	})
 	if err != nil {
 		return nil, err
@@ -424,25 +436,47 @@ func (e *streamEncoder) closeBlockAs(index int, status string) ([][]byte, error)
 	// （cc-switch 把 output_text.done 直接映射成 content_block_stop）。
 	// done 帧必须带完整终态：只读终态不拼增量的下游从这些帧里取内容。
 	if item.partOpen {
-		done, err := e.frame(evOutputTextDone, wireStreamEvent{
-			Type:        evOutputTextDone,
-			OutputIndex: item.outputIndex,
-			Text:        item.text,
-		})
-		if err != nil {
-			return nil, err
+		if item.kind == ir.BlockRefusal {
+			// 拒绝块的终态帧走专属事件名与 part 类型，正文在 refusal 键上。
+			done, err := e.frame(evRefusalDone, wireStreamEvent{
+				Type:        evRefusalDone,
+				OutputIndex: item.outputIndex,
+				Refusal:     item.text,
+			})
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, done...)
+			part, err := e.frame(evContentPartDone, wireStreamEvent{
+				Type:        evContentPartDone,
+				OutputIndex: item.outputIndex,
+				Part:        &wirePart{Type: partRefusal, Refusal: item.text},
+			})
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, part...)
+		} else {
+			done, err := e.frame(evOutputTextDone, wireStreamEvent{
+				Type:        evOutputTextDone,
+				OutputIndex: item.outputIndex,
+				Text:        item.text,
+			})
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, done...)
+			part, err := e.frame(evContentPartDone, wireStreamEvent{
+				Type:        evContentPartDone,
+				OutputIndex: item.outputIndex,
+				Part: &wirePart{Type: partOutputText, Text: item.text,
+					Annotations: encodeAnnotations(item.text, item.cites)},
+			})
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, part...)
 		}
-		out = append(out, done...)
-		part, err := e.frame(evContentPartDone, wireStreamEvent{
-			Type:        evContentPartDone,
-			OutputIndex: item.outputIndex,
-			Part: &wirePart{Type: partOutputText, Text: item.text,
-				Annotations: encodeAnnotations(item.text, item.cites)},
-		})
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, part...)
 	}
 	if item.kind == ir.BlockThinking {
 		sumDone, err := e.frame(evReasoningSummaryTextDone, wireStreamEvent{
@@ -636,8 +670,12 @@ func (i *openItem) wire(status string) *wireRespItem {
 		out.Role = roleAssistant
 		parts := []wirePart{}
 		if i.text != "" {
-			parts = append(parts, wirePart{Type: partOutputText, Text: i.text,
-				Annotations: encodeAnnotations(i.text, i.cites)})
+			if i.kind == ir.BlockRefusal {
+				parts = append(parts, wirePart{Type: partRefusal, Refusal: i.text})
+			} else {
+				parts = append(parts, wirePart{Type: partOutputText, Text: i.text,
+					Annotations: encodeAnnotations(i.text, i.cites)})
+			}
 		}
 		content, err := json.Marshal(parts)
 		if err == nil {
@@ -694,6 +732,10 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 		case ir.BlockText:
 			parts = append(parts, wirePart{Type: partOutputText, Text: b.Text,
 				Annotations: encodeAnnotations(b.Text, b.Citations)})
+		case ir.BlockRefusal:
+			// 拒绝正文回本族专属槽位：落进 output_text 会被客户端渲染成
+			// 普通回答，落进 default 则整个响应编码失败。
+			parts = append(parts, wirePart{Type: partRefusal, Refusal: b.Text})
 		case ir.BlockThinking:
 			// 推理条目要排在它所解释的输出之前，所以先把攒着的文本条目发出去。
 			if err := flush(); err != nil {

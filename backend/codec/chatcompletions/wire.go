@@ -81,6 +81,10 @@ type wireMessage struct {
 	Content json.RawMessage `json:"content,omitempty"`
 	// ReasoningContent 是各家推理模型放思维链的位置，非 OpenAI 官方字段但已成事实标准。
 	ReasoningContent string `json:"reasoning_content,omitempty"`
+	// Refusal 模型拒绝作答的正文。与 Content 并列而非互斥：官方在拒绝时把
+	// content 置 null、正文放这里，漏读会让拒绝变成一条空消息配一个
+	// finish_reason，像成功的空回复。
+	Refusal string `json:"refusal,omitempty"`
 	// Audio 的请求与响应形状不同：assistant 历史只允许 {id} 引用，完整
 	// 响应则必须带 id/data/expires_at/transcript 四键，因此留 RawMessage
 	// 延迟到各方向按专用 DTO（audioRef / audioOutput）解码。

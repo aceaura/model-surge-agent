@@ -249,8 +249,10 @@ func decodeContent(raw json.RawMessage) ([]ir.Block, error) {
 			out = append(out, ir.Block{Type: ir.BlockText, Text: p.Text,
 				Citations: decodeAnnotations(p.Annotations)})
 		case partRefusal:
-			// 拒答文本当普通文本：客户端要看到内容，且它不是错误。
-			out = append(out, ir.Block{Type: ir.BlockText, Text: p.Refusal})
+			// 拒绝正文是可见内容而非元数据，且本族有专属槽位：解成独立的
+			// refusal 块，同族往返才能原样回到 refusal part。并进文本块会让
+			// 客户端无法区分「模型拒绝了」与「模型这么答的」。
+			out = append(out, ir.Block{Type: ir.BlockRefusal, Text: p.Refusal})
 		case partInputImage:
 			var url, nested string
 			if p.ImageURL != nil {

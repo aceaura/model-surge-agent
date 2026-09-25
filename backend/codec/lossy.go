@@ -137,6 +137,16 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 		describeBlocksLossy(m.Content, name, caps, note)
 	}
 
+	// 历史里的拒绝正文在目标协议没有 refusal 槽位时被并进普通文本发出。
+	// 措辞用 merged 而不是 dropped：内容没丢，丢的是「这是拒绝」的标记——
+	// 上游模型看不出自己上一轮拒绝过，可能被同样的追问绕过。
+	if !caps.Refusal {
+		if n := countRequestRefusals(req); n > 0 {
+			notes["refusal blocks"] = fmt.Sprintf(
+				"merged %d refusal(s) into plain text: the target protocol has no refusal field, the model cannot tell it previously refused", n)
+		}
+	}
+
 	// 顶层 cache_control 便捷糖官方语义=自动一个缓存断点，与块级断点同维度，
 	// 共用同一条说明（notes 按字段去重，两者并存也只报一条）。
 	if req.TopCacheCtl != "" && !caps.CacheControl {
@@ -934,6 +944,19 @@ func countRequestAudioRefs(req *ir.Request) int {
 	for _, m := range req.Messages {
 		if m.Role == ir.RoleAssistant && m.AudioID != "" {
 			n++
+		}
+	}
+	return n
+}
+
+// countRequestRefusals 数历史消息里的拒绝正文块。
+func countRequestRefusals(req *ir.Request) int {
+	n := 0
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			if b.Type == ir.BlockRefusal {
+				n++
+			}
 		}
 	}
 	return n

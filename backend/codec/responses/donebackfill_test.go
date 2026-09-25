@@ -49,6 +49,18 @@ func textOf(resp *ir.Response) string {
 	return b.String()
 }
 
+// refusalOf 聚合响应里全部拒绝块的正文。拒绝自成块型（不再并入文本块），
+// 回补判据与文本同型：同键寻址、只补缺失后缀。
+func refusalOf(resp *ir.Response) string {
+	var b strings.Builder
+	for _, blk := range resp.Content {
+		if blk.Type == ir.BlockRefusal {
+			b.WriteString(blk.Text)
+		}
+	}
+	return b.String()
+}
+
 // thinkingOf 聚合响应里全部思考块的正文。
 func thinkingOf(resp *ir.Response) string {
 	var b strings.Builder
@@ -183,7 +195,7 @@ func TestStreamDecodeRefusalDoneBackfillsOnce(t *testing.T) {
 		agg.Add(ev)
 	}
 	resp := agg.Response()
-	if got := textOf(resp); got != "我不能这么做" {
+	if got := refusalOf(resp); got != "我不能这么做" {
 		t.Fatalf("拒绝正文 = %q, want %q", got, "我不能这么做")
 	}
 	if resp.StopReason != ir.StopContentFilter {
@@ -312,7 +324,7 @@ func TestStreamDecodeRefusalDoneIsSoleTextSource(t *testing.T) {
 		`{"type":"response.refusal.done","output_index":0,"content_index":0,"refusal":"丙"}`,
 		dbCompleted,
 	)
-	if got := textOf(resp); got != "丙" {
+	if got := refusalOf(resp); got != "丙" {
 		t.Fatalf("拒绝正文 = %q, want %q", got, "丙")
 	}
 }
@@ -367,7 +379,7 @@ func TestStreamDecodeRefusalPartialDeltaThenDoneAppendsOnlySuffix(t *testing.T) 
 		`{"type":"response.refusal.done","output_index":0,"content_index":0,"refusal":"我不能这么做"}`,
 		dbCompleted,
 	)
-	if got := textOf(resp); got != "我不能这么做" {
+	if got := refusalOf(resp); got != "我不能这么做" {
 		t.Fatalf("拒绝正文 = %q, want %q", got, "我不能这么做")
 	}
 }
