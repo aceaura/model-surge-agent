@@ -54,6 +54,12 @@ type streamEncoder struct {
 	// 计数在 Notes() 收尾时报出。
 	droppedImages int
 	droppedFiles  int
+	// droppedServerCalls / droppedServerResults 被跳过的托管工具块数：
+	// 本族编码器没有为 Anthropic 的 server_tool_use /
+	// web_search_tool_result 输出任何对应形态，同上。两种块型分开计数，
+	// 注记只渲染非零的那半。
+	droppedServerCalls   int
+	droppedServerResults int
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
 	// suppressUsageFrame 为真表示客户端明确说了不要那一帧单独的 usage
@@ -70,6 +76,9 @@ func (e *streamEncoder) Notes() []string {
 	notes := e.notes
 	if e.droppedImages > 0 || e.droppedFiles > 0 {
 		notes = append(notes, codec.MediaOutputDropNote(e.droppedImages, e.droppedFiles))
+	}
+	if e.droppedServerCalls > 0 || e.droppedServerResults > 0 {
+		notes = append(notes, codec.ServerToolDropNote(e.droppedServerCalls, e.droppedServerResults))
 	}
 	if e.badToolArgs > 0 {
 		notes = append(notes, ir.RawArgsPassNote(e.badToolArgs))
@@ -125,10 +134,15 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		case ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
 			e.droppedFiles++
 			return nil, nil
-		case ir.BlockServerToolUse, ir.BlockWebSearchToolResult:
-			// 服务端托管工具块没有本族形态：整块跳过。kind 已记进
-			// blockKind，该索引后续的查询串增量一律丢弃——否则会被
-			// toolSlot 编成一场客户端从未发起的伪工具调用。
+		case ir.BlockServerToolUse:
+			// 服务端托管工具块没有本族形态：整块跳过但计数，Notes() 报出。
+			// kind 已记进 blockKind，该索引后续的查询串增量一律丢弃——
+			// 否则会被 toolSlot 编成一场客户端从未发起的伪工具调用。
+			e.droppedServerCalls++
+			return nil, nil
+		case ir.BlockWebSearchToolResult:
+			// 搜回来的页面同理：跳过但计数。
+			e.droppedServerResults++
 			return nil, nil
 		}
 		if kind != ir.BlockToolUse {
@@ -390,7 +404,8 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			continue
 		case ir.BlockServerToolUse, ir.BlockWebSearchToolResult:
 			// 服务端托管工具块没有本族输出形态：整块跳过，落进 default
-			// 会被当正文编成一段凭空的查询串或搜索结果。损耗报出见 #61。
+			// 会被当正文编成一段凭空的查询串或搜索结果。
+			// 跳过，损耗由 EncodeResponseLossy 经 CountResponseServerTools 报出。
 			continue
 		default:
 			text = append(text, b)

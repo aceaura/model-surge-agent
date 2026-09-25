@@ -227,7 +227,7 @@ func encodeMessage(m ir.Message, names map[string]string) ([]wireContent, error)
 		case ir.BlockServerToolUse, ir.BlockWebSearchToolResult:
 			// 服务端托管工具块没有本族 part 形态：整块跳过。落进 default
 			// 会硬报错，伪装成 functionCall 则是伪造一场客户端从未发起、
-			// 也永远等不到结果的调用。损耗报出见 #61。
+			// 也永远等不到结果的调用。损耗由 DescribeLossy 统一报出。
 			continue
 		default:
 			return nil, fmt.Errorf("cannot encode block type %q", b.Type)

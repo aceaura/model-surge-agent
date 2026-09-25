@@ -105,6 +105,17 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 		describeBlocksLossy(m.Content, name, caps, note)
 	}
 
+	// 历史里的托管工具块（server_tool_use / web_search_tool_result）：三个
+	// 外族出站编码器都整块跳过。两种块型成对出现、一起丢反而不撕毁
+	// tool_use/tool_result 配平，上游不会拒——但模型看不到自己上一轮让
+	// 网关搜了什么、搜回了哪些页面，只能重新搜一遍。
+	// anthropic 一律不报：同族原样往返，报了就是谎报。
+	if name != ProtocolAnthropic {
+		if calls, results := countRequestServerTools(req); calls > 0 || results > 0 {
+			notes["server tool blocks"] = ServerToolDropNote(calls, results)
+		}
+	}
+
 	if len(notes) == 0 {
 		return nil
 	}
@@ -626,6 +637,71 @@ func CountResponseMedia(resp *ir.Response) (images, files int) {
 		}
 	}
 	return images, files
+}
+
+// CountResponseServerTools 数出响应里的托管工具块：调用与结果分开计数，
+// 与 ServerToolDropNote 的两个入参一一对应。
+func CountResponseServerTools(resp *ir.Response) (calls, results int) {
+	if resp == nil {
+		return 0, 0
+	}
+	for _, b := range resp.Content {
+		switch b.Type {
+		case ir.BlockServerToolUse:
+			calls++
+		case ir.BlockWebSearchToolResult:
+			results++
+		}
+	}
+	return calls, results
+}
+
+// countRequestServerTools 数出请求历史里的托管工具块。计数刻意分开：
+// 两个数字对称时「接反」这类错误在夹具上看不出来。
+func countRequestServerTools(req *ir.Request) (calls, results int) {
+	count := func(blocks []ir.Block) {
+		for _, b := range blocks {
+			switch b.Type {
+			case ir.BlockServerToolUse:
+				calls++
+			case ir.BlockWebSearchToolResult:
+				results++
+			}
+		}
+	}
+	count(req.System)
+	for _, m := range req.Messages {
+		count(m.Content)
+	}
+	return calls, results
+}
+
+// ServerToolDropNote 服务端托管工具块丢失注记。server_tool_use 与
+// web_search_tool_result 是**有 IR 块型**的，三个外族编码器都没有为它们
+// 输出任何对应形态：整块消失且不计数时，接收端既看不到网关代执行了哪次
+// 托管搜索，也拿不到搜回来的页面。calls / results 分别是两种块型的条数，
+// 只渲染非零的那部分。搜索结果的标题、URL 与摘要属会话内容，不进注记。
+//
+// 措辞刻意不断言「目标协议没有槽位」：Responses 官方确有 web_search_call
+// 输出项，只是本服务的转换没有实现映射。说的是转换做了什么，不是协议
+// 没有什么。也刻意不写「客户端」：这条注记同时用于响应侧（受众是客户端）
+// 与请求侧诊断（受众是上游模型），用「接收端」才对两个方向都成立。
+//
+// 三条路径共用：流式编码器 Notes()、非流式 EncodeResponseLossy、
+// 请求侧 DescribeLossy。措辞只此一份，按说明检索流水的人不会把同一件事
+// 当成多种故障。
+func ServerToolDropNote(calls, results int) string {
+	var subject string
+	switch {
+	case calls > 0 && results > 0:
+		subject = fmt.Sprintf("%d server-side tool call(s) and %d web search result block(s)", calls, results)
+	case calls > 0:
+		subject = fmt.Sprintf("%d server-side tool call(s)", calls)
+	default:
+		subject = fmt.Sprintf("%d web search result block(s)", results)
+	}
+	return "dropped " + subject +
+		": this protocol's conversion emits no counterpart for Anthropic's hosted-tool blocks, so the receiving side sees neither which hosted search ran nor which pages it returned, and cannot replay either in a later turn"
 }
 
 // toolErrorPrefix 是工具结果失败态在无原生标记的协议上的表达。

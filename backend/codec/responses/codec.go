@@ -50,6 +50,10 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	if images, files := codec.CountResponseMedia(resp); images > 0 || files > 0 {
 		notes = append(notes, codec.MediaOutputDropNote(images, files))
 	}
+	// 托管工具块没有本族输出条目形态，编码器整块跳过：丢了要报出来。
+	if calls, results := codec.CountResponseServerTools(resp); calls > 0 || results > 0 {
+		notes = append(notes, codec.ServerToolDropNote(calls, results))
+	}
 	// 畸形工具参数：arguments 是字符串槽位，原文透传，报出不可安全执行。
 	notes = append(notes, codec.DescribeResponseToolArgsLoss(resp, false)...)
 	return body, codec.DedupeNotes(notes), nil

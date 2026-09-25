@@ -45,6 +45,12 @@ type streamEncoder struct {
 	// 一起推后。计数在 Notes() 收尾时报出。
 	droppedImages int
 	droppedFiles  int
+	// droppedServerCalls / droppedServerResults 被跳过的托管工具块数：
+	// 本族编码器没有为 Anthropic 的 server_tool_use /
+	// web_search_tool_result 输出任何对应 item，同上。两种块型分开计数，
+	// 注记只渲染非零的那半。
+	droppedServerCalls   int
+	droppedServerResults int
 	// badToolArgs 是关块时判定畸形的函数调用入参数（增量已发出、改写
 	// 不了，只能计数），Notes() 报出。
 	badToolArgs int
@@ -61,6 +67,9 @@ func (e *streamEncoder) Notes() []string {
 	notes := e.notes
 	if e.droppedImages > 0 || e.droppedFiles > 0 {
 		notes = append(notes, codec.MediaOutputDropNote(e.droppedImages, e.droppedFiles))
+	}
+	if e.droppedServerCalls > 0 || e.droppedServerResults > 0 {
+		notes = append(notes, codec.ServerToolDropNote(e.droppedServerCalls, e.droppedServerResults))
 	}
 	if e.badToolArgs > 0 {
 		notes = append(notes, ir.RawArgsPassNote(e.badToolArgs))
@@ -124,11 +133,19 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		case ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
 			e.droppedFiles++
 			return nil, nil
-		case ir.BlockServerToolUse, ir.BlockWebSearchToolResult:
-			// 服务端托管工具块没有本族输出形态：整块跳过，且不进 openBlock
-			// ——那会烧掉一个 output_index 把后续真块序号推后。记下索引，
-			// 后续查询串增量一并丢弃。损耗报出见 #61。
+		case ir.BlockServerToolUse:
+			// 服务端托管工具块没有本族输出形态（官方虽有 web_search_call
+			// item，本服务未实现映射）：整块跳过但计数，Notes() 报出。
+			// 且不进 openBlock——那会烧掉一个 output_index 把后续真块序号
+			// 推后。记下索引，后续查询串增量一并丢弃，否则会被 ensureOpen
+			// 补开成一个凭空的条目。
 			e.skipIdx[ev.Index] = true
+			e.droppedServerCalls++
+			return nil, nil
+		case ir.BlockWebSearchToolResult:
+			// 搜回来的页面同理：跳过但计数。
+			e.skipIdx[ev.Index] = true
+			e.droppedServerResults++
 			return nil, nil
 		}
 		return e.openBlock(ev.Index, kind, ev.Block)
@@ -631,6 +648,7 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 		case ir.BlockServerToolUse, ir.BlockWebSearchToolResult:
 			// 服务端托管工具块没有本族输出条目形态：整块跳过。落进 default
 			// 会硬报错，编成 message 条目则凭空多出一个空助手消息。
+			// 跳过，损耗由 EncodeResponseLossy 经 CountResponseServerTools 报出。
 			continue
 		default:
 			return nil, fmt.Errorf("responses: cannot encode block type %q", b.Type)
