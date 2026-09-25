@@ -123,6 +123,14 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 			notes["citations"] = fmt.Sprintf(
 				"dropped %d citation(s): upstream protocol has no slot for source annotations", n)
 		}
+	} else if name != ProtocolAnthropic {
+		// 有槽位，但槽位以 URL 为来源身份：Anthropic 的文档类引用只有
+		// document_index 与页/块/字符下标，装不进去。caps.Citations 是个
+		// 整族布尔量，看不见这种「逐条装不下」的损耗，必须单独数。
+		// anthropic 不报：五种形态它都装得下（同族往返走 Raw 原样带回）。
+		if n := ir.CountNonPortableCitations(req); n > 0 {
+			notes["citations"] = CitationDropNote(n)
+		}
 	}
 
 	if len(notes) == 0 {
@@ -663,6 +671,40 @@ func CountResponseServerTools(resp *ir.Response) (calls, results int) {
 		}
 	}
 	return calls, results
+}
+
+// CountResponseNonPortableCitations 数出响应里外族标注槽位装不下的引用条数
+// （用于非流式有损诊断）。与 CountResponseServerTools 同一路数：编码器
+// 逐条跳过之前先数出来，跳过才不是静默的。
+func CountResponseNonPortableCitations(resp *ir.Response) int {
+	if resp == nil {
+		return 0
+	}
+	n := 0
+	for _, b := range resp.Content {
+		n += CountNonPortableCitations(b.Citations)
+	}
+	return n
+}
+
+// CountNonPortableCitations 统计一批引用里带不出本族的条数。
+// Portable 判据见 ir.Citation：外族槽位以 URL 为来源身份。
+func CountNonPortableCitations(cs []ir.Citation) int {
+	n := 0
+	for _, c := range cs {
+		if !c.Portable() {
+			n++
+		}
+	}
+	return n
+}
+
+// CitationDropNote 文档类引用丢失注记：非流式扫描、流式编码器与请求侧诊断
+// 三条通道共用同一措辞，按说明检索流水的人不会把同一件事当成多种故障。
+// 引用的正文与文档标题属会话内容，不进注记。
+func CitationDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped %d document citation(s): this protocol identifies an annotation source by URL, and these citations point at a document index with page/block/character offsets instead, so the client cannot see which passage was cited", n)
 }
 
 // countRequestServerTools 数出请求历史里的托管工具块。计数刻意分开：

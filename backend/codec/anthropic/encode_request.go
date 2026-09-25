@@ -147,7 +147,16 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 	case ir.BlockText:
 		out.Type = blockText
 		out.Text = b.Text
-		out.Citations = encodeCitations(b.Text, b.Citations)
+		// 带 Raw 的原样带回、投影来的重建（见 citation.go），产物是逐条的
+		// 原文数组；wireBlock.Citations 是 RawMessage（document 块会拿同名键
+		// 承载配置对象，不能声明成数组），所以这里再包一层 Marshal。
+		if cs := encodeCitations(b.Text, b.Citations); len(cs) > 0 {
+			raw, err := json.Marshal(cs)
+			if err != nil {
+				return out, false, err
+			}
+			out.Citations = raw
+		}
 	case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
 		if b.Media == nil {
 			return out, false, fmt.Errorf("%s block without payload", b.Type)

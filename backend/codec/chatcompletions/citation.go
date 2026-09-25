@@ -63,17 +63,18 @@ func shiftCitations(cs []ir.Citation, prefix, own string) []ir.Citation {
 //
 // 只认 url_citation 形态：判别看子对象而不是 type 字符串，因为部分兼容端
 // 省略 type 却给了 url_citation。file_citation 等其他类型没有这个子对象，
-// 自然被跳过。空 URL 的条目由 DedupeCitations 丢掉。
+// 自然被跳过。Chat 的标注以 URL 为来源身份，没有 URL 的那条连自己协议里
+// 都无从渲染，收下只会往下游传一条空壳。
 func decodeAnnotations(as []annotation) []ir.Citation {
 	if len(as) == 0 {
 		return nil
 	}
 	out := make([]ir.Citation, 0, len(as))
 	for _, a := range as {
-		if a.URLCitation == nil {
+		uc := a.URLCitation
+		if uc == nil || uc.URL == "" {
 			continue
 		}
-		uc := a.URLCitation
 		out = append(out, ir.Citation{
 			URL:       uc.URL,
 			Title:     uc.Title,
@@ -90,12 +91,17 @@ func decodeAnnotations(as []annotation) []ir.Citation {
 // 与 Anthropic 不同，本协议允许无范围标注（start/end 为零值照发）：
 // 客户端拿 URL 与 cited_text 就能渲染来源，偏移量只影响高亮。
 // 所以定位不了范围时不丢条目，只在能解析时补出偏移量。
+// 没有 URL 的引用跳过：url_citation 以 URL 为来源身份，写一条空 url 的标注
+// 会让客户端渲染出一个跳不动的引用。丢弃条数由调用方计入损耗注记。
 func encodeAnnotations(text string, cs []ir.Citation) []annotation {
 	if len(cs) == 0 {
 		return nil
 	}
 	out := make([]annotation, 0, len(cs))
 	for _, c := range cs {
+		if !c.Portable() {
+			continue
+		}
 		uc := &urlCitation{
 			URL:       c.URL,
 			Title:     c.Title,

@@ -33,9 +33,9 @@ type streamEncoder struct {
 	// blockOrder 让 Finish 按开启顺序闭合，避免 map 遍历顺序不定
 	// 导致同样的输入产出不同的帧序。
 	blockOrder []int
-	// text 累积各块已下发的正文。citations_delta 必须带 start/end_char_index
-	// 且 cited_text 要在正文里，而引用到达时客户端手里的正文就是这里累积的
-	// 内容——用同一份文本回推，编出的偏移量客户端才对得上。
+	// text 累积各块已下发的正文。跨协议投影来的引用没有 Raw，编成
+	// web_search_result_location 时 cited_text 只能在正文上按范围反推，
+	// 而引用总在正文之后到达，所以必须逐块累积。
 	text      map[int]string
 	sentDelta bool
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
@@ -145,14 +145,14 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			return nil, nil
 		}
 		// 逐条编帧：本协议的 citations_delta 一帧只带一条引用。
-		// 无法在已下发正文里定位的条目由 encodeCitations 整条丢弃。
+		// 带 Raw 的原样转出，投影来的重建；cited_text 反推不出的条目
+		// 由 encodeCitations 整条丢弃。
 		var out [][]byte
-		for _, c := range encodeCitations(e.text[ev.Index], ev.Citations) {
-			cc := c
+		for _, raw := range encodeCitations(e.text[ev.Index], ev.Citations) {
 			frame, err := marshalFrame(evContentBlockDelta, streamEvent{
 				Type:  evContentBlockDelta,
 				Index: ev.Index,
-				Delta: &streamDelta{Type: deltaCitations, Citation: &cc},
+				Delta: &streamDelta{Type: deltaCitations, Citation: raw},
 			})
 			if err != nil {
 				return nil, err

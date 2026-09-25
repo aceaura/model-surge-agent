@@ -1,6 +1,9 @@
 package ir
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 // 正文夹具："明天有雨" 占 rune [6,10)。
 const citeFixture = "北京今天晴，明天有雨。"
@@ -80,11 +83,59 @@ func TestDedupeCitations(t *testing.T) {
 	}
 }
 
-// 空 URL 的条目指向不了任何来源，解码期就丢。
-func TestDedupeCitationsDropsEmptyURL(t *testing.T) {
-	got := DedupeCitations([]Citation{{URL: "", Start: 0, End: 1}, {Title: "无源"}})
-	if got != nil {
-		t.Errorf("want nil, got %+v", got)
+// 去重不承担「丢掉空 URL」的职责：Anthropic 的文档类引用（char_location 等）
+// 本来就没有 URL，靠 document_index 与页/块/字符下标定位。此前那一条规则让
+// 官方五种形态里的四种在解码后被静默清空，客户端看不到模型引了哪份文档。
+func TestDedupeCitationsKeepsURLLess(t *testing.T) {
+	out := DedupeCitations([]Citation{{CitedText: "x"}})
+	if len(out) != 1 {
+		t.Fatalf("空 URL 的引用被丢了：%+v", out)
+	}
+	if out := DedupeCitations(nil); out != nil {
+		t.Fatalf("空输入却返回了 %+v", out)
+	}
+}
+
+// 带 Raw 的按原文比：文档类引用的 URL 与范围可能全空，只靠投影字段区分会把
+// 「同一段文字引自两个不同文档」误判成重复而丢掉一条真实出处。
+func TestDedupeCitationsUsesRawAsKey(t *testing.T) {
+	out := DedupeCitations([]Citation{
+		{CitedText: "晴", Raw: json.RawMessage(`{"type":"char_location","document_index":0}`)},
+		{CitedText: "晴", Raw: json.RawMessage(`{"type":"char_location","document_index":0}`)},
+		{CitedText: "晴", Raw: json.RawMessage(`{"type":"char_location","document_index":1}`)},
+	})
+	if len(out) != 2 {
+		t.Fatalf("去重后 %d 条，want 2：%+v", len(out), out)
+	}
+}
+
+// Portable 判据：外族的标注槽位（Chat/Responses 的 url_citation）一律以 URL
+// 为来源身份，没有 URL 就无从表达。
+func TestCitationPortable(t *testing.T) {
+	if (Citation{CitedText: "x"}).Portable() {
+		t.Error("无 URL 却判为可跨协议")
+	}
+	if !(Citation{URL: "https://a"}).Portable() {
+		t.Error("有 URL 却判为不可跨协议")
+	}
+}
+
+// 计数覆盖多消息多块：诊断要报总条数，漏层会让影响面被低估。
+// 与 CountCitations 分开数，是因为三个外族「有标注槽位但装不下文档类引用」，
+// 整族布尔量看不见这种逐条损耗。
+func TestCountNonPortableCitations(t *testing.T) {
+	req := &Request{Messages: []Message{
+		{Role: RoleAssistant, Content: []Block{
+			{Type: BlockText, Text: "a", Citations: []Citation{
+				{URL: "https://a"}, {CitedText: "文档引用", WireType: "char_location"},
+			}},
+			{Type: BlockText, Text: "b", Citations: []Citation{{WireType: "page_location"}}},
+		}},
+		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "c",
+			Citations: []Citation{{URL: "https://d"}}}}},
+	}}
+	if n := CountNonPortableCitations(req); n != 2 {
+		t.Fatalf("CountNonPortableCitations = %d, want 2", n)
 	}
 }
 

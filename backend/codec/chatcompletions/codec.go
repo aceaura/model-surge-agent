@@ -57,6 +57,10 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	if calls, results := codec.CountResponseServerTools(resp); calls > 0 || results > 0 {
 		notes = append(notes, codec.ServerToolDropNote(calls, results))
 	}
+	// 文档类引用（没有 URL）装不进 url_citation：编码器逐条跳过，报出损耗。
+	if n := codec.CountResponseNonPortableCitations(resp); n > 0 {
+		notes = append(notes, codec.CitationDropNote(n))
+	}
 	// 畸形工具参数：arguments 是字符串槽位，原文透传，报出不可安全执行。
 	notes = append(notes, codec.DescribeResponseToolArgsLoss(resp, false)...)
 	return body, codec.DedupeNotes(notes), nil

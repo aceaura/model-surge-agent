@@ -75,6 +75,42 @@ func TestDiagnoseCitationCountsAll(t *testing.T) {
 	}
 }
 
+// 文档类引用（靠 document_index 与页/块/字符下标定位，没有 URL）在 chat /
+// responses 的标注槽位里装不下，必须逐条报损耗；带 URL 的引用照常静默保留。
+// anthropic 五种形态都装得下（同族往返走 Raw），全程不出注记。
+func TestDiagnoseNonPortableCitations(t *testing.T) {
+	req := &ir.Request{Model: "m", Messages: []ir.Message{{
+		Role: ir.RoleAssistant,
+		Content: []ir.Block{{Type: ir.BlockText, Text: "北京今天晴", Citations: []ir.Citation{
+			{URL: "https://w", Start: 0, End: 2},
+			{WireType: "char_location", CitedText: "晴", Start: 4, End: 5},
+			{WireType: "page_location", CitedText: "晴"},
+		}}},
+	}}}
+	for _, name := range codec.OutboundNames() {
+		oc, ok := codec.Outbound(name)
+		if !ok {
+			t.Fatalf("outbound %q not registered", name)
+		}
+		joined := strings.Join(codec.DescribeLossy(req, name, oc.Caps()), "\n")
+		switch name {
+		case codec.ProtocolAnthropic:
+			if strings.Contains(joined, "citation(s)") {
+				t.Errorf("anthropic carries all five citation types, must stay silent: %s", joined)
+			}
+		case codec.ProtocolGemini:
+			// 没有槽位：三条全丢，走整族计数而不是 Portable 判据。
+			if !strings.Contains(joined, "dropped 3 citation(s)") {
+				t.Errorf("gemini has no citation slot, want all 3 reported, got: %s", joined)
+			}
+		default:
+			if !strings.Contains(joined, "dropped 2 document citation(s)") {
+				t.Errorf("%s want the 2 non-portable ones reported, got: %s", name, joined)
+			}
+		}
+	}
+}
+
 // 没有引用时不出说明：恒定出现的注记会淹没真正丢了东西的那几条。
 func TestDiagnoseNoCitationNoNote(t *testing.T) {
 	req := &ir.Request{Model: "m", Messages: []ir.Message{

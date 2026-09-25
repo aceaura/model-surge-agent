@@ -3,118 +3,191 @@ package anthropic
 import (
 	"bytes"
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
+// 官方 union 五种形态的最小合法样本。字段集直接取自 Anthropic 官方 SDK 的
+// citation_*_location 类型（请求与响应两侧一致），不是从参考仓抄的——
+// 参考实现里有人自己发明过 url 字段写进 web_search_result_location，
+// 照抄会把伪造形状当成真相钉进测试。
+var fiveOfficialCitations = []string{
+	`{"type":"char_location","cited_text":"晴","document_index":0,"document_title":"天气报告",` +
+		`"start_char_index":4,"end_char_index":5,"file_id":"file_abc"}`,
+	`{"type":"page_location","cited_text":"晴","document_index":0,"document_title":"天气报告",` +
+		`"start_page_number":2,"end_page_number":3}`,
+	`{"type":"content_block_location","cited_text":"晴","document_index":1,` +
+		`"start_block_index":0,"end_block_index":1}`,
+	`{"type":"search_result_location","cited_text":"晴","search_result_index":2,"source":"https://s",` +
+		`"title":"搜索结果","start_block_index":0,"end_block_index":1}`,
+	`{"type":"web_search_result_location","url":"https://w","title":"T","cited_text":"晴",` +
+		`"encrypted_index":"idx1"}`,
+}
+
+func citationsArray() string { return "[" + strings.Join(fiveOfficialCitations, ",") + "]" }
+
 // 正文夹具："明天有雨" 占 rune [6,10)。
 const citeText = "北京今天晴，明天有雨。"
 
-func TestCitationsRoundTrip(t *testing.T) {
-	body := `{"model":"claude-x","max_tokens":16,"messages":[
-      {"role":"user","content":"天气如何"},
-      {"role":"assistant","content":[{"type":"text","text":"` + citeText + `","citations":[
-        {"type":"web_search_result_location","url":"https://wx.test/1","title":"天气",
-         "cited_text":"明天有雨","encrypted_index":"idx1",
-         "start_char_index":6,"end_char_index":10}]}]}]}`
-	req, err := DecodeRequest([]byte(body))
+func respBody(citations string) []byte {
+	return []byte(`{"id":"msg_1","model":"claude","role":"assistant","content":[
+		{"type":"text","text":"` + citeText + `","citations":` + citations + `}],
+		"stop_reason":"end_turn"}`)
+}
+
+// 官方五种形态解码后一条都不能少。此前整个数组只按 web_search_result_location
+// 一种形态解，另外四种没有 url 键，在 DedupeCitations 的「空 URL 就丢」里被
+// 静默清空——五种进去只剩一种出来，既没有错误也没有损耗注记，客户端看不到
+// 模型引了哪份文档的哪一段。
+func TestDecodeCitationsKeepsAllFiveOfficialTypes(t *testing.T) {
+	resp, err := DecodeResponse(respBody(citationsArray()))
 	if err != nil {
-		t.Fatalf("DecodeRequest: %v", err)
+		t.Fatal(err)
 	}
-	cs := req.Messages[1].Content[0].Citations
+	cs := resp.Content[0].Citations
+	if len(cs) != len(fiveOfficialCitations) {
+		t.Fatalf("引用条数 = %d，want %d：%+v", len(cs), len(fiveOfficialCitations), cs)
+	}
+	want := []struct {
+		wireType  string
+		url       string
+		title     string
+		portable  bool
+		hasRange  bool
+		encrypted string
+	}{
+		{"char_location", "", "天气报告", false, true, ""},
+		{"page_location", "", "天气报告", false, false, ""},
+		{"content_block_location", "", "", false, false, ""},
+		// search_result_location 没有 url 键，来源 URL 在 source 上：投影过去
+		// 才能跨族表达，否则它会被当成文档类引用一起丢。
+		{"search_result_location", "https://s", "搜索结果", true, false, ""},
+		{"web_search_result_location", "https://w", "T", true, false, "idx1"},
+	}
+	for i, w := range want {
+		c := cs[i]
+		if c.WireType != w.wireType {
+			t.Errorf("[%d] WireType = %q，want %q", i, c.WireType, w.wireType)
+		}
+		if c.URL != w.url {
+			t.Errorf("[%d] URL = %q，want %q", i, c.URL, w.url)
+		}
+		if c.Title != w.title {
+			t.Errorf("[%d] Title = %q，want %q（文档标题在 document_title 键上）", i, c.Title, w.title)
+		}
+		if c.CitedText != "晴" {
+			t.Errorf("[%d] CitedText = %q，want 晴", i, c.CitedText)
+		}
+		if c.Portable() != w.portable {
+			t.Errorf("[%d] Portable = %v，want %v", i, c.Portable(), w.portable)
+		}
+		if c.HasRange() != w.hasRange {
+			t.Errorf("[%d] HasRange = %v，want %v（[%d,%d)）", i, c.HasRange(), w.hasRange, c.Start, c.End)
+		}
+		if c.EncryptedIndex != w.encrypted {
+			t.Errorf("[%d] EncryptedIndex = %q，want %q", i, c.EncryptedIndex, w.encrypted)
+		}
+		if len(c.Raw) == 0 {
+			t.Errorf("[%d] Raw 为空：同族往返无从原样带回", i)
+		}
+	}
+}
+
+// 同族往返必须逐字还原：文档类引用的 document_index、页号、块下标、file_id
+// 在 IR 之外无处可放，逐字段重建等于伪造。原样带回是唯一无损做法。
+func TestCitationsRoundTripIsByteExact(t *testing.T) {
+	resp, err := DecodeResponse(respBody(citationsArray()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := EncodeResponse(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var probe struct {
+		Content []struct {
+			Citations []json.RawMessage `json:"citations"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(out, &probe); err != nil {
+		t.Fatal(err)
+	}
+	got := probe.Content[0].Citations
+	if len(got) != len(fiveOfficialCitations) {
+		t.Fatalf("编回引用条数 = %d，want %d：%s", len(got), len(fiveOfficialCitations), out)
+	}
+	for i, want := range fiveOfficialCitations {
+		if strings.TrimSpace(string(got[i])) != want {
+			t.Errorf("[%d] 编回不是原文：\n got %s\nwant %s", i, got[i], want)
+		}
+	}
+}
+
+// 请求侧历史消息里的引用同样要五种全留、原样带回：多轮对话回传时出处不能
+// 凭空消失，而 encrypted_index 丢了上游会拒绝续话。
+func TestDecodeRequestCitationsKeepsAllFiveTypes(t *testing.T) {
+	body := []byte(`{"model":"claude","max_tokens":16,"messages":[
+		{"role":"assistant","content":[{"type":"text","text":"北京今天晴","citations":` +
+		citationsArray() + `}]}]}`)
+	req, err := DecodeRequest(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := ir.CountCitations(req); n != len(fiveOfficialCitations) {
+		t.Fatalf("请求侧引用数 = %d，want %d", n, len(fiveOfficialCitations))
+	}
+	out, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range fiveOfficialCitations {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("请求编回丢了 %s：\n%s", want, out)
+		}
+	}
+}
+
+// 跨协议投影来的引用（没有 Raw）只能落进 web_search_result_location，且字段集
+// 必须严格照官方 schema。此前凭空多出 start_char_index / end_char_index——
+// 那两个键属 char_location，这一形态根本没有它们，按判别式校验的上游会当非法
+// 输入拒掉整个请求；而客户端定位靠的是 cited_text，索引本来就用不上。
+func TestEncodeSynthesizedCitationUsesOfficialFieldSet(t *testing.T) {
+	resp := &ir.Response{Content: []ir.Block{{Type: ir.BlockText, Text: "北京今天晴",
+		Citations: []ir.Citation{{URL: "https://w", Title: "T", CitedText: "晴", EncryptedIndex: "idx1"}}}}}
+	out, err := EncodeResponse(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var probe struct {
+		Content []struct {
+			Citations []map[string]any `json:"citations"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(out, &probe); err != nil {
+		t.Fatal(err)
+	}
+	cs := probe.Content[0].Citations
 	if len(cs) != 1 {
-		t.Fatalf("want 1 citation, got %+v", cs)
+		t.Fatalf("引用条数 = %d，want 1：%s", len(cs), out)
 	}
-	c := cs[0]
-	if c.URL != "https://wx.test/1" || c.Title != "天气" || c.CitedText != "明天有雨" ||
-		c.Start != 6 || c.End != 10 || c.EncryptedIndex != "idx1" {
-		t.Fatalf("citation decoded wrong: %+v", c)
+	keys := make([]string, 0, len(cs[0]))
+	for k := range cs[0] {
+		keys = append(keys, k)
 	}
-
-	raw, err := EncodeRequest(req)
-	if err != nil {
-		t.Fatalf("EncodeRequest: %v", err)
+	sort.Strings(keys)
+	want := []string{"cited_text", "encrypted_index", "title", "type", "url"}
+	if strings.Join(keys, ",") != strings.Join(want, ",") {
+		t.Errorf("字段集 = %v，want %v：%s", keys, want, out)
 	}
-	var w wireRequest
-	if err := json.Unmarshal(raw, &w); err != nil {
-		t.Fatalf("re-encoded body not decodable: %v", err)
-	}
-	var blocks []wireBlock
-	if err := json.Unmarshal(w.Messages[1].Content, &blocks); err != nil {
-		t.Fatalf("assistant content not a block array: %v", err)
-	}
-	if len(blocks) != 1 || len(blocks[0].Citations) != 1 {
-		t.Fatalf("citations lost on encode: %+v", blocks)
-	}
-	got := blocks[0].Citations[0]
-	if got.Type != "web_search_result_location" || got.URL != "https://wx.test/1" ||
-		got.CitedText != "明天有雨" || got.EncryptedIndex != "idx1" ||
-		got.StartCharIndex != 6 || got.EndCharIndex != 10 {
-		t.Fatalf("citation encoded wrong: %+v", got)
+	if cs[0]["type"] != "web_search_result_location" {
+		t.Errorf("type = %v，want web_search_result_location", cs[0]["type"])
 	}
 }
 
-// 偏移量键没有 omitempty：start=0 必须真的出现在 JSON 里，
-// 否则客户端把 0 和「没有偏移」混为一谈。
-func TestEncodeCitationsKeepsZeroStartInJSON(t *testing.T) {
-	out := encodeCitations("北京今天晴", []ir.Citation{{
-		URL: "https://wx.test/1", CitedText: "北京", Start: 0, End: 2,
-	}})
-	if len(out) != 1 {
-		t.Fatalf("want 1 citation, got %+v", out)
-	}
-	raw, err := json.Marshal(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(raw, []byte(`"start_char_index":0`)) {
-		t.Errorf("zero start missing from JSON: %s", raw)
-	}
-	if !bytes.Contains(raw, []byte(`"end_char_index":2`)) {
-		t.Errorf("end index missing from JSON: %s", raw)
-	}
-}
-
-func TestStreamEncodeCitationsKeepsZeroStartInJSON(t *testing.T) {
-	enc := newStreamEncoder()
-	if _, err := enc.Encode(ir.Event{Type: ir.EvBlockStart, Index: 0,
-		Block: &ir.Block{Type: ir.BlockText}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := enc.Encode(ir.Event{Type: ir.EvTextDelta, Index: 0, Text: "北京"}); err != nil {
-		t.Fatal(err)
-	}
-	frames, err := enc.Encode(ir.Event{Type: ir.EvCitation, Index: 0, Citations: []ir.Citation{{
-		URL: "https://wx.test/1", CitedText: "北京", Start: 0, End: 2,
-	}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(frames) != 1 {
-		t.Fatalf("want 1 frame, got %d", len(frames))
-	}
-	if !bytes.Contains(frames[0], []byte(`"start_char_index":0`)) {
-		t.Errorf("zero start missing from frame: %s", frames[0])
-	}
-}
-
-// 跨协议来的引用常常只有 cited_text：本协议要求偏移量，编码时回推。
-func TestEncodeCitationsBackfillsRange(t *testing.T) {
-	out := encodeCitations(citeText, []ir.Citation{{
-		URL: "https://wx.test/1", CitedText: "明天有雨",
-	}})
-	if len(out) != 1 {
-		t.Fatalf("want 1 citation, got %+v", out)
-	}
-	if out[0].StartCharIndex != 6 || out[0].EndCharIndex != 10 {
-		t.Errorf("range not backfilled: [%d,%d), want [6,10)",
-			out[0].StartCharIndex, out[0].EndCharIndex)
-	}
-}
-
-// 反向同理：只有偏移量没有 cited_text 时按范围切出原文。
+// 反向互推仍然成立：只有偏移量没有 cited_text 时按范围切出原文。
 func TestEncodeCitationsBackfillsCitedText(t *testing.T) {
 	out := encodeCitations("北京今天晴", []ir.Citation{{
 		URL: "https://wx.test/1", Start: 0, End: 2,
@@ -122,32 +195,39 @@ func TestEncodeCitationsBackfillsCitedText(t *testing.T) {
 	if len(out) != 1 {
 		t.Fatalf("want 1 citation, got %+v", out)
 	}
-	if out[0].CitedText != "北京" {
-		t.Errorf("cited_text not backfilled: %q, want 北京", out[0].CitedText)
+	if !bytes.Contains(out[0], []byte(`"cited_text":"北京"`)) {
+		t.Errorf("cited_text not backfilled: %s", out[0])
 	}
 }
 
-// 定位不了的条目整条丢弃：编出去就是上游 400 拒整轮，比丢一条标注更糟。
-func TestEncodeCitationsDropsUnresolvable(t *testing.T) {
-	cases := []struct {
-		name string
-		c    ir.Citation
-	}{
-		{"无范围无原文", ir.Citation{URL: "https://wx.test/1"}},
-		{"原文不在正文里", ir.Citation{URL: "https://wx.test/1", CitedText: "上海多云"}},
-		{"范围越界", ir.Citation{URL: "https://wx.test/1", Start: 100, End: 200}},
+// cited_text 反推不出来时整条丢弃：带空 cited_text 发出去上游会 400，
+// 丢一条引用好过整轮被拒。cited_text 已给但正文里找不到时**不**丢——
+// 官方这一形态不要求范围，上游拿 cited_text 自己定位。
+func TestEncodeCitationsDropsOnlyWhenCitedTextUnresolvable(t *testing.T) {
+	drops := map[string]ir.Citation{
+		"无范围无原文": {URL: "https://wx.test/1"},
+		"范围越界":   {URL: "https://wx.test/1", Start: 100, End: 200},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			out := encodeCitations(citeText, []ir.Citation{tc.c})
+	for name, c := range drops {
+		t.Run("丢弃/"+name, func(t *testing.T) {
+			out := encodeCitations(citeText, []ir.Citation{c})
 			if len(out) != 0 {
 				t.Fatalf("unresolvable citation must be dropped, got %+v", out)
 			}
 		})
 	}
-	// 请求体层面：整块丢空后 citations 键不得出现（omitempty 生效）。
+	t.Run("保留/原文不在正文里", func(t *testing.T) {
+		out := encodeCitations(citeText, []ir.Citation{{URL: "https://wx.test/1", CitedText: "上海多云"}})
+		if len(out) != 1 {
+			t.Fatalf("上游给了 cited_text 却被丢掉：%+v", out)
+		}
+		if !bytes.Contains(out[0], []byte(`"cited_text":"上海多云"`)) {
+			t.Errorf("cited_text 丢失：%s", out[0])
+		}
+	})
+	// 请求体层面：整块丢空后 citations 键不得出现。
 	raw, err := json.Marshal(wireBlock{Type: blockText, Text: citeText,
-		Citations: encodeCitations(citeText, []ir.Citation{{URL: "https://wx.test/1"}})})
+		Citations: marshalCitations(encodeCitations(citeText, []ir.Citation{{URL: "https://wx.test/1"}}))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,77 +236,132 @@ func TestEncodeCitationsDropsUnresolvable(t *testing.T) {
 	}
 }
 
-// URL 为空的条目在解码期就丢：它指向不了任何来源，留着只会污染聚合结果。
-func TestDecodeCitationsDropsEmptyURL(t *testing.T) {
-	out := decodeCitations([]citation{{URL: "", CitedText: "北京"}})
-	if out != nil {
-		t.Fatalf("want nil, got %+v", out)
+// marshalCitations 复刻 encodeBlock 的打包步骤，供键位层面的断言复用。
+func marshalCitations(cs []json.RawMessage) json.RawMessage {
+	if len(cs) == 0 {
+		return nil
 	}
+	raw, err := json.Marshal(cs)
+	if err != nil {
+		panic(err)
+	}
+	return raw
 }
 
+// 流式解码：citations_delta 要转成 EvCitation 并落在同一块序号上。
 func TestStreamDecodeCitationsDelta(t *testing.T) {
 	dec := newStreamDecoder()
 	got, err := dec.Feed(evContentBlockDelta,
 		`{"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":`+
-			`{"type":"web_search_result_location","url":"https://wx.test/1","title":"天气",`+
-			`"cited_text":"明天有雨","encrypted_index":"idx1","start_char_index":6,"end_char_index":10}}}`)
+			fiveOfficialCitations[4]+`}}`)
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
 	if len(got) != 1 || got[0].Type != ir.EvCitation {
 		t.Fatalf("want one EvCitation, got %+v", got)
 	}
+	if got[0].Index != 0 {
+		t.Errorf("块序号 = %d, want 0", got[0].Index)
+	}
 	cs := got[0].Citations
-	if len(cs) != 1 {
-		t.Fatalf("want 1 citation, got %+v", cs)
-	}
-	if cs[0].URL != "https://wx.test/1" || cs[0].CitedText != "明天有雨" ||
-		cs[0].Start != 6 || cs[0].End != 10 || cs[0].EncryptedIndex != "idx1" {
-		t.Fatalf("citation decoded wrong: %+v", cs[0])
+	if len(cs) != 1 || cs[0].URL != "https://w" || cs[0].EncryptedIndex != "idx1" {
+		t.Fatalf("引用内容不对：%+v", cs)
 	}
 }
 
-// citation 键缺失的畸形帧：静默跳过，不报错也不发零事件。
+// 流式帧里的文档类引用此前直接蒸发（Feed err=<nil> events=0）：解码按单一
+// 形态建模，没有 url 的那四种在去重里被清空。流式与非流式必须同一口径。
+func TestStreamDecodeCitationsDeltaKeepsDocumentTypes(t *testing.T) {
+	for _, raw := range fiveOfficialCitations[:4] {
+		t.Run(strings.Split(raw, `"`)[3], func(t *testing.T) {
+			dec := newStreamDecoder()
+			got, err := dec.Feed(evContentBlockDelta,
+				`{"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":`+raw+`}}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || len(got[0].Citations) != 1 {
+				t.Fatalf("事件 = %+v，want 一条 EvCitation 带一条引用", got)
+			}
+			if strings.TrimSpace(string(got[0].Citations[0].Raw)) != raw {
+				t.Errorf("Raw 不是原文：\n got %s\nwant %s", got[0].Citations[0].Raw, raw)
+			}
+		})
+	}
+}
+
+// citation 缺失或为 null 的畸形帧不得 panic，也不得产出空引用。
 func TestStreamDecodeCitationsDeltaNil(t *testing.T) {
-	dec := newStreamDecoder()
-	got, err := dec.Feed(evContentBlockDelta,
-		`{"type":"content_block_delta","index":0,"delta":{"type":"citations_delta"}}`)
-	if err != nil {
-		t.Fatalf("nil citation must not fail the stream: %v", err)
-	}
-	if got != nil {
-		t.Fatalf("want no events, got %+v", got)
-	}
-}
-
-// 流式编码用已下发的累积正文回推偏移量：客户端手里的正文就是这份，
-// 对不上等于标注指错位置。
-func TestStreamEncodeCitations(t *testing.T) {
-	enc := newStreamEncoder()
-	if _, err := enc.Encode(ir.Event{Type: ir.EvBlockStart, Index: 0,
-		Block: &ir.Block{Type: ir.BlockText}}); err != nil {
-		t.Fatal(err)
-	}
-	for _, chunk := range []string{"北京今天晴，", "明天有雨。"} {
-		if _, err := enc.Encode(ir.Event{Type: ir.EvTextDelta, Index: 0, Text: chunk}); err != nil {
-			t.Fatal(err)
+	for _, frame := range []string{
+		`{"type":"content_block_delta","index":0,"delta":{"type":"citations_delta"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":null}}`,
+	} {
+		dec := newStreamDecoder()
+		got, err := dec.Feed(evContentBlockDelta, frame)
+		if err != nil {
+			t.Fatalf("nil citation must not fail the stream: %v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("空 citation 却产出了事件：%+v", got)
 		}
 	}
-	frames, err := enc.Encode(ir.Event{Type: ir.EvCitation, Index: 0, Citations: []ir.Citation{{
-		URL: "https://wx.test/1", Title: "天气", CitedText: "明天有雨",
-	}}})
-	if err != nil {
-		t.Fatal(err)
+}
+
+// 流式编码：上游下发的引用原样转出去，不改写字段。
+func TestStreamEncodeCitationsPassesRawThrough(t *testing.T) {
+	enc := newStreamEncoder()
+	var out []byte
+	feed := func(ev ir.Event) {
+		frames, err := enc.Encode(ev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range frames {
+			out = append(out, f...)
+		}
 	}
-	if len(frames) != 1 {
-		t.Fatalf("want 1 frame, got %d", len(frames))
+	feed(ir.Event{Type: ir.EvBlockStart, Index: 0, Block: &ir.Block{Type: ir.BlockText}})
+	feed(ir.Event{Type: ir.EvTextDelta, Index: 0, Text: "北京今天晴"})
+	for _, raw := range fiveOfficialCitations {
+		feed(ir.Event{Type: ir.EvCitation, Index: 0,
+			Citations: []ir.Citation{{WireType: "x", Raw: json.RawMessage(raw)}}})
 	}
-	f := string(frames[0])
-	if !strings.Contains(f, `"type":"citations_delta"`) {
-		t.Errorf("wrong delta type: %s", f)
+	feed(ir.Event{Type: ir.EvBlockStop, Index: 0})
+	s := string(out)
+	for _, want := range fiveOfficialCitations {
+		if !strings.Contains(s, want) {
+			t.Errorf("流帧丢了 %s：\n%s", want, s)
+		}
 	}
-	if !strings.Contains(f, `"start_char_index":6`) || !strings.Contains(f, `"end_char_index":10`) {
-		t.Errorf("range not backfilled from accumulated text: %s", f)
+}
+
+// 流式编码跨协议投影来的引用：cited_text 用得上时照带，字段集照官方 schema，
+// 不再凭空补字符下标。
+func TestStreamEncodeSynthesizedCitation(t *testing.T) {
+	enc := newStreamEncoder()
+	var out []byte
+	for _, ev := range []ir.Event{
+		{Type: ir.EvBlockStart, Index: 0, Block: &ir.Block{Type: ir.BlockText}},
+		{Type: ir.EvTextDelta, Index: 0, Text: "北京今天晴，"},
+		{Type: ir.EvTextDelta, Index: 0, Text: "明天有雨。"},
+		{Type: ir.EvCitation, Index: 0, Citations: []ir.Citation{{URL: "https://w", CitedText: "明天有雨"}}},
+	} {
+		frames, err := enc.Encode(ev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range frames {
+			out = append(out, f...)
+		}
+	}
+	s := string(out)
+	for _, want := range []string{`"type":"citations_delta"`, `"url":"https://w"`, `"cited_text":"明天有雨"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("流缺 %s：\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "char_index") {
+		t.Errorf("凭空造出了字符下标：\n%s", s)
 	}
 }
 
@@ -252,12 +387,14 @@ func TestStreamEncodeCitationsOneFrameEach(t *testing.T) {
 	}
 }
 
-// 块没开时引用直接丢：为它凭空补开块等于伪造块结构，客户端会多出空文本块。
+// 块没开时的引用只能丢：凭它开新块会让客户端多出一个空文本块，
+// 而引用要贴的那段正文根本不在里面。
 func TestStreamEncodeCitationsWithoutOpenBlock(t *testing.T) {
 	enc := newStreamEncoder()
-	frames, err := enc.Encode(ir.Event{Type: ir.EvCitation, Index: 0, Citations: []ir.Citation{{
-		URL: "https://wx.test/1", CitedText: "明天有雨", Start: 6, End: 10,
-	}}})
+	// 引用自带原文与 Raw，不依赖正文反推：这样唯一能拦住它的就是「块未开」这道判断
+	frames, err := enc.Encode(ir.Event{Type: ir.EvCitation, Index: 0,
+		Citations: []ir.Citation{{URL: "https://w", CitedText: "x",
+			Raw: json.RawMessage(`{"type":"web_search_result_location","url":"https://w","cited_text":"x"}`)}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,38 +403,16 @@ func TestStreamEncodeCitationsWithoutOpenBlock(t *testing.T) {
 	}
 }
 
-// 历史以 assistant 起头时编码器会补一条占位 user 消息，引用块顺移到
-// messages[1]；偏移量 [0,1) 必须原样保留（零起点不得被当成缺失丢掉）。
-func TestDecodeRequestCitations(t *testing.T) {
-	body := `{"model":"claude-x","max_tokens":16,"messages":[
-      {"role":"assistant","content":[{"type":"text","text":"北京今天晴","citations":[
-        {"type":"web_search_result_location","url":"https://wx.test/1",
-         "cited_text":"北","start_char_index":0,"end_char_index":1}]}]},
-      {"role":"user","content":"继续"}]}`
-	req, err := DecodeRequest([]byte(body))
+// citations 键承载 {"enabled":bool} 配置对象时（document / search_result 块）
+// 不得当成引用数组解析——更不得让它炸掉整条 content 的解码。
+func TestDecodeCitationsIgnoresConfigObject(t *testing.T) {
+	body := []byte(`{"id":"m","model":"c","role":"assistant","content":[
+		{"type":"text","text":"晴","citations":{"enabled":true}}],"stop_reason":"end_turn"}`)
+	resp, err := DecodeResponse(body)
 	if err != nil {
-		t.Fatalf("DecodeRequest: %v", err)
-	}
-	raw, err := EncodeRequest(req)
-	if err != nil {
-		t.Fatalf("EncodeRequest: %v", err)
-	}
-	var w wireRequest
-	if err := json.Unmarshal(raw, &w); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.Messages) != 3 || w.Messages[0].Role != string(ir.RoleUser) {
-		t.Fatalf("want placeholder + 2 messages, got %+v", w.Messages)
-	}
-	var blocks []wireBlock
-	if err := json.Unmarshal(w.Messages[1].Content, &blocks); err != nil {
-		t.Fatal(err)
-	}
-	if len(blocks) != 1 || len(blocks[0].Citations) != 1 {
-		t.Fatalf("citations lost: %+v", blocks)
-	}
-	c := blocks[0].Citations[0]
-	if c.StartCharIndex != 0 || c.EndCharIndex != 1 || c.CitedText != "北" {
-		t.Fatalf("zero-start citation mangled: %+v", c)
+	if cs := resp.Content[0].Citations; cs != nil {
+		t.Fatalf("配置对象被当成引用：%+v", cs)
 	}
 }

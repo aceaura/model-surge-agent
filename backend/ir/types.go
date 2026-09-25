@@ -9,6 +9,8 @@
 // 在编码出请求体之后作用上去。
 package ir
 
+import "encoding/json"
+
 type Role string
 
 const (
@@ -102,10 +104,26 @@ type Citation struct {
 	// EncryptedIndex Anthropic 托管搜索回传时用的不透明游标。跨协议无对应槽位，
 	// 但同协议往返必须原样带回，否则上游拒绝续话。
 	EncryptedIndex string `json:"encrypted_index,omitempty"`
+	// WireType 来源协议自报的引用种类（Anthropic 的 char_location /
+	// page_location / content_block_location / search_result_location /
+	// web_search_result_location）。空 = 来源协议的标注只有一种形态
+	//（Chat/Responses 的 url_citation）。
+	WireType string `json:"wire_type,omitempty"`
+	// Raw 引用的原始块体。同族往返一律原样带回：官方 union 五种形态的字段
+	// 互不相同（文档类靠 document_index 与页号/块下标/file_id 定位，托管搜索
+	// 靠 url + encrypted_index），逐字段重建必造出上游不认的形状。
+	// 属会话内容，不进日志与诊断注记。
+	Raw json.RawMessage `json:"raw,omitempty"`
 }
 
 // HasRange 报告该引用是否带可用的正文范围。
 func (c Citation) HasRange() bool { return c.End > c.Start }
+
+// Portable 报告该引用能否落到外族协议的标注槽位上。Chat/Responses 的
+// url_citation 都以 URL 作为来源身份；Anthropic 的文档类引用只有
+// document_index 与页/块/字符下标，没有 URL，外族无从表达，只能干净丢弃
+// 并报损耗（同族往返走 Raw，不受影响）。
+func (c Citation) Portable() bool { return c.URL != "" }
 
 // ServerToolUse 服务端托管工具调用（如上游代执行的 web_search）。
 // 外形同 ToolUse，但结果由上游自己给出（BlockWebSearchToolResult），

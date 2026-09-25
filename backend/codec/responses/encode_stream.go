@@ -51,6 +51,9 @@ type streamEncoder struct {
 	// 注记只渲染非零的那半。
 	droppedServerCalls   int
 	droppedServerResults int
+	// droppedCites 带不出本族的引用条数（Anthropic 的文档类引用没有 URL，
+	// 而本族的标注槽位以 URL 为来源身份），同上。
+	droppedCites int
 	// badToolArgs 是关块时判定畸形的函数调用入参数（增量已发出、改写
 	// 不了，只能计数），Notes() 报出。
 	badToolArgs int
@@ -70,6 +73,9 @@ func (e *streamEncoder) Notes() []string {
 	}
 	if e.droppedServerCalls > 0 || e.droppedServerResults > 0 {
 		notes = append(notes, codec.ServerToolDropNote(e.droppedServerCalls, e.droppedServerResults))
+	}
+	if e.droppedCites > 0 {
+		notes = append(notes, codec.CitationDropNote(e.droppedCites))
 	}
 	if e.badToolArgs > 0 {
 		notes = append(notes, ir.RawArgsPassNote(e.badToolArgs))
@@ -184,6 +190,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		}
 		// 在已下发的正文上解析范围：客户端手里的正文就是它。
 		// 解析不了的条目照样发（本协议允许无范围标注），全空才不发。
+		// 没有 URL 的（Anthropic 文档类引用）装不进 url_citation，
+		// 计数后由 Notes() 报出。
+		e.droppedCites += codec.CountNonPortableCitations(ev.Citations)
 		as := encodeAnnotations(item.text, ev.Citations)
 		if len(as) == 0 {
 			return nil, nil

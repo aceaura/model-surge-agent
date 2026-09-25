@@ -130,10 +130,11 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 				SignatureFrom: Name,
 			}}, nil
 		case deltaCitations:
-			// 每帧只带一条引用；citation 键缺失（畸形上游）时 orEmptyCitation
-			// 给出零值，decodeCitations 会因 URL 为空把它丢掉，这里再判空
-			// 避免发一条零事件。
-			cs := decodeCitations([]citation{*orEmptyCitation(ev.Delta.Citation)})
+			// 每帧只带一条引用，原文收进 RawMessage：官方五种形态字段互不相同，
+			// 逐字段建模会在这一步就把文档类引用的定位字段丢掉。citation 键
+			// 缺失或为 null（畸形上游）时 citationsToIR 会跳过非对象元素，
+			// 这里再判空避免发一条零事件。
+			cs := citationsToIR([]json.RawMessage{ev.Delta.Citation})
 			if len(cs) == 0 {
 				return nil, nil
 			}
