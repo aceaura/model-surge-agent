@@ -15,12 +15,24 @@ type streamDecoder struct {
 	stopped bool
 	// notes 记录改写说明，走响应侧诊断通道。
 	notes []string
+	// droppedUnknown 不认识的事件型/delta 型计数：静默丢弃会让官方新增的
+	// 事件型（或代理上游乱发的类型）完全不可见，经 Notes() 报出。
+	droppedUnknown int
 }
 
 func newStreamDecoder() *streamDecoder { return &streamDecoder{} }
 
-// Notes 实现 codec.StreamNotes。
-func (d *streamDecoder) Notes() []string { return codec.DedupeNotes(d.notes) }
+// Notes 实现 codec.StreamNotes。未知帧计数在读取后排干：数字要的是整流结论，
+// 重复调用不该把同一批帧再报一遍。
+func (d *streamDecoder) Notes() []string {
+	notes := d.notes
+	if d.droppedUnknown > 0 {
+		notes = append(notes, fmt.Sprintf(
+			"ignored %d stream event(s) or delta(s) of a type this decoder does not know: the wire carried types outside the documented set, their payload was dropped because no mapping exists", d.droppedUnknown))
+		d.droppedUnknown = 0
+	}
+	return codec.DedupeNotes(notes)
+}
 
 func (d *streamDecoder) Feed(event, data string) ([]ir.Event, error) {
 	out, split, err := codec.FeedWithSplit(event, data, d.feedOne)
@@ -144,6 +156,8 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 			return []ir.Event{{Type: ir.EvCitation, Index: ev.Index, Citations: cs}}, nil
 		default:
 			// 未知 delta 类型：跳过而非报错，上游新增字段不该让整个流失败。
+			// 但计数经 Notes() 报出——静默丢弃会让新 delta 型完全不可见。
+			d.droppedUnknown++
 			return nil, nil
 		}
 
@@ -174,6 +188,9 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		return []ir.Event{{Type: ir.EvError, Err: convertError(0, ev.Error)}}, nil
 
 	default:
+		// 未知事件型：跳过而非报错（上游新增事件不该让整个流失败），
+		// 但计数经 Notes() 报出，静默丢弃会让新事件型完全不可见。
+		d.droppedUnknown++
 		return nil, nil
 	}
 }

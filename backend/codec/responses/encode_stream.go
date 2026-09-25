@@ -147,6 +147,11 @@ type openItem struct {
 	cites  []ir.Citation
 	callID string
 	name   string
+	// itemID 是同族上游给的条目原号（ToolUse/Thinking.ItemID）。非空时
+	// added/done 帧的 item.id 原样带回：store=true 链上上游按它索引，换成
+	// 空或合成号会让 item_reference 错指。为空（外族/上游没给）则不写 id，
+	// 与本仓既有行为一致——不凭空合成假号。
+	itemID string
 	// toolKind 记调用形态：custom 的入参是自由文本，增量事件名、终态
 	// 条目类型与入参校验都不同。只在 EvBlockStart 给了 ToolUse.Kind 时
 	// 置位（同族上游的 custom_tool_call 条目）。
@@ -411,6 +416,10 @@ func (e *streamEncoder) openBlock(index int, kind ir.BlockType, block *ir.Block)
 		item.callID = block.ToolUse.ID
 		item.name = block.ToolUse.Name
 		item.toolKind = block.ToolUse.Kind
+		item.itemID = block.ToolUse.ItemID
+	}
+	if block != nil && block.Thinking != nil {
+		item.itemID = block.Thinking.ItemID
 	}
 
 	out, err := e.frame(evOutputItemAdded, wireStreamEvent{
@@ -701,6 +710,8 @@ func backfillIndexFields(kind string, data []byte) ([]byte, error) {
 // wire 把条目状态转成 wire 形态。status 为空表示条目刚开启。
 func (i *openItem) wire(status string) *wireRespItem {
 	out := &wireRespItem{Status: status}
+	// 同族上游给过条目原号就带回；为空则 id 键缺席（omitempty），不合成假号。
+	out.ID = i.itemID
 	switch i.kind {
 	case ir.BlockToolUse:
 		if i.toolKind == ir.ToolCustom {
@@ -805,7 +816,7 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			if b.Thinking == nil {
 				continue
 			}
-			item := wireRespItem{Type: itemReasoning, Status: "completed"}
+			item := wireRespItem{Type: itemReasoning, Status: "completed", ID: b.Thinking.ItemID}
 			if b.Thinking.Text != "" {
 				item.Summary = []wireSummary{{Type: partSummaryText, Text: b.Thinking.Text}}
 			}
@@ -825,7 +836,7 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 				// 写回本族会多包一层 {"input":…}。
 				out.Output = append(out.Output, wireRespItem{
 					Type: itemCustomToolCall, Status: "completed",
-					CallID: b.ToolUse.ID, Name: b.ToolUse.Name,
+					ID: b.ToolUse.ItemID, CallID: b.ToolUse.ID, Name: b.ToolUse.Name,
 					Input: b.ToolUse.InputText,
 				})
 				continue
@@ -836,7 +847,7 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			args := b.ToolUse.Input
 			out.Output = append(out.Output, wireRespItem{
 				Type: itemFunctionCall, Status: "completed",
-				CallID: b.ToolUse.ID, Name: b.ToolUse.Name, Arguments: args,
+				ID: b.ToolUse.ItemID, CallID: b.ToolUse.ID, Name: b.ToolUse.Name, Arguments: args,
 			})
 		case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
 			// 助手回合的 output 条目没有附件形态：整块跳过，损耗由

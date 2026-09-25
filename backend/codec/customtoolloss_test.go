@@ -12,10 +12,11 @@ import (
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
-// responses 的 custom_tool_call（自由文本入参）跨族降级：三个外族只有
-// JSON 参数槽位，调用以 {"input":…} 投影落进去——内容不丢、形态降级，
+// responses 的 custom_tool_call（自由文本入参）跨族降级：anthropic/gemini
+// 只有 JSON 参数槽位，调用以 {"input":…} 投影落进去——内容不丢、形态降级，
 // 且投影恒为合法对象，不得触发「畸形参数」误报；降级由 DescribeLossy
-// 报出。responses 同族原样往返，报了就是谎报。
+// 报出。chat 有原生 custom 调用形态（type=custom），调用不降级，但结果
+// 没有原生条目形态仍降级。responses 同族原样往返，报了就是谎报。
 
 func customToolRequest() *ir.Request {
 	return &ir.Request{
@@ -71,9 +72,13 @@ func TestCustomToolCrossFamilyProjection(t *testing.T) {
 			if !strings.Contains(s, `{"input":"自由文本"}`) {
 				t.Errorf("gemini 没落投影: %s", s)
 			}
-		default: // chat_completions：arguments 是字符串槽位，投影被转义嵌入。
-			if !strings.Contains(s, `\"input\":\"自由文本\"`) {
-				t.Errorf("chat 没落投影: %s", s)
+		default: // chat_completions：type=custom 原生形态，自由文本原文回 custom 槽位。
+			if !strings.Contains(s, `"type":"custom"`) ||
+				!strings.Contains(s, `"custom":{"name":"grep","input":"自由文本"}`) {
+				t.Errorf("chat 没走原生 custom 形态: %s", s)
+			}
+			if strings.Contains(s, `\"input\":`) {
+				t.Errorf("chat 写回了投影: %s", s)
 			}
 		}
 	}
@@ -90,9 +95,15 @@ func TestCustomToolDowngradeNotes(t *testing.T) {
 			}
 			continue
 		}
-		if !strings.Contains(notes, "downgraded 1 custom tool call(s) to function calls") {
+		if name == codec.ProtocolChatCompletions {
+			// chat 有原生 custom 调用形态：调用不降级，报了就是谎报。
+			if strings.Contains(notes, "downgraded 1 custom tool call(s)") {
+				t.Errorf("chat 原生形态谎报调用降级: %q", notes)
+			}
+		} else if !strings.Contains(notes, "downgraded 1 custom tool call(s) to function calls") {
 			t.Errorf("%s 调用降级未报: %q", name, notes)
 		}
+		// 结果只有 responses 有原生条目形态：其余各族（含 chat）都降级。
 		if !strings.Contains(notes, "downgraded 1 custom tool output(s) to ordinary function results") {
 			t.Errorf("%s 结果降级未报: %q", name, notes)
 		}

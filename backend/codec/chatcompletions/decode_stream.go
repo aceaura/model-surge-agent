@@ -50,6 +50,10 @@ type streamDecoder struct {
 	// droppedLogprobs 携带 logprobs 载荷的 chunk 数：逐 token 概率没有 IR
 	// 槽位，内容带不走，计数经 Notes() 报出，不再静默。
 	droppedLogprobs int
+	// synthIDs 合成了 id 的工具调用数：上游自始至终没发 id，本服务合成
+	// 一个让另外三个协议能把结果回指到调用。这是改写不是透传，经 Notes()
+	// 报出，客户端有权知道历史里的 id 不是上游给的原号。
+	synthIDs int
 
 	// stopReason 与 usage 先攒着，到 [DONE] 才发一帧 message_delta。
 	// 本协议把它们分散在不同 chunk（finish_reason 一帧、usage 另一帧），
@@ -209,7 +213,15 @@ func (d *streamDecoder) decodeDelta(delta wireMessage) ([]ir.Event, error) {
 		}
 	}
 
-	calls, err := d.decodeToolCalls(delta.ToolCalls)
+	toolCalls := delta.ToolCalls
+	if len(toolCalls) == 0 && delta.FunctionCall != nil {
+		// 废弃流式形态（delta.function_call）：无 index/id 可带，Index 留 nil
+		// 让 decodeToolCalls 退回数组下标 0，name/arguments 碎片并入同一条
+		// pending 轨道照常聚合，id 在收尾由合成逻辑补齐并经 Notes() 报出。
+		// 丢弃等于让旧兼容上游的调用整段蒸发。
+		toolCalls = []wireToolCall{{Function: *delta.FunctionCall}}
+	}
+	calls, err := d.decodeToolCalls(toolCalls)
 	if err != nil {
 		return nil, err
 	}
@@ -320,6 +332,7 @@ func (d *streamDecoder) announce(slot *toolSlot) []ir.Event {
 
 func (d *streamDecoder) synthCallID(name string) string {
 	d.callCounter++
+	d.synthIDs++
 	return codec.SynthToolID(d.messageID, name, d.callCounter)
 }
 
@@ -399,6 +412,15 @@ func (d *streamDecoder) Notes() []string {
 	if d.droppedLogprobs > 0 {
 		notes = append(notes, codec.LogProbsDropNote(d.droppedLogprobs))
 		d.droppedLogprobs = 0
+	}
+	if d.synthIDs > 0 {
+		// 合成 id 是本服务的判断，客户端有权知道上游原样没给 id——
+		// 同一条对话里这个 id 再也不会出现第二次。
+		notes = append(notes, fmt.Sprintf(
+			"synthesized an id for %d streamed tool call(s) that ended without one: "+
+				"the upstream never sent an id, and the call would otherwise have been dropped",
+			d.synthIDs))
+		d.synthIDs = 0
 	}
 	return codec.DedupeNotes(notes)
 }
@@ -493,10 +515,14 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 			out.Content = append(out.Content, ir.Block{Type: ir.BlockRefusal, Text: m.Refusal})
 		}
 		for _, tc := range m.ToolCalls {
+			out.Content = append(out.Content, ir.Block{Type: ir.BlockToolUse, ToolUse: toolUseFromCall(tc)})
+		}
+		if len(m.ToolCalls) == 0 && m.FunctionCall != nil && m.FunctionCall.Name != "" {
+			// 废弃形态但载荷完整（判据同请求侧）：不读则旧兼容上游的
+			// 整段调用蒸发。
 			out.Content = append(out.Content, ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
-				ID:    tc.ID,
-				Name:  tc.Function.Name,
-				Input: tc.Function.Arguments,
+				Name:  m.FunctionCall.Name,
+				Input: m.FunctionCall.Arguments,
 			}})
 		}
 	}

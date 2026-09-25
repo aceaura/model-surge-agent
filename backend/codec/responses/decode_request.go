@@ -174,9 +174,9 @@ func appendItem(out *ir.Request, item wireItem) error {
 		case roleSystem, roleDeveloper:
 			out.System = append(out.System, blocks...)
 		case roleAssistant:
-			appendBlocks(out, ir.RoleAssistant, blocks)
+			appendBlocks(out, ir.RoleAssistant, blocks, item.ID)
 		default:
-			appendBlocks(out, ir.RoleUser, blocks)
+			appendBlocks(out, ir.RoleUser, blocks, item.ID)
 		}
 		return nil
 
@@ -184,11 +184,12 @@ func appendItem(out *ir.Request, item wireItem) error {
 		appendBlocks(out, ir.RoleAssistant, []ir.Block{{
 			Type: ir.BlockToolUse,
 			ToolUse: &ir.ToolUse{
-				ID:    item.CallID,
-				Name:  item.Name,
-				Input: item.Arguments,
+				ID:     item.CallID,
+				Name:   item.Name,
+				Input:  item.Arguments,
+				ItemID: item.ID,
 			},
-		}})
+		}}, "")
 		return nil
 
 	case itemCustomToolCall:
@@ -203,8 +204,9 @@ func appendItem(out *ir.Request, item wireItem) error {
 				Kind:      ir.ToolCustom,
 				InputText: item.Input,
 				Input:     string(ir.MarshalCustomInput(item.Input)),
+				ItemID:    item.ID,
 			},
-		}})
+		}}, "")
 		return nil
 
 	case itemCustomToolCallOutput:
@@ -221,7 +223,7 @@ func appendItem(out *ir.Request, item wireItem) error {
 				Content:   content,
 				IsError:   isErr,
 			},
-		}})
+		}}, "")
 		return nil
 
 	case itemFunctionCallOutput:
@@ -237,11 +239,17 @@ func appendItem(out *ir.Request, item wireItem) error {
 				Content:   content,
 				IsError:   isErr,
 			},
-		}})
+		}}, "")
 		return nil
 
 	case itemReasoning:
 		text := joinSummary(item.Summary)
+		if text == "" {
+			// summary 为空时正文可能在 content 数组（reasoning_text part，
+			// 官方 ResponseReasoningItem.Content）：不读等于把整条思考正文
+			// 静默丢掉，只剩 encrypted_content 签名。
+			text = decodeReasoningContent(item.Content)
+		}
 		if text == "" && item.EncryptedContent == "" {
 			return nil
 		}
@@ -253,8 +261,9 @@ func appendItem(out *ir.Request, item wireItem) error {
 				// 别家无法解读），复用 SignatureFrom 就不必给 IR 加字段。
 				Signature:     item.EncryptedContent,
 				SignatureFrom: Name,
+				ItemID:        item.ID,
 			},
-		}})
+		}}, "")
 		return nil
 
 	default:
@@ -277,21 +286,51 @@ func decodeToolCallOutput(raw json.RawMessage) []ir.Block {
 // appendBlocks 把块并进末尾消息，角色不同才新开一条。
 // 本协议一个逻辑回合会拆成多个条目，逐条建消息会产出大量单块消息，
 // 转成 Anthropic 时因为角色必须交替而被拒。
-func appendBlocks(out *ir.Request, role ir.Role, blocks []ir.Block) {
+//
+// itemID 只在 message 条目上有值：新建消息时落进 Message.ItemID，同族
+// 回写按原号带回（store=true 链上上游按它索引）。块条目（function_call /
+// reasoning 等）传空——它们的 id 落在各自的 ToolUse/Thinking.ItemID 上，
+// 而非所属消息。合并进已有消息时后到的 message 条目覆盖 ItemID：一个逻辑
+// 回合通常只有一个 message 条目，多个时以最后到达者为准。
+func appendBlocks(out *ir.Request, role ir.Role, blocks []ir.Block, itemID string) {
 	if len(blocks) == 0 {
 		return
 	}
 	if n := len(out.Messages); n > 0 && out.Messages[n-1].Role == role {
 		out.Messages[n-1].Content = append(out.Messages[n-1].Content, blocks...)
+		if itemID != "" {
+			out.Messages[n-1].ItemID = itemID
+		}
 		return
 	}
-	out.Messages = append(out.Messages, ir.Message{Role: role, Content: blocks})
+	out.Messages = append(out.Messages, ir.Message{Role: role, Content: blocks, ItemID: itemID})
 }
 
 func joinSummary(items []wireSummary) string {
 	var b strings.Builder
 	for _, s := range items {
 		b.WriteString(s.Text)
+	}
+	return b.String()
+}
+
+// decodeReasoningContent 解 reasoning 条目的 content 数组（reasoning_text
+// part，官方 ResponseReasoningItem.Content）。summary 为空时这是思考正文的
+// 唯一来源：不读它，只剩 encrypted_content 签名的条目会看不出模型想了什么。
+// 解析失败或没有 reasoning_text part 都返回空串，交由调用方按签名有无决定去留。
+func decodeReasoningContent(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var parts []wirePart
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, p := range parts {
+		if p.Type == partReasoningText {
+			b.WriteString(p.Text)
+		}
 	}
 	return b.String()
 }

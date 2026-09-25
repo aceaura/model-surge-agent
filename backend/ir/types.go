@@ -261,6 +261,11 @@ type ToolUse struct {
 	// 若干次调用各自的签名，它们分别对应上游的不同状态，混在一处就对不回去。
 	Signature     string `json:"signature,omitempty"`
 	SignatureFrom string `json:"signature_from,omitempty"`
+	// ItemID 是 Responses function_call/custom_tool_call 条目的 item id
+	// （fc_…/ctc_…），与 ID（call_id）是两个槽位。同族往返原样带回：
+	// store=true 时上游存的条目按它索引，换成合成 id 后 item_reference
+	// 全部错指。外族没有这一维，跨族丢弃由有损诊断报出。
+	ItemID string `json:"item_id,omitempty"`
 }
 
 // ToolKind 工具调用形态。零值等同 function，保持既有构造与黄金文件兼容。
@@ -319,6 +324,9 @@ type Thinking struct {
 	// 这类块出站时一律丢弃，留标记只为让有损诊断报得出来——
 	// 解码时直接丢掉的话，IR 里就再没有痕迹可查。
 	Redacted bool `json:"redacted,omitempty"`
+	// ItemID 是 Responses reasoning 条目的 item id（rs_…），同族往返原样
+	// 带回，理由同 ToolUse.ItemID。
+	ItemID string `json:"item_id,omitempty"`
 }
 
 type Message struct {
@@ -334,6 +342,9 @@ type Message struct {
 	// 跨族投影无处安放（与 user 维度的处置不同——那是会话级身份，
 	// 这是消息级身份）。
 	Name string `json:"name,omitempty"`
+	// ItemID 是 Responses message 条目的 item id（msg_…），同族往返原样
+	// 带回，理由同 ToolUse.ItemID。
+	ItemID string `json:"item_id,omitempty"`
 }
 
 type Tool struct {
@@ -857,7 +868,8 @@ func cloneMessages(in []Message) []Message {
 	}
 	out := make([]Message, len(in))
 	for i, m := range in {
-		out[i] = Message{Role: m.Role, Content: cloneBlocks(m.Content), AudioID: m.AudioID}
+		out[i] = Message{Role: m.Role, Content: cloneBlocks(m.Content),
+			AudioID: m.AudioID, Name: m.Name, ItemID: m.ItemID}
 	}
 	return out
 }

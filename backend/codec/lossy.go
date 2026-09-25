@@ -181,14 +181,15 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	}
 
 	// 历史里的 custom 工具调用与结果（responses 的 custom_tool_call /
-	// custom_tool_call_output 条目）：只有 responses 一族有自由文本入参的
-	// 条目形态。跨族出站时调用降级成普通函数调用（自由文本包成
-	// {"input":…} 投影落进 JSON 参数槽），结果降级成普通函数结果。
-	// 内容不丢但形态变了：上游模型看到的是一段包在对象里的文本，
-	// 不再是原生的自由文本调用。responses 同族原样往返，不报。
+	// custom_tool_call_output 条目）：自由文本入参的调用形态 responses 与
+	// chat（type=custom 原生 tool call）两族都有，跨到其余族时调用降级成
+	// 普通函数调用（自由文本包成 {"input":…} 投影落进 JSON 参数槽）。
+	// 结果只有 responses 有原生条目形态：chat 的 tool 消息没有自由文本
+	// 结果槽位，跨族时结果降级成普通函数结果。内容不丢但形态变了：
+	// 上游模型看到的是一段包在对象里的文本。同族原样往返，不报。
 	if name != ProtocolResponses {
 		if calls, results := countRequestCustomTools(req); calls > 0 || results > 0 {
-			if calls > 0 {
+			if calls > 0 && name != ProtocolChatCompletions {
 				notes["custom tool calls"] = CustomToolDowngradeNote(calls)
 			}
 			if results > 0 {

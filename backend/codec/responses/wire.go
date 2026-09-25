@@ -415,6 +415,9 @@ const (
 	partOutputText  = "output_text"
 	partRefusal     = "refusal"
 	partSummaryText = "summary_text"
+	// partReasoningText 是 reasoning 条目 content 数组里的思考正文 part
+	// （官方 ResponseReasoningItem.Content）。summary 为空时正文只在这里。
+	partReasoningText = "reasoning_text"
 )
 
 // 流帧类型名。
@@ -440,12 +443,16 @@ const (
 	evReasoningSummaryText     = "response.reasoning_summary_text.delta"
 	evReasoningSummaryTextDone = "response.reasoning_summary_text.done"
 	evReasoningSummaryPartDone = "response.reasoning_summary_part.done"
-	evReasoningTextDelta       = "response.reasoning_text.delta"
-	evReasoningTextDone        = "response.reasoning_text.done"
-	evCompleted                = "response.completed"
-	evIncomplete               = "response.incomplete"
-	evFailed                   = "response.failed"
-	evError                    = "error"
+	// evReasoningSummaryPartAdded 是推理摘要的 part 边界标记：正文随 .done
+	// 帧回补，.added 帧本身没有要转的内容，但它不是未知事件（计 unknown 会
+	// 把官方形状报成上游乱发），归进度帧账。
+	evReasoningSummaryPartAdded = "response.reasoning_summary_part.added"
+	evReasoningTextDelta        = "response.reasoning_text.delta"
+	evReasoningTextDone         = "response.reasoning_text.done"
+	evCompleted                 = "response.completed"
+	evIncomplete                = "response.incomplete"
+	evFailed                    = "response.failed"
+	evError                     = "error"
 )
 
 const (

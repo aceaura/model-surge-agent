@@ -521,12 +521,21 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			if b.ToolUse == nil {
 				continue
 			}
+			n := len(calls)
+			if b.ToolUse.Kind == ir.ToolCustom {
+				// 本族原生形态（type=custom，custom{name,input}），不再投影成
+				// 函数。官方 chat 协议认 custom 调用；投影会给自由文本入参
+				// 套一层 {"input":…} 的 JSON 壳。
+				calls = append(calls, wireToolCall{
+					Index: &n, ID: b.ToolUse.ID, Type: "custom",
+					Custom: &wireCustomCall{Name: b.ToolUse.Name, Input: b.ToolUse.InputText},
+				})
+				continue
+			}
 			// arguments 是字符串槽位：畸形原文照转义嵌入，响应体不会因此
 			// 非法。不清空成 {}——那会让客户端把参数损坏的调用当无参调用
 			// 存进历史，损耗由 EncodeResponseLossy 报出。
-			// ObjectInput：custom 形态给 {"input":…} 投影。
-			args := b.ToolUse.ObjectInput()
-			n := len(calls)
+			args := b.ToolUse.Input
 			calls = append(calls, wireToolCall{
 				Index: &n, ID: b.ToolUse.ID, Type: "function",
 				Function: wireFunctionCall{Name: b.ToolUse.Name, Arguments: args},

@@ -111,10 +111,14 @@ type wireMessage struct {
 	// Audio 的请求与响应形状不同：assistant 历史只允许 {id} 引用，完整
 	// 响应则必须带 id/data/expires_at/transcript 四键，因此留 RawMessage
 	// 延迟到各方向按专用 DTO（audioRef / audioOutput）解码。
-	Audio      json.RawMessage `json:"audio,omitempty"`
-	ToolCalls  []wireToolCall  `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	Name       string          `json:"name,omitempty"`
+	Audio     json.RawMessage `json:"audio,omitempty"`
+	ToolCalls []wireToolCall  `json:"tool_calls,omitempty"`
+	// FunctionCall 是 tool_calls 的废弃前身（官方标 Deprecated，请求助手
+	// 历史、流式 delta、非流式响应三处都还可能携它）。没有建模时
+	// json.Unmarshal 静默吞掉，旧兼容上游的函数调用整段蒸发。
+	FunctionCall *wireFunctionCall `json:"function_call,omitempty"`
+	ToolCallID   string            `json:"tool_call_id,omitempty"`
+	Name         string            `json:"name,omitempty"`
 	// Annotations 是助手消息正文的来源标注（web 搜索引用）。
 	// 偏移量相对于整条消息 content 的拼接文本。
 	Annotations []annotation `json:"annotations,omitempty"`
@@ -203,8 +207,33 @@ type wireFile struct {
 type wireToolCall struct {
 	Index    *int             `json:"index,omitempty"`
 	ID       string           `json:"id,omitempty"`
-	Type     string           `json:"type,omitempty"`
+	Type     string           `json:"type,omitempty"` // "function" / "custom"
 	Function wireFunctionCall `json:"function"`
+	// Custom 是 type=custom 的原生载荷（官方
+	// ChatCompletionMessageCustomToolCall：custom{name,input}）。没有它时
+	// 历史里的 custom 调用只能解成空名函数调用，客户端按函数名路由必然落空。
+	Custom *wireCustomCall `json:"custom,omitempty"`
+}
+
+// wireCustomCall 自定义工具调用载荷：入参是自由文本，不是 JSON 字符串。
+type wireCustomCall struct {
+	Name  string `json:"name"`
+	Input string `json:"input"`
+}
+
+// MarshalJSON custom 调用不带 function 键：值形态的 Function 没有 omitempty
+// 可言，序列化出 {"function":{}} 会被严格校验的上游拒掉。
+func (tc wireToolCall) MarshalJSON() ([]byte, error) {
+	if tc.Type == "custom" {
+		return json.Marshal(struct {
+			Index  *int            `json:"index,omitempty"`
+			ID     string          `json:"id,omitempty"`
+			Type   string          `json:"type"`
+			Custom *wireCustomCall `json:"custom"`
+		}{Index: tc.Index, ID: tc.ID, Type: tc.Type, Custom: tc.Custom})
+	}
+	type plain wireToolCall
+	return json.Marshal(plain(tc))
 }
 
 type wireFunctionCall struct {

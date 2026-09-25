@@ -204,6 +204,7 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 				// JSON 槽位，把 {"input":…} 投影写回去会多包一层。
 				callItems = append(callItems, wireItem{
 					Type:   itemCustomToolCall,
+					ID:     b.ToolUse.ItemID,
 					CallID: b.ToolUse.ID,
 					Name:   b.ToolUse.Name,
 					Input:  b.ToolUse.InputText,
@@ -217,6 +218,7 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 			args := b.ToolUse.Input
 			callItems = append(callItems, wireItem{
 				Type:      itemFunctionCall,
+				ID:        b.ToolUse.ItemID,
 				CallID:    b.ToolUse.ID,
 				Name:      b.ToolUse.Name,
 				Arguments: args,
@@ -250,7 +252,7 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 			if b.Thinking == nil || b.Thinking.Redacted {
 				continue
 			}
-			item := wireItem{Type: itemReasoning}
+			item := wireItem{Type: itemReasoning, ID: b.Thinking.ItemID}
 			if b.Thinking.Text != "" {
 				item.Summary = []wireSummary{{Type: partSummaryText, Text: b.Thinking.Text}}
 			}
@@ -282,7 +284,7 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, wireItem{Type: itemMessage, Role: string(m.Role), Content: content})
+		out = append(out, wireItem{Type: itemMessage, Role: string(m.Role), Content: content, ID: m.ItemID})
 	}
 	out = append(out, callItems...)
 	if len(out) == start && len(m.Content) > 0 {
@@ -297,7 +299,7 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, wireItem{Type: itemMessage, Role: string(m.Role), Content: content})
+		out = append(out, wireItem{Type: itemMessage, Role: string(m.Role), Content: content, ID: m.ItemID})
 	}
 	return out, nil
 }

@@ -207,10 +207,15 @@ func appendMessage(out *ir.Request, m wireMessage) error {
 			}}, blocks...)
 		}
 		for _, tc := range m.ToolCalls {
+			blocks = append(blocks, ir.Block{Type: ir.BlockToolUse, ToolUse: toolUseFromCall(tc)})
+		}
+		if len(m.ToolCalls) == 0 && m.FunctionCall != nil && m.FunctionCall.Name != "" {
+			// 废弃形态但载荷完整：name+arguments 直接进 IR（无 id 可带）。
+			// 不读则旧兼容上游的函数调用整段蒸发。tool_calls 同在时以
+			// tool_calls 为准，两槽位不重复进 IR。
 			blocks = append(blocks, ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
-				ID:    tc.ID,
-				Name:  tc.Function.Name,
-				Input: tc.Function.Arguments,
+				Name:  m.FunctionCall.Name,
+				Input: m.FunctionCall.Arguments,
 			}})
 		}
 		msg := ir.Message{Role: ir.RoleAssistant, Content: blocks, Name: m.Name}
@@ -245,6 +250,29 @@ func onlyToolResults(blocks []ir.Block) bool {
 		}
 	}
 	return len(blocks) > 0
+}
+
+// toolUseFromCall 把 wire 工具调用转成 IR。type=custom 是本族原生形态
+// （官方 ChatCompletionMessageCustomToolCall）：此前只读 function 槽位，
+// custom 调用被伪造成空名函数调用，客户端按函数名路由必然落空。custom 的
+// 自由文本入参进 InputText，Input 同时放一份 {"input":…} 投影——外族协议
+// 只有 JSON 参数槽位，投影让跨族编码无需知道 Kind 就能降级出合法形状。
+func toolUseFromCall(tc wireToolCall) *ir.ToolUse {
+	if tc.Type == "custom" && tc.Custom != nil {
+		t := &ir.ToolUse{
+			ID:        tc.ID,
+			Name:      tc.Custom.Name,
+			Kind:      ir.ToolCustom,
+			InputText: tc.Custom.Input,
+		}
+		t.Input = string(ir.MarshalCustomInput(t.InputText))
+		return t
+	}
+	return &ir.ToolUse{
+		ID:    tc.ID,
+		Name:  tc.Function.Name,
+		Input: tc.Function.Arguments,
+	}
 }
 
 // decodeContent 认字符串、parts 数组与 null 三种形态。

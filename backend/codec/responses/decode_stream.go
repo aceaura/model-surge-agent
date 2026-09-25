@@ -310,6 +310,13 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		return []ir.Event{{Type: ir.EvError,
 			Err: streamError(ev, "upstream stream error")}}, nil
 
+	case evReasoningSummaryPartAdded:
+		// 推理摘要 part 边界标记：正文随 reasoning_summary_part.done 回补，
+		// 本帧没有要转的内容。它是官方事件，计 unknown 会把正常形状报成
+		// 上游乱发，归进度帧账。
+		d.droppedProgress++
+		return nil, nil
+
 	default:
 		// response.queued 与托管调用的进度事件（*_call.* 的
 		// in_progress/searching/completed、partial_image、mcp_call_arguments
@@ -359,8 +366,9 @@ func (d *streamDecoder) itemAdded(ev wireStreamEvent) ([]ir.Event, error) {
 			Type:  ir.EvBlockStart,
 			Index: idx,
 			Block: &ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
-				ID:   ev.Item.CallID,
-				Name: ev.Item.Name,
+				ID:     ev.Item.CallID,
+				Name:   ev.Item.Name,
+				ItemID: ev.Item.ID,
 			}},
 		})
 		// 有实现在开启帧就给出完整 arguments 且不再发增量，当一次 delta 发出。
@@ -382,9 +390,10 @@ func (d *streamDecoder) itemAdded(ev wireStreamEvent) ([]ir.Event, error) {
 			Type:  ir.EvBlockStart,
 			Index: idx,
 			Block: &ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
-				ID:   ev.Item.CallID,
-				Name: ev.Item.Name,
-				Kind: ir.ToolCustom,
+				ID:     ev.Item.CallID,
+				Name:   ev.Item.Name,
+				Kind:   ir.ToolCustom,
+				ItemID: ev.Item.ID,
 			}},
 		})
 		// 开启帧直接带全量 input 的实现同 function_call：当一次 delta 发出。
@@ -399,7 +408,7 @@ func (d *streamDecoder) itemAdded(ev wireStreamEvent) ([]ir.Event, error) {
 			return out, nil
 		}
 		idx := d.allocate(key)
-		block := ir.Block{Type: ir.BlockThinking, Thinking: &ir.Thinking{SignatureFrom: Name}}
+		block := ir.Block{Type: ir.BlockThinking, Thinking: &ir.Thinking{SignatureFrom: Name, ItemID: ev.Item.ID}}
 		if ev.Item.EncryptedContent != "" {
 			block.Thinking.Signature = ev.Item.EncryptedContent
 			d.rememberSig(key, ev.Item.EncryptedContent)
@@ -438,8 +447,13 @@ func (d *streamDecoder) itemDone(ev wireStreamEvent) []ir.Event {
 		case itemReasoning:
 			// 摘要快照只在 item.done 里：有的网关不发任何 reasoning_* 终止帧。
 			// 回补必须排在下面的签名增量之前，思考正文才不会落到签名后面。
+			// summary 为空时正文在 content 数组（reasoning_text），双路径兜底。
+			text := joinSummary(ev.Item.Summary)
+			if text == "" {
+				text = decodeReasoningContent(ev.Item.Content)
+			}
 			out = append(out, d.backfill(reasoning, ir.BlockThinking,
-				joinSummary(ev.Item.Summary), ir.EvThinkingDelta)...)
+				text, ir.EvThinkingDelta)...)
 		default:
 			// 托管输出项（web_search_call / file_search_call 等）与未来的
 			// 新条目类型：本变换没有映射，整项不可见。在 done 帧计数（每个
@@ -784,9 +798,10 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 			out.Content = append(out.Content, blocks...)
 		case itemFunctionCall:
 			out.Content = append(out.Content, ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
-				ID:    item.CallID,
-				Name:  item.Name,
-				Input: item.Arguments,
+				ID:     item.CallID,
+				Name:   item.Name,
+				Input:  item.Arguments,
+				ItemID: item.ID,
 			}})
 		case itemCustomToolCall:
 			// 自由文本入参原文进 InputText，Input 放 {"input":…} 投影，
@@ -797,12 +812,20 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 				Kind:      ir.ToolCustom,
 				InputText: item.Input,
 				Input:     string(ir.MarshalCustomInput(item.Input)),
+				ItemID:    item.ID,
 			}})
 		case itemReasoning:
+			text := joinSummary(item.Summary)
+			if text == "" {
+				// summary 为空时正文在 content 数组（reasoning_text）：
+				// 双路径兜底，不读整条思考正文静默丢掉。
+				text = decodeReasoningContent(item.Content)
+			}
 			out.Content = append(out.Content, ir.Block{Type: ir.BlockThinking, Thinking: &ir.Thinking{
-				Text:          joinSummary(item.Summary),
+				Text:          text,
 				Signature:     item.EncryptedContent,
 				SignatureFrom: Name,
+				ItemID:        item.ID,
 			}})
 		default:
 			// 托管输出项与未来的新条目类型：没有映射，整项丢弃并计数，
