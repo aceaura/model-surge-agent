@@ -1181,6 +1181,70 @@ func DescribeResponseCacheDetailsLoss(resp *ir.Response, name string) []string {
 	return []string{CacheCreationDetailsDropNote()}
 }
 
+// LogProbsDropNote 响应侧对数概率载荷丢弃注记：IR 响应模型没有逐 token
+// 概率槽位（请求侧开关可贯通，算出来的内容带不走）。只探测计数、不建模
+// 内容：概率数组体积与 token 数成正比，逐条留存会把流水撑爆，而它的用途
+// 是客户端本地分析，代理侧只需要让「给了但没带过去」可见。
+func LogProbsDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped %d logprobs payload(s): per-token log probabilities have no representation in the internal response model, only the generated content is preserved", n)
+}
+
+// UsageDetailDropNote usage 细分维度跨族丢弃注记（聚合 token 总量不丢）。
+func UsageDetailDropNote(dims []string) string {
+	return "dropped usage detail(s) (" + strings.Join(dims, ", ") +
+		"): this protocol's usage has no field for them; aggregate token totals remain preserved"
+}
+
+// UsageDropDims 算出把 u 编码进 protoName 家族时会被丢掉的 usage 细分维度名。
+// 流式编码器的 Notes() 与非流式 EncodeResponseLossy 共用同一判据，保证
+// 同一响应按 stream=true/false 请求报出的损耗一致。
+//
+// 细分维度的原生槽位：服务端托管工具执行次数与推理区域只有 anthropic 有；
+// 音频与预测加速 token 只有 chat 有。与 CacheWriteDetailsKnown 的门控不同，
+// 这六位不需要「明细已知」标记：非零值本身就是上游给过的证据。
+func UsageDropDims(u *ir.Usage, protoName string) []string {
+	if u == nil {
+		return nil
+	}
+	var dims []string
+	if protoName != ProtocolAnthropic {
+		if u.WebSearchRequests > 0 {
+			dims = append(dims, "web search request count")
+		}
+		if u.WebFetchRequests > 0 {
+			dims = append(dims, "web fetch request count")
+		}
+		if u.InferenceGeo != "" {
+			dims = append(dims, "inference geo")
+		}
+	}
+	if protoName != ProtocolChatCompletions {
+		if u.PromptAudioTokens > 0 {
+			dims = append(dims, "prompt audio tokens")
+		}
+		if u.CompletionAudioTokens > 0 {
+			dims = append(dims, "completion audio tokens")
+		}
+		if u.AcceptedPredictionTokens > 0 || u.RejectedPredictionTokens > 0 {
+			dims = append(dims, "prediction tokens")
+		}
+	}
+	return dims
+}
+
+// DescribeResponseUsageDetailsLoss 非流式 EncodeResponseLossy 报 usage
+// 细分维度损耗，判据与流式编码器 Notes() 同源（UsageDropDims）。
+func DescribeResponseUsageDetailsLoss(resp *ir.Response, name string) []string {
+	if resp == nil {
+		return nil
+	}
+	if dims := UsageDropDims(&resp.Usage, name); len(dims) > 0 {
+		return []string{UsageDetailDropNote(dims)}
+	}
+	return nil
+}
+
 // ServerToolDropNote 服务端托管工具块丢失注记。server_tool_use 与
 // web_search_tool_result 是**有 IR 块型**的，三个外族编码器都没有为它们
 // 输出任何对应形态：整块消失且不计数时，接收端既看不到网关代执行了哪次

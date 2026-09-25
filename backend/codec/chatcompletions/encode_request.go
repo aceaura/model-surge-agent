@@ -250,7 +250,8 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 		m.AudioID == "" && refusal.Len() == 0 {
 		return out, nil
 	}
-	msg := wireMessage{Role: string(m.Role), ToolCalls: calls, ReasoningContent: thinking.String()}
+	msg := wireMessage{Role: string(m.Role), Name: m.Name, ToolCalls: calls,
+		ReasoningContent: thinking.String()}
 	// annotations 是助手消息专属槽位：历史里的用户消息即使带了引用
 	// （跨协议转换的罕见形态）也不写，写出去是非法的消息形状。
 	if m.Role == ir.RoleAssistant {

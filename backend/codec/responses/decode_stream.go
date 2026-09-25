@@ -54,6 +54,19 @@ type streamDecoder struct {
 	//（web_search_call 之类）。只在收尾时生成一条注记：数字要的是整流
 	// 的结论，逐帧生成会让每帧数字不同、去重挡不住。
 	hostedItems int
+	// droppedProgress 被忽略的托管调用进度帧数（*_call.* 的
+	// in_progress/searching/completed、partial_image、mcp_call_arguments 与
+	// code_interpreter 的增量等）：终态内容随 output_item.done 完整到达，
+	// 进度帧本身没有 IR 事件对应物，同族转发也只能丢——计数经 Notes()
+	// 报出，不再静默。累计口径与 hostedItems 相同。
+	droppedProgress int
+	// droppedUnknown 本仓不认识的事件型计数（上游新增事件、畸形 type 等）：
+	// 与进度帧分账——前者是「已知但无对应物的过程信号」，这里是「解码器
+	// 连语义都不知道的帧」，混在一起会让上游新能力静默蒸发看不出来。
+	droppedUnknown int
+	// droppedLogprobs 携带 logprobs 的 output_text part 数：逐 token 概率
+	// 没有 IR 槽位，计数经 Notes() 报出。
+	droppedLogprobs int
 }
 
 // slot 把「两级序号构成的键」绑到分配给它的 IR 块索引。
@@ -80,6 +93,20 @@ func (d *streamDecoder) Notes() []string {
 		notes = append(notes, codec.HostedOutputItemsNote(d.hostedItems))
 		d.hostedItems = 0
 	}
+	if d.droppedProgress > 0 {
+		notes = append(notes, fmt.Sprintf(
+			"ignored %d hosted-call progress frame(s): terminal content still arrives with each item's done frame, only the progress signal itself has no counterpart in this conversion", d.droppedProgress))
+		d.droppedProgress = 0
+	}
+	if d.droppedUnknown > 0 {
+		notes = append(notes, fmt.Sprintf(
+			"ignored %d stream event(s) of a type this decoder does not know: the upstream sent event types outside the documented set, their payload was dropped because no mapping exists", d.droppedUnknown))
+		d.droppedUnknown = 0
+	}
+	if d.droppedLogprobs > 0 {
+		notes = append(notes, codec.LogProbsDropNote(d.droppedLogprobs))
+		d.droppedLogprobs = 0
+	}
 	return codec.DedupeNotes(notes)
 }
 
@@ -89,6 +116,19 @@ func (d *streamDecoder) Feed(event, data string) ([]ir.Event, error) {
 		d.notes = append(d.notes, codec.MultipleJSONDocsNote)
 	}
 	return out, err
+}
+
+// isProgressEvent 已知但无 IR 对应物的进度信号：response.queued、
+// 托管调用的生命周期帧（*_call.in_progress/searching/completed 等）与它们的
+// 增量帧（mcp_call_arguments.*、code_interpreter_call_code.*）、
+// mcp_list_tools.* 与 partial_image。终态内容都随 output_item.done 到达。
+// response.created/in_progress 不在此列：本仓拿它们兜底开启消息。
+func isProgressEvent(typ string) bool {
+	if typ == "response.queued" {
+		return true
+	}
+	return strings.Contains(typ, "_call.") || strings.Contains(typ, "_call_") ||
+		strings.Contains(typ, "_list_tools.")
 }
 
 func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
@@ -271,6 +311,16 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 			Err: streamError(ev, "upstream stream error")}}, nil
 
 	default:
+		// response.queued 与托管调用的进度事件（*_call.* 的
+		// in_progress/searching/completed、partial_image、mcp_call_arguments
+		// 与 code_interpreter_call_code 的增量）没有 IR 事件对应物：终态
+		// 内容随 done 帧完整到达，进度帧只是过程信号。忽略但分类计数——
+		// 同族转发丢帧与遇到本仓不认识的新事件型，都经 Notes() 报出。
+		if isProgressEvent(kind) {
+			d.droppedProgress++
+		} else {
+			d.droppedUnknown++
+		}
 		return nil, nil
 	}
 }
@@ -523,6 +573,10 @@ func (d *streamDecoder) completeItemParts(oi int, raw json.RawMessage) []ir.Even
 	for n := range parts {
 		switch parts[n].Type {
 		case partOutputText, partRefusal, "":
+			// 逐 token 概率没有 IR 槽位：只探测计数、经 Notes() 报出。
+			if len(parts[n].LogProbs) > 0 && string(parts[n].LogProbs) != "null" {
+				d.droppedLogprobs++
+			}
 			kind := ir.BlockText
 			if parts[n].Type == partRefusal {
 				kind = ir.BlockRefusal
@@ -715,9 +769,13 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 		out.Usage = convertUsage(*w.Usage)
 	}
 	hosted := 0
+	logprobs := 0
 	for _, item := range w.Output {
 		switch item.Type {
 		case itemMessage:
+			// 逐 token 概率没有 IR 槽位：只探测计数、经注记报出，
+			// 判据与流式 completeItemParts 相同。
+			logprobs += countLogprobsParts(item.Content)
 			blocks, err := decodeContent(item.Content)
 			if err != nil {
 				return nil, nil, ir.NewError(ir.ErrUpstream, 0, "",
@@ -758,7 +816,30 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	if hosted > 0 {
 		notes = append(notes, codec.HostedOutputItemsNote(hosted))
 	}
+	if logprobs > 0 {
+		notes = append(notes, codec.LogProbsDropNote(logprobs))
+	}
 	return out, notes, nil
+}
+
+// countLogprobsParts 数 content 数组里带 logprobs 载荷的 part 数（逐 token
+// 概率没有 IR 槽位，只探测计数）。解析失败按零计：内容解码由调用方负责，
+// 这里不因同一份原文报两次错。
+func countLogprobsParts(raw json.RawMessage) int {
+	if len(raw) == 0 {
+		return 0
+	}
+	var parts []wirePart
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return 0
+	}
+	n := 0
+	for _, p := range parts {
+		if len(p.LogProbs) > 0 && string(p.LogProbs) != "null" {
+			n++
+		}
+	}
+	return n
 }
 
 func DecodeError(status int, header http.Header, body []byte) *ir.Error {

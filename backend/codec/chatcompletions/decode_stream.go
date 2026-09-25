@@ -47,6 +47,9 @@ type streamDecoder struct {
 	// fingerprint 后端配置指纹：与档位同样的到达规律（chunk 顶层，可能
 	// 晚于首帧），随首帧与收尾帧两处交付。
 	fingerprint string
+	// droppedLogprobs 携带 logprobs 载荷的 chunk 数：逐 token 概率没有 IR
+	// 槽位，内容带不走，计数经 Notes() 报出，不再静默。
+	droppedLogprobs int
 
 	// stopReason 与 usage 先攒着，到 [DONE] 才发一帧 message_delta。
 	// 本协议把它们分散在不同 chunk（finish_reason 一帧、usage 另一帧），
@@ -138,6 +141,11 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 				return nil, err
 			}
 			out = append(out, events...)
+		}
+		// 逐 token 概率没有 IR 槽位，内容带不走：计数经 Notes() 报出。
+		// 显式 null 与缺省同义，不算载荷。
+		if len(choice.LogProbs) > 0 && string(choice.LogProbs) != "null" {
+			d.droppedLogprobs++
 		}
 		if choice.FinishReason != "" {
 			d.stopReason = convertFinishReason(choice.FinishReason)
@@ -388,6 +396,10 @@ func (d *streamDecoder) Notes() []string {
 	if d.maxCandidate > 0 {
 		notes = append(notes, codec.DroppedCandidatesNote(d.maxCandidate))
 	}
+	if d.droppedLogprobs > 0 {
+		notes = append(notes, codec.LogProbsDropNote(d.droppedLogprobs))
+		d.droppedLogprobs = 0
+	}
 	return codec.DedupeNotes(notes)
 }
 
@@ -438,12 +450,17 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 		out.Usage = convertUsage(*w.Usage)
 	}
 	maxCandidate := 0
+	logprobs := 0
 	for _, choice := range w.Choices {
 		if choice.Index != 0 || choice.Message == nil {
 			if choice.Index > maxCandidate {
 				maxCandidate = choice.Index
 			}
 			continue
+		}
+		// 逐 token 概率没有 IR 槽位：只探测计数、经注记报出。
+		if len(choice.LogProbs) > 0 && string(choice.LogProbs) != "null" {
+			logprobs++
 		}
 		out.StopReason = convertFinishReason(choice.FinishReason)
 		m := *choice.Message
@@ -486,6 +503,9 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	var notes []string
 	if maxCandidate > 0 {
 		notes = append(notes, codec.DroppedCandidatesNote(maxCandidate))
+	}
+	if logprobs > 0 {
+		notes = append(notes, codec.LogProbsDropNote(logprobs))
 	}
 	return out, notes, nil
 }

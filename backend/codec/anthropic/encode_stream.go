@@ -46,6 +46,10 @@ type streamEncoder struct {
 	droppedTier string
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
+	// usage 累计本流交付过的用量：只服务 Notes() 的细分损耗判据
+	//（音频/预测四位是 chat 专属维度，本协议 usage 没有槽位），
+	// 帧渲染仍按事件原值下发，不读这份累计。
+	usage ir.Usage
 }
 
 // Notes 实现 codec.StreamNotes。
@@ -57,6 +61,12 @@ func (e *streamEncoder) Notes() []string {
 	if e.droppedTier != "" {
 		notes = append(notes, codec.TierEchoDropNote(e.droppedTier))
 		e.droppedTier = ""
+	}
+	// usage 细分维度：chat 专属的音频/预测四位本协议没有槽位，聚合
+	// 总量不丢，细分蒸发要报出，判据与非流式 EncodeResponseLossy 同源。
+	if dims := codec.UsageDropDims(&e.usage, Name); len(dims) > 0 {
+		notes = append(notes, codec.UsageDetailDropNote(dims))
+		e.usage = ir.Usage{}
 	}
 	return codec.DedupeNotes(notes)
 }
@@ -267,6 +277,7 @@ func (e *streamEncoder) encodeStart(ev ir.Event) ([][]byte, error) {
 		e.notes = append(e.notes, codec.AudioOutputDropNote())
 	}
 	if ev.Usage != nil {
+		ir.MergeUsage(&e.usage, *ev.Usage)
 		msg.Usage = renderUsage(*ev.Usage)
 	}
 	frame, err := marshalFrame(evMessageStart, streamEvent{Type: evMessageStart, Message: msg})
@@ -339,6 +350,7 @@ func (e *streamEncoder) messageDelta(ev ir.Event) ([]byte, error) {
 		out.Delta.StopReason = "end_turn"
 	}
 	if ev.Usage != nil {
+		ir.MergeUsage(&e.usage, *ev.Usage)
 		u := renderUsage(*ev.Usage)
 		out.Usage = &u
 	}

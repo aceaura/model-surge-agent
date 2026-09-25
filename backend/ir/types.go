@@ -329,6 +329,11 @@ type Message struct {
 	// 而不是块上：它没有内容本体，只是指向上游音频存储的 id。外族协议没有
 	// 引用槽位，跨族丢弃由有损诊断报出。
 	AudioID string `json:"audio_id,omitempty"`
+	// Name 是 chat messages[].name（消息级发送者身份，群聊/agent 编排里
+	// 区分同名角色的不同实体）。只有 chat 族有槽位：同族往返原样带回，
+	// 跨族投影无处安放（与 user 维度的处置不同——那是会话级身份，
+	// 这是消息级身份）。
+	Name string `json:"name,omitempty"`
 }
 
 type Tool struct {

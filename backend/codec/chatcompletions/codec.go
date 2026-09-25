@@ -78,6 +78,9 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	// 缓存写入 TTL 明细是 anthropic 专属维度：本协议 usage 没有 5m/1h
 	// 细分槽位，写入总量仍完整保留。
 	notes = append(notes, codec.DescribeResponseCacheDetailsLoss(resp, Name)...)
+	// usage 其余细分维度（托管工具执行次数、推理区域）同理：本协议没有
+	// 槽位，聚合总量不丢，细分蒸发要报出。判据与流式 Notes() 同源。
+	notes = append(notes, codec.DescribeResponseUsageDetailsLoss(resp, Name)...)
 	return body, codec.DedupeNotes(notes), nil
 }
 

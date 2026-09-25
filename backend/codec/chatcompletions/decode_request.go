@@ -180,6 +180,7 @@ func appendMessage(out *ir.Request, m wireMessage) error {
 		}
 		out.Messages = append(out.Messages, ir.Message{
 			Role:    ir.RoleUser,
+			Name:    m.Name,
 			Content: []ir.Block{block},
 		})
 		return nil
@@ -212,7 +213,7 @@ func appendMessage(out *ir.Request, m wireMessage) error {
 				Input: tc.Function.Arguments,
 			}})
 		}
-		msg := ir.Message{Role: ir.RoleAssistant, Content: blocks}
+		msg := ir.Message{Role: ir.RoleAssistant, Content: blocks, Name: m.Name}
 		// assistant 历史的音频引用（{audio:{id}}）：多轮音频上下文里唯一
 		// 允许回传的形态。显式 null 与缺省同义，都不算引用。
 		if len(m.Audio) > 0 && string(m.Audio) != "null" {
@@ -229,7 +230,7 @@ func appendMessage(out *ir.Request, m wireMessage) error {
 		if err != nil {
 			return err
 		}
-		out.Messages = append(out.Messages, ir.Message{Role: ir.RoleUser, Content: blocks})
+		out.Messages = append(out.Messages, ir.Message{Role: ir.RoleUser, Content: blocks, Name: m.Name})
 		return nil
 
 	default:

@@ -57,6 +57,9 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	if resp != nil && resp.Audio != nil {
 		notes = append(notes, codec.AudioOutputDropNote())
 	}
+	// usage 细分维度：chat 专属的音频/预测四位本协议 usage 没有槽位，
+	// 聚合总量不丢，细分蒸发要报出。判据与流式编码器 Notes() 同源。
+	notes = append(notes, codec.DescribeResponseUsageDetailsLoss(resp, Name)...)
 	return body, codec.DedupeNotes(notes), nil
 }
 

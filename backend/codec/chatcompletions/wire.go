@@ -253,6 +253,10 @@ type wireChoice struct {
 	Message      *wireMessage `json:"message,omitempty"`
 	Delta        *wireMessage `json:"delta,omitempty"`
 	FinishReason string       `json:"finish_reason,omitempty"`
+	// LogProbs 逐 token 对数概率（官方 choice.logprobs，请求侧 logprobs=true
+	// 时下发，流式与非流式同槽位）。IR 响应模型没有槽位：只探测计数、
+	// 经注记报出，内容不建模。
+	LogProbs json.RawMessage `json:"logprobs,omitempty"`
 }
 
 type wireUsage struct {

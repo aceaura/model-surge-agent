@@ -113,6 +113,12 @@ func (e *streamEncoder) Notes() []string {
 	if e.droppedCacheDetails {
 		notes = append(notes, codec.CacheCreationDetailsDropNote())
 	}
+	// usage 细分维度（托管工具执行次数、推理区域、音频/预测 token）本族
+	// usage 都没有槽位：聚合总量不丢，细分蒸发要报出，判据与非流式同源。
+	if dims := codec.UsageDropDims(&e.usage, Name); len(dims) > 0 {
+		notes = append(notes, codec.UsageDetailDropNote(dims))
+		e.usage = ir.Usage{}
+	}
 	return codec.DedupeNotes(notes)
 }
 

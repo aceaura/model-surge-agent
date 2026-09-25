@@ -249,6 +249,10 @@ type wirePart struct {
 	// Annotations 是 output_text 的来源标注，随 part 给出终态快照；
 	// 流式路径上的增量形态是 response.output_text.annotation.added 帧。
 	Annotations []annotation `json:"annotations,omitempty"`
+	// LogProbs 是 output_text 的逐 token 对数概率（官方 part.logprobs，
+	// 请求侧 top_logprobs 给档时下发）。IR 响应模型没有槽位：只探测计数、
+	// 经注记报出，内容不建模。
+	LogProbs json.RawMessage `json:"logprobs,omitempty"`
 }
 
 // annotation 是 url_citation 标注。字段是平的（chat 形态嵌一层

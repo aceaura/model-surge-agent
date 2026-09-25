@@ -125,6 +125,14 @@ func (e *streamEncoder) Notes() []string {
 	if e.droppedCacheDetails {
 		notes = append(notes, codec.CacheCreationDetailsDropNote())
 	}
+	// usage 细分维度与 TTL 明细同口径门控：客户端没 opt-in 时 usage 帧
+	// 压根没发，细分也就无所谓「没能交付」。
+	if !e.suppressUsageFrame {
+		if dims := codec.UsageDropDims(&e.usage, Name); len(dims) > 0 {
+			notes = append(notes, codec.UsageDetailDropNote(dims))
+			e.usage = ir.Usage{}
+		}
+	}
 	if e.droppedTier != "" {
 		notes = append(notes, codec.TierEchoDropNote(e.droppedTier))
 		e.droppedTier = ""
