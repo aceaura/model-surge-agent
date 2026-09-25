@@ -22,6 +22,11 @@ type wireRequest struct {
 	// effort 子字段暂不解码（IR 没有 anthropic 输出级 effort 的对应维度，
 	// 那是 #28 思考现代化的事）。
 	OutputConfig *wireOutputConfig `json:"output_config,omitempty"`
+	// CacheControl 顶层缓存便捷糖：自动给最后一个可缓存块打断点。
+	// 不展开成块级，原样进出（理由见 ir.Request.TopCacheCtl）。
+	CacheControl *wireCacheControl `json:"cache_control,omitempty"`
+	// InferenceGeo 推理地理偏好（如 "us"）；缺省按 workspace 默认。
+	InferenceGeo string `json:"inference_geo,omitempty"`
 }
 
 // wireOutputConfig 输出控制。format 只定义了 json_schema 一种 type：
@@ -116,6 +121,8 @@ type wireSource struct {
 
 type wireCacheControl struct {
 	Type string `json:"type"`
+	// TTL 缓存存活档位（"5m"/"1h"，空=官方默认 5m）。
+	TTL string `json:"ttl,omitempty"`
 }
 
 type wireTool struct {

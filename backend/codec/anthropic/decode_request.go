@@ -104,6 +104,12 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 		}
 		out.Thinking.Effort = f.Effort
 	}
+	// 顶层缓存便捷糖与推理地理偏好原值进 IR；不展开、不映射。
+	if w.CacheControl != nil {
+		out.TopCacheCtl = w.CacheControl.Type
+		out.TopCacheTTL = w.CacheControl.TTL
+	}
+	out.InferenceGeo = w.InferenceGeo
 	return out, nil
 }
 

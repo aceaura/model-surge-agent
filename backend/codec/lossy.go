@@ -137,6 +137,18 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 		describeBlocksLossy(m.Content, name, caps, note)
 	}
 
+	// 顶层 cache_control 便捷糖官方语义=自动一个缓存断点，与块级断点同维度，
+	// 共用同一条说明（notes 按字段去重，两者并存也只报一条）。
+	if req.TopCacheCtl != "" && !caps.CacheControl {
+		note("cache_control", "no prompt-caching breakpoint parameter")
+	}
+	// 推理地理偏好同为 anthropic 专属：外族没有任何对应参数，丢了请求会
+	// 落到上游默认区域，合规敏感的客户端必须知道。值不回显（客户端自选值
+	// 不入诊断）。
+	if req.InferenceGeo != "" && name != ProtocolAnthropic {
+		note("inference_geo", "no geographic-region preference, inference runs wherever the upstream's default region is")
+	}
+
 	// 历史里的托管工具块（server_tool_use / web_search_tool_result）：三个
 	// 外族出站编码器都整块跳过。两种块型成对出现、一起丢反而不撕毁
 	// tool_use/tool_result 配平，上游不会拒——但模型看不到自己上一轮让

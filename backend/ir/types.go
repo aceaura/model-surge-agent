@@ -360,6 +360,20 @@ type Request struct {
 	// ServiceTier 是计费与优先级档位。取值由各家定义，本服务不校验——
 	// 上游是唯一知道哪些档位有效的一方。
 	ServiceTier string `json:"service_tier,omitempty"`
+
+	// 以下两维只有 Anthropic 一族有，外族没有任何对应物。收进 IR 只为
+	// 同协议回写 + 跨协议诊断，不作映射尝试。
+	// TopCacheCtl 顶层 cache_control 便捷糖的 type（如 "ephemeral"）。
+	// 官方语义是「自动给最后一个可缓存块打缓存断点」；IR 不展开成块级——
+	// 展开要猜「最后一个可缓存块」是哪一个（tools→system→messages 的查找
+	// 顺序官方没钉死），猜错位置比不展开更糟。原样保留顶层形态。
+	TopCacheCtl string `json:"top_cache_ctl,omitempty"`
+	// TopCacheTTL 顶层糖的存活档位（"5m"/"1h"，空=官方默认 5m）。
+	TopCacheTTL string `json:"top_cache_ttl,omitempty"`
+	// InferenceGeo 推理地理偏好（inference_geo，如 "us"）。空=没给，
+	// 上游按 workspace 的 default_inference_geo 处理；显式 null 与缺省
+	// 在 JSON 层同义，解码后都是空。诊断与日志一律不回显值本身。
+	InferenceGeo string `json:"inference_geo,omitempty"`
 	// ParallelToolCalls 是否允许一轮里并行多个工具调用。三态指针：
 	// 没给就不替客户端表态（同 ThinkingConfig.Enabled 的判据）。
 	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`

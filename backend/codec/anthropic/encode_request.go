@@ -134,6 +134,12 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 			w.OutputConfig.Effort = req.Thinking.Effort
 		}
 	}
+	// 顶层缓存便捷糖与推理地理偏好原样回写：两者都是本协议专属维度，
+	// 同族保真，跨族由诊断报出。
+	if req.TopCacheCtl != "" {
+		w.CacheControl = &wireCacheControl{Type: req.TopCacheCtl, TTL: req.TopCacheTTL}
+	}
+	w.InferenceGeo = req.InferenceGeo
 	return json.Marshal(w)
 }
 
