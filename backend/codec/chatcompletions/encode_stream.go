@@ -47,9 +47,13 @@ type streamEncoder struct {
 	// badToolArgs 是关块时判定畸形的工具调用数，Notes() 报出。
 	badToolArgs int
 	stopReason  ir.StopReason
-	// serviceTier 是上游回的执行档位，一旦收到就挂在此后的每个 chunk 上。
+	// serviceTier 是已映射待回显的执行档位（codec.MapServiceTierEcho），
+	// 一旦收到就挂在此后的每个 chunk 上——chat 的晚到回显补得上。
 	// 不回填已发出的帧——发出去的改不了。
 	serviceTier string
+	// droppedTier 没能回显的档位原值（越集，如 anthropic 的 batch、
+	// responses 的 ultrafast），Notes() 收尾时报出。
+	droppedTier string
 	// usage 跨帧累积：input 与 output 可能来自不同的 IR 事件。
 	usage ir.Usage
 	// droppedImages / droppedFiles 被跳过的模型产出附件块数（image /
@@ -111,7 +115,24 @@ func (e *streamEncoder) Notes() []string {
 	if e.droppedUploads > 0 {
 		notes = append(notes, codec.ContainerUploadDropNote(e.droppedUploads))
 	}
+	if e.droppedTier != "" {
+		notes = append(notes, codec.TierEchoDropNote(e.droppedTier))
+		e.droppedTier = ""
+	}
 	return codec.DedupeNotes(notes)
+}
+
+// mapTier 映射档位回显：值集装不下的（anthropic 的 batch、responses 的
+// ultrafast）丢弃，Notes() 报出。重复到达时先到先得，不覆盖不重复报。
+func (e *streamEncoder) mapTier(raw string) {
+	if raw == "" || e.serviceTier != "" || e.droppedTier != "" {
+		return
+	}
+	if tier, ok := codec.MapServiceTierEcho(raw, Name); ok {
+		e.serviceTier = tier
+	} else {
+		e.droppedTier = raw
+	}
 }
 
 func newStreamEncoder() *streamEncoder {
@@ -134,9 +155,7 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 	case ir.EvMessageStart:
 		e.id = ev.MessageID
 		e.model = ev.Model
-		if ev.ServiceTier != "" {
-			e.serviceTier = ev.ServiceTier
-		}
+		e.mapTier(ev.ServiceTier)
 		if ev.Container != nil {
 			e.droppedContainer = true
 		}
@@ -280,9 +299,7 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			e.stopReason = ev.StopReason
 		}
 		// 上游可能只在收尾帧给档位（非流式响应投影成事件时就是这样）。
-		if ev.ServiceTier != "" {
-			e.serviceTier = ev.ServiceTier
-		}
+		e.mapTier(ev.ServiceTier)
 		if ev.Container != nil {
 			e.droppedContainer = true
 		}
@@ -529,8 +546,12 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 		Choices: []wireChoice{{
 			Index: 0, Message: &msg, FinishReason: renderFinishReason(resp.StopReason),
 		}},
-		Usage:       &u,
-		ServiceTier: resp.ServiceTier,
+		Usage: &u,
+	}
+	// 实际执行档位回显：跨族按回显值集翻译，装不下的（anthropic 的
+	// batch、responses 的 ultrafast）丢弃，由 DescribeResponseTierLoss 报出。
+	if tier, ok := codec.MapServiceTierEcho(resp.ServiceTier, Name); ok {
+		out.ServiceTier = tier
 	}
 	if out.ID == "" {
 		out.ID = "chatcmpl-unknown"

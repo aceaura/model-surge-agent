@@ -72,6 +72,9 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	if n := codec.CountResponseContainerUploads(resp); n > 0 {
 		notes = append(notes, codec.ContainerUploadDropNote(n))
 	}
+	// 实际执行档位回显：值集装不下的（anthropic 的 batch、responses 的
+	// ultrafast）被编码器丢弃，照实报出——这一维决定计费。
+	notes = append(notes, codec.DescribeResponseTierLoss(resp, Name)...)
 	return body, codec.DedupeNotes(notes), nil
 }
 

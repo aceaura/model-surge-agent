@@ -193,8 +193,8 @@ func TestMultiCandidateWholeIsReported(t *testing.T) {
 	}
 }
 
-// serviceTierStream 是「上游把档位降到 default」的夹具：
-// 客户端点的是 flex，上游回的是 default。
+// serviceTierStream 是「上游把档位降到标准容量」的夹具：
+// 客户端点的是 flex，上游回的是 default（anthropic 方言是 standard）。
 var serviceTierStream = map[string]string{
 	codec.ProtocolChatCompletions: "data: {\"id\":\"c1\",\"model\":\"m\",\"service_tier\":\"default\"," +
 		"\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n" +
@@ -203,6 +203,17 @@ var serviceTierStream = map[string]string{
 		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\",\"model\":\"m\",\"service_tier\":\"default\"}}\n\n" +
 		"event: response.completed\n" +
 		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"model\":\"m\",\"status\":\"completed\",\"service_tier\":\"default\"}}\n\n",
+	codec.ProtocolAnthropic: "event: message_start\n" +
+		"data: {\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"model\":\"m\"," +
+		"\"role\":\"assistant\",\"service_tier\":\"standard\",\"usage\":{\"input_tokens\":1}}}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+}
+
+// serviceTierWant 是各夹具里上游回显的档位原值（各家方言不同）。
+var serviceTierWant = map[string]string{
+	codec.ProtocolChatCompletions: "default",
+	codec.ProtocolResponses:       "default",
+	codec.ProtocolAnthropic:       "standard",
 }
 
 var serviceTierWhole = map[string]string{
@@ -210,9 +221,13 @@ var serviceTierWhole = map[string]string{
 		{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`,
 	codec.ProtocolResponses: `{"id":"r1","model":"m","status":"completed","service_tier":"default",
 		"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}]}`,
+	codec.ProtocolAnthropic: `{"id":"m1","type":"message","role":"assistant","model":"m",
+		"service_tier":"standard","content":[{"type":"text","text":"hi"}],
+		"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`,
 }
 
-// TestServiceTierDecodesIntoIR：两个有这个字段的出站协议都要解出它。
+// TestServiceTierDecodesIntoIR：三个有这个字段的出站协议都要解出它，
+// 原值进 IR 不规整（跨族映射在入站编码做）。
 func TestServiceTierDecodesIntoIR(t *testing.T) {
 	for proto, raw := range serviceTierStream {
 		t.Run(proto+"/stream", func(t *testing.T) {
@@ -222,8 +237,8 @@ func TestServiceTierDecodesIntoIR(t *testing.T) {
 					got = ev.ServiceTier
 				}
 			}
-			if got != "default" {
-				t.Fatalf("service_tier 没解进事件，得到 %q", got)
+			if got != serviceTierWant[proto] {
+				t.Fatalf("service_tier 没解进事件，得到 %q，想要 %q", got, serviceTierWant[proto])
 			}
 		})
 	}
@@ -234,8 +249,8 @@ func TestServiceTierDecodesIntoIR(t *testing.T) {
 			if err != nil {
 				t.Fatalf("decode: %v", err)
 			}
-			if resp.ServiceTier != "default" {
-				t.Fatalf("service_tier 没解进响应，得到 %q", resp.ServiceTier)
+			if resp.ServiceTier != serviceTierWant[proto] {
+				t.Fatalf("service_tier 没解进响应，得到 %q，想要 %q", resp.ServiceTier, serviceTierWant[proto])
 			}
 		})
 	}
@@ -276,7 +291,8 @@ func TestServiceTierFromASingleFrameSurvives(t *testing.T) {
 	}
 }
 
-// TestServiceTierIsEchoedToClient：两个有位置的入站协议都要写出它。
+// TestServiceTierIsEchoedToClient：三个入站协议都有回显位置，都要写出它；
+// anthropic 的回显方言是 standard（default 要翻译）。
 func TestServiceTierIsEchoedToClient(t *testing.T) {
 	events := []ir.Event{
 		{Type: ir.EvMessageStart, MessageID: "m1", Model: "m", ServiceTier: "default"},
@@ -286,10 +302,15 @@ func TestServiceTierIsEchoedToClient(t *testing.T) {
 		{Type: ir.EvMessageDelta, StopReason: ir.StopEndTurn, ServiceTier: "default"},
 		{Type: ir.EvMessageStop},
 	}
-	for _, proto := range []string{codec.ProtocolChatCompletions, codec.ProtocolResponses} {
+	want := map[string]string{
+		codec.ProtocolChatCompletions: "default",
+		codec.ProtocolResponses:       "default",
+		codec.ProtocolAnthropic:       "standard",
+	}
+	for proto, tier := range want {
 		t.Run(proto+"/stream", func(t *testing.T) {
-			if out := renderStream(t, proto, events); !strings.Contains(out, `"service_tier":"default"`) {
-				t.Fatalf("流式没回显 service_tier: %s", out)
+			if out := renderStream(t, proto, events); !strings.Contains(out, `"service_tier":"`+tier+`"`) {
+				t.Fatalf("流式没回显 service_tier %q: %s", tier, out)
 			}
 		})
 		t.Run(proto+"/whole", func(t *testing.T) {
@@ -301,8 +322,8 @@ func TestServiceTierIsEchoedToClient(t *testing.T) {
 			if err != nil {
 				t.Fatalf("encode: %v", err)
 			}
-			if !strings.Contains(string(body), `"service_tier":"default"`) {
-				t.Fatalf("非流式没回显 service_tier: %s", body)
+			if !strings.Contains(string(body), `"service_tier":"`+tier+`"`) {
+				t.Fatalf("非流式没回显 service_tier %q: %s", tier, body)
 			}
 		})
 	}
@@ -326,8 +347,8 @@ func TestServiceTierDowngradeIsVisible(t *testing.T) {
 			if resp.ServiceTier == "flex" {
 				t.Fatalf("回显了请求里的档位而不是上游的：降档被伪装成了按要求执行")
 			}
-			if resp.ServiceTier != "default" {
-				t.Fatalf("service_tier 应为上游回的 default，得到 %q", resp.ServiceTier)
+			if resp.ServiceTier != serviceTierWant[proto] {
+				t.Fatalf("service_tier 应为上游回的 %q，得到 %q", serviceTierWant[proto], resp.ServiceTier)
 			}
 		})
 	}
@@ -365,55 +386,76 @@ func TestAbsentServiceTierIsNotWritten(t *testing.T) {
 	}
 }
 
-// TestAnthropicReportsDroppedServiceTier：无处安放时必须说一声。
-// 这一维决定计费，无声丢掉会让客户端按自己点的档位对账。
-func TestAnthropicReportsDroppedServiceTier(t *testing.T) {
+// TestAnthropicServiceTierEcho：anthropic 的响应信封有档位槽位
+// （standard/priority/batch），OpenAI 方言的 default 要翻译成 standard
+// 回显；值集装不下的（flex 等）丢弃时必须说一声——这一维决定计费，
+// 无声丢掉会让客户端按自己点的档位对账。
+//
+// 对应旧仓 #29（9164308）。
+func TestAnthropicServiceTierEcho(t *testing.T) {
 	c, ok := codec.Inbound(codec.ProtocolAnthropic)
 	if !ok {
 		t.Fatal("anthropic inbound 未注册")
 	}
 
-	t.Run("whole", func(t *testing.T) {
+	t.Run("whole/翻译回写", func(t *testing.T) {
 		le, ok := c.(codec.LossyResponseEncoder)
 		if !ok {
 			t.Fatal("anthropic 必须实现 LossyResponseEncoder")
 		}
-		_, notes, err := le.EncodeResponseLossy(&ir.Response{
+		body, notes, err := le.EncodeResponseLossy(&ir.Response{
 			ID: "m1", Model: "m", ServiceTier: "default",
 			Content: []ir.Block{{Type: ir.BlockText, Text: "hi"}},
 		})
 		if err != nil {
 			t.Fatalf("encode: %v", err)
 		}
-		if !hasNote(notes, "service_tier") {
-			t.Fatalf("必须报丢弃 service_tier: %v", notes)
+		if !strings.Contains(string(body), `"service_tier":"standard"`) {
+			t.Fatalf("default 应翻译成 standard 回写: %s", body)
+		}
+		if hasNote(notes, "service tier echo") {
+			t.Fatalf("装得下的回显不该报丢弃: %v", notes)
 		}
 	})
 
-	t.Run("stream", func(t *testing.T) {
+	t.Run("whole/越集报丢", func(t *testing.T) {
+		le := c.(codec.LossyResponseEncoder)
+		body, notes, err := le.EncodeResponseLossy(&ir.Response{
+			ID: "m1", Model: "m", ServiceTier: "flex",
+			Content: []ir.Block{{Type: ir.BlockText, Text: "hi"}},
+		})
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		if strings.Contains(string(body), "service_tier") {
+			t.Fatalf("越集档位不该写进响应体: %s", body)
+		}
+		if !hasNote(notes, `service tier echo "flex"`) {
+			t.Fatalf("必须带值报丢弃: %v", notes)
+		}
+	})
+
+	t.Run("stream/首帧回显", func(t *testing.T) {
 		enc := c.NewStreamEncoder(nil)
-		for _, ev := range []ir.Event{
-			{Type: ir.EvMessageStart, MessageID: "m1", Model: "m", ServiceTier: "default"},
-			{Type: ir.EvMessageDelta, StopReason: ir.StopEndTurn},
-			{Type: ir.EvMessageStop},
-		} {
-			if _, err := enc.Encode(ev); err != nil {
-				t.Fatalf("encode %s: %v", ev.Type, err)
-			}
+		frames, err := enc.Encode(ir.Event{Type: ir.EvMessageStart, MessageID: "m1", Model: "m", ServiceTier: "default"})
+		if err != nil {
+			t.Fatalf("encode start: %v", err)
 		}
+		if !strings.Contains(string(frames[0]), `"service_tier":"standard"`) {
+			t.Fatalf("message_start 应带翻译后的档位: %s", frames[0])
+		}
+		enc.Encode(ir.Event{Type: ir.EvMessageDelta, StopReason: ir.StopEndTurn})
 		enc.Finish()
-		n, ok := enc.(codec.StreamNotes)
-		if !ok {
-			t.Fatal("anthropic 编码器必须实现 StreamNotes")
-		}
-		if !hasNote(n.Notes(), "service_tier") {
-			t.Fatalf("流式也必须报丢弃 service_tier: %v", n.Notes())
+		n := enc.(codec.StreamNotes)
+		if hasNote(n.Notes(), "service tier echo") {
+			t.Fatalf("已回显的档位不该报丢弃: %v", n.Notes())
 		}
 	})
 
-	// 收尾帧才带档位的形态（非流式响应投影成事件时就是这样）：
-	// 只在 message_start 判会漏掉它。
-	t.Run("stream/only-on-delta", func(t *testing.T) {
+	// 收尾帧才带档位的形态（chat 系上游的后续 chunk 才带、非流式响应
+	// 投影成事件时就是这样）：message_delta 没有 service_tier 槽位，
+	// 送不出去，必须报。
+	t.Run("stream/晚到报丢", func(t *testing.T) {
 		enc := c.NewStreamEncoder(nil)
 		for _, ev := range []ir.Event{
 			{Type: ir.EvMessageStart, MessageID: "m1", Model: "m"},
@@ -426,8 +468,8 @@ func TestAnthropicReportsDroppedServiceTier(t *testing.T) {
 		}
 		enc.Finish()
 		n := enc.(codec.StreamNotes)
-		if !hasNote(n.Notes(), "service_tier") {
-			t.Fatalf("档位只在收尾帧到达时也必须报: %v", n.Notes())
+		if !hasNote(n.Notes(), "service tier echo") {
+			t.Fatalf("档位只在收尾帧到达时必须报: %v", n.Notes())
 		}
 	})
 }

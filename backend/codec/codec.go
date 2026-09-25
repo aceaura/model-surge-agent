@@ -323,6 +323,59 @@ func MapServiceTier(tier, protoName string) (string, bool) {
 	}
 }
 
+// MapServiceTierEcho 把上游回显的实际执行档位映射到目标协议的回显值集。
+// 回显语义是「实际用了哪档服务容量」，值集与请求侧偏好不同：
+// anthropic 回显 standard/priority/batch，chat 回显
+// auto/default/flex/scale/priority/fast，responses 另有 ultrafast。
+// 映射规则：
+//   - standard（anthropic 回显方言）与 standard_only（anthropic 请求方言）
+//     先归一成 default（OpenAI 方言），再按目标翻译——同为标准容量；
+//   - priority 三家都回显得出，恒通；
+//   - batch 只有 anthropic 回显得出，OpenAI 两系值集 provably 没有；
+//   - auto/flex/scale/fast 去 anthropic 无等价；ultrafast 仅 responses 系；
+//   - 谁都不认识的值原样透传——与请求侧 MapServiceTier 同一口径：可能是
+//     官方新增档位，把上游照实报的执行档位丢掉，比让客户端见到一个陌生
+//     枚举更糟（计费对不上账）；
+//   - 没有回显槽位的协议（gemini，本服务里只出站）恒 false。
+//
+// 返回 ok=false 表示越集（出站丢 + 注记，档位是枚举非敏感，可带值报出）。
+func MapServiceTierEcho(tier, protoName string) (string, bool) {
+	switch tier {
+	case "standard", "standard_only":
+		tier = "default"
+	}
+	switch protoName {
+	case ProtocolAnthropic:
+		switch tier {
+		case "default":
+			return "standard", true
+		case "priority", "batch":
+			return tier, true
+		case "auto", "flex", "scale", "fast", "ultrafast":
+			return "", false
+		}
+		return tier, true
+	case ProtocolChatCompletions:
+		switch tier {
+		case "auto", "default", "flex", "scale", "priority", "fast":
+			return tier, true
+		case "batch", "ultrafast":
+			return "", false
+		}
+		return tier, true
+	case ProtocolResponses:
+		switch tier {
+		case "auto", "default", "flex", "scale", "priority", "fast", "ultrafast":
+			return tier, true
+		case "batch":
+			return "", false
+		}
+		return tier, true
+	default:
+		return "", false
+	}
+}
+
 // AcceptsMedia 判断本协议能否原生承载该 media type。
 // 类型为空视为不能：多数协议的 mime 字段是必填的，谎报或留空都会被拒收。
 func (c Capabilities) AcceptsMedia(mediaType string) bool {

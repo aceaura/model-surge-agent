@@ -73,6 +73,9 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	if resp != nil && resp.Audio != nil {
 		notes = append(notes, codec.AudioOutputDropNote())
 	}
+	// 实际执行档位回显：值集装不下的（anthropic 的 batch）被编码器
+	// 丢弃，照实报出——这一维决定计费。
+	notes = append(notes, codec.DescribeResponseTierLoss(resp, Name)...)
 	return body, codec.DedupeNotes(notes), nil
 }
 

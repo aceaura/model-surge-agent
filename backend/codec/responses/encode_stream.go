@@ -35,8 +35,12 @@ type streamEncoder struct {
 
 	stopReason ir.StopReason
 	usage      ir.Usage
-	// serviceTier 是上游回的执行档位，随 snapshot 一并写进 response 对象。
+	// serviceTier 是已映射待回显的执行档位（codec.MapServiceTierEcho），
+	// 随 snapshot 一并写进 response 对象——created 帧与终止帧都补得上。
 	serviceTier string
+	// droppedTier 没能回显的档位原值（越集，如 anthropic 的 batch），
+	// Notes() 收尾时报出。
+	droppedTier string
 	// droppedImages / droppedFiles 被跳过的模型产出附件块数（image /
 	// audio+document+file）。本族编码器给助手回合输出的 part 只有
 	// output_text / refusal，没有附件形态。不显式拦住会落进 default(text)
@@ -99,7 +103,24 @@ func (e *streamEncoder) Notes() []string {
 	if e.droppedUploads > 0 {
 		notes = append(notes, codec.ContainerUploadDropNote(e.droppedUploads))
 	}
+	if e.droppedTier != "" {
+		notes = append(notes, codec.TierEchoDropNote(e.droppedTier))
+		e.droppedTier = ""
+	}
 	return codec.DedupeNotes(notes)
+}
+
+// mapTier 映射档位回显：值集装不下的（anthropic 的 batch）丢弃，
+// Notes() 报出。重复到达时先到先得，不覆盖不重复报。
+func (e *streamEncoder) mapTier(raw string) {
+	if raw == "" || e.serviceTier != "" || e.droppedTier != "" {
+		return
+	}
+	if tier, ok := codec.MapServiceTierEcho(raw, Name); ok {
+		e.serviceTier = tier
+	} else {
+		e.droppedTier = raw
+	}
 }
 
 // openItem 记录一个已开启条目的状态，用于闭合时补齐 done 帧并累积最终 response。
@@ -136,9 +157,7 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		e.id = ev.MessageID
 		e.model = ev.Model
 		// 档位要在 snapshot 之前收下：created 帧里的 response 对象就该带它。
-		if ev.ServiceTier != "" {
-			e.serviceTier = ev.ServiceTier
-		}
+		e.mapTier(ev.ServiceTier)
 		if ev.Container != nil {
 			e.droppedContainer = true
 		}
@@ -325,10 +344,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		if ev.StopReason != "" {
 			e.stopReason = ev.StopReason
 		}
-		// 上游可能只在收尾帧给档位。
-		if ev.ServiceTier != "" {
-			e.serviceTier = ev.ServiceTier
-		}
+		// 上游可能只在收尾帧给档位。终止帧的 response 对象也带
+		// service_tier，晚到的回显还补得上。
+		e.mapTier(ev.ServiceTier)
 		if ev.Container != nil {
 			e.droppedContainer = true
 		}
@@ -726,7 +744,11 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 		CreatedAt:         created,
 		IncompleteDetails: incomplete,
 		Usage:             &u,
-		ServiceTier:       resp.ServiceTier,
+	}
+	// 实际执行档位回显：跨族按回显值集翻译，装不下的（anthropic 的
+	// batch）丢弃，由 DescribeResponseTierLoss 报出。
+	if tier, ok := codec.MapServiceTierEcho(resp.ServiceTier, Name); ok {
+		out.ServiceTier = tier
 	}
 	if out.ID == "" {
 		out.ID = "resp_unknown"

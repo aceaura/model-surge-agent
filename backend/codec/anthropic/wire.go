@@ -223,6 +223,9 @@ type wireResponse struct {
 	StopReason   string      `json:"stop_reason,omitempty"`
 	StopSequence string      `json:"stop_sequence,omitempty"`
 	Usage        wireUsage   `json:"usage"`
+	// ServiceTier 实际执行档位回显（standard/priority/batch）。上游同族
+	// 原值收下；跨族由编码器按 codec.MapServiceTierEcho 翻译或丢弃。
+	ServiceTier string `json:"service_tier,omitempty"`
 	// Container 代码执行容器回显（按需出场，缺键与 null 同义）。
 	Container *container `json:"container,omitempty"`
 }
@@ -300,6 +303,9 @@ type streamMsg struct {
 	Model string    `json:"model"`
 	Role  string    `json:"role"`
 	Usage wireUsage `json:"usage"`
+	// ServiceTier 实际执行档位回显（message_start 携带；message_delta
+	// 没有这个槽位，晚到的回显送不出去）。
+	ServiceTier string `json:"service_tier,omitempty"`
 	// Container 代码执行容器回显（message_start 首帧携带，缺键与 null 同义）。
 	Container *container `json:"container,omitempty"`
 }

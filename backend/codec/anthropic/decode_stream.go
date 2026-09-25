@@ -66,6 +66,8 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		if ev.Message != nil {
 			out.MessageID = ev.Message.ID
 			out.Model = ev.Message.Model
+			// 上游回显的实际执行档位原值进 IR，跨族映射在出站编码做。
+			out.ServiceTier = ev.Message.ServiceTier
 			out.Container = decodeContainer(ev.Message.Container)
 			u := convertUsage(ev.Message.Usage)
 			out.Usage = &u
@@ -193,11 +195,12 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 			fmt.Sprintf("undecodable response: %v", err))
 	}
 	out := &ir.Response{
-		ID:         w.ID,
-		Model:      w.Model,
-		StopReason: convertStopReason(w.StopReason),
-		Usage:      convertUsage(w.Usage),
-		Container:  decodeContainer(w.Container),
+		ID:          w.ID,
+		Model:       w.Model,
+		StopReason:  convertStopReason(w.StopReason),
+		Usage:       convertUsage(w.Usage),
+		ServiceTier: w.ServiceTier,
+		Container:   decodeContainer(w.Container),
 	}
 	out.StopSequence = adoptStopSequence(out.StopReason, w.StopSequence)
 	out.Content = make([]ir.Block, 0, len(w.Content))

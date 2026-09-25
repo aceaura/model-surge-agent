@@ -49,11 +49,10 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	notes = append(notes, codec.DescribeResponseToolSignatureLoss(resp, Name, false)...)
 	// 畸形工具参数：input 是对象槽位，原文挪进 ir.RawArgsKey，报出挪键。
 	notes = append(notes, codec.DescribeResponseToolArgsLoss(resp, true)...)
-	// 本协议的响应信封没有执行档位的位置。上游报了就得说一声——
-	// 这一维决定计费，无声丢掉会让客户端按点的档位对账。
-	if resp != nil && resp.ServiceTier != "" {
-		notes = append(notes, codec.DroppedServiceTierNote(Name))
-	}
+	// 实际执行档位回显有槽位：同族原值、跨族按 codec.MapServiceTierEcho
+	// 翻译回写；值集装不下的丢弃，照实报出——这一维决定计费，无声丢掉
+	// 会让客户端按点的档位对账。
+	notes = append(notes, codec.DescribeResponseTierLoss(resp, Name)...)
 	// 模型音频输出是 chat 非流式专属维度：本协议响应没有完整音频槽位。
 	if resp != nil && resp.Audio != nil {
 		notes = append(notes, codec.AudioOutputDropNote())

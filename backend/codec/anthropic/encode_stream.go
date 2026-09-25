@@ -38,6 +38,12 @@ type streamEncoder struct {
 	// 而引用总在正文之后到达，所以必须逐块累积。
 	text      map[int]string
 	sentDelta bool
+	// tierSent 档位回显已随 message_start 下发。
+	tierSent bool
+	// droppedTier 没能下发的档位回显原值：越集、或到得太晚
+	// （message_delta 没有 service_tier 槽位，上游只在收尾帧报的
+	// 回显送不出去）。Notes() 收尾时报出。
+	droppedTier string
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
 }
@@ -47,6 +53,10 @@ func (e *streamEncoder) Notes() []string {
 	notes := e.notes
 	if e.badToolArgs > 0 {
 		notes = append(notes, ir.RawArgsPassNote(e.badToolArgs))
+	}
+	if e.droppedTier != "" {
+		notes = append(notes, codec.TierEchoDropNote(e.droppedTier))
+		e.droppedTier = ""
 	}
 	return codec.DedupeNotes(notes)
 }
@@ -168,10 +178,12 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		return e.closeFrames(ev.Index), nil
 
 	case ir.EvMessageDelta:
-		// 档位也可能只在收尾帧到达（非流式响应投影成事件时就是这样），
-		// 只在 message_start 判会漏掉那一形态。
-		if ev.ServiceTier != "" {
-			e.notes = append(e.notes, codec.DroppedServiceTierNote(Name))
+		// 档位也可能只在收尾帧到达（chat 系上游的后续 chunk 才带、
+		// 非流式响应投影成事件时就是这样）。message_delta 没有
+		// service_tier 槽位：message_start 已经带过就算了，没带过
+		// 即便值集装得下也送不出去，照实报出。
+		if ev.ServiceTier != "" && !e.tierSent && e.droppedTier == "" {
+			e.droppedTier = ev.ServiceTier
 		}
 		out := e.ensureStarted(ev)
 		// stop_reason 要在所有块闭合之后才发。
@@ -233,12 +245,18 @@ func (e *streamEncoder) encodeStart(ev ir.Event) ([][]byte, error) {
 		return nil, nil
 	}
 	e.started = true
-	// 本协议的消息头里没有执行档位的位置。上游报了就得说一声——
-	// 这一维决定计费，无声丢掉会让客户端按自己点的档位对账。
-	if ev.ServiceTier != "" {
-		e.notes = append(e.notes, codec.DroppedServiceTierNote(Name))
-	}
 	msg := &streamMsg{ID: ev.MessageID, Model: ev.Model, Role: string(ir.RoleAssistant)}
+	// 实际执行档位回显：同族原值下发，跨族按回显值集翻译；装不下的
+	// 丢弃，Notes() 报出——这一维决定计费，无声丢掉会让客户端按自己
+	// 点的档位对账。
+	if ev.ServiceTier != "" {
+		if tier, ok := codec.MapServiceTierEcho(ev.ServiceTier, Name); ok {
+			msg.ServiceTier = tier
+			e.tierSent = true
+		} else {
+			e.droppedTier = ev.ServiceTier
+		}
+	}
 	if msg.ID == "" {
 		msg.ID = "msg_unknown"
 	}
@@ -419,6 +437,11 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 		StopSequence: adoptStopSequence(resp.StopReason, resp.StopSequence),
 		Usage:        renderUsage(resp.Usage),
 		Container:    encodeContainerInfo(resp.Container),
+	}
+	// 实际执行档位回显：跨族按回显值集翻译，装不下的（OpenAI 系的
+	// flex/scale/fast/ultrafast 等）丢弃，由 DescribeResponseTierLoss 报出。
+	if tier, ok := codec.MapServiceTierEcho(resp.ServiceTier, Name); ok {
+		w.ServiceTier = tier
 	}
 	if w.ID == "" {
 		w.ID = "msg_unknown"

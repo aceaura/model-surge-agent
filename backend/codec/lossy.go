@@ -870,9 +870,26 @@ func FinishDetailNote(detail string) string {
 	return "dropped the upstream finish detail: " + detail
 }
 
-// DroppedServiceTierNote 是上游回了执行档位而入站协议无处安放的说明。
-func DroppedServiceTierNote(name string) string {
-	return "dropped service_tier from the response (" + name + " has no such field)"
+// TierEchoDropNote 是上游回显的实际执行档位送不到客户端的说明。
+// 流式编码器（越集、无槽位、到得太晚）与非流式响应损耗扫描共用同一
+// 措辞。档位是枚举值非敏感，带值报出——客户端至少能对账「实际用的
+// 是哪档容量」，这一维决定计费。
+func TierEchoDropNote(tier string) string {
+	return fmt.Sprintf(
+		"dropped service tier echo %q: this protocol's response has no equivalent tier value, the client cannot see which capacity tier actually served the request", tier)
+}
+
+// DescribeResponseTierLoss 非流式响应侧的档位回显损耗扫描：目标协议的
+// 回显值集装不下上游报的实际档位时，编码器会静默丢弃，这里照实报出。
+// 装得下时编码器按 MapServiceTierEcho 翻译回写，无损耗。
+func DescribeResponseTierLoss(resp *ir.Response, name string) []string {
+	if resp == nil || resp.ServiceTier == "" {
+		return nil
+	}
+	if _, ok := MapServiceTierEcho(resp.ServiceTier, name); !ok {
+		return []string{TierEchoDropNote(resp.ServiceTier)}
+	}
+	return nil
 }
 
 // ContainerDropNote 是代码执行容器回显丢失的说明。容器回显是 anthropic
