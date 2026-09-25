@@ -14,7 +14,11 @@ func ResponseEvents(resp *Response) []Event {
 		return nil
 	}
 	out := []Event{{Type: EvMessageStart, MessageID: resp.ID, Model: resp.Model,
-		ServiceTier: resp.ServiceTier, Container: resp.Container, Audio: resp.Audio}}
+		ServiceTier: resp.ServiceTier, Container: resp.Container, Audio: resp.Audio,
+		// 创建时间也要投影：整份响应路径的出站编码器同样从首帧取
+		// Created，漏掉它上游的真实创建时间会被代理本地钟顶替——
+		// 正是 created 保真要防的那件事。
+		Created: resp.Created}}
 	for i, b := range resp.Content {
 		out = append(out, blockEvents(i, b)...)
 	}

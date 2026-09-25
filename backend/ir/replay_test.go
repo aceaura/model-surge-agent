@@ -277,3 +277,20 @@ func TestProjectionDoesNotMutateTheResponse(t *testing.T) {
 		t.Fatalf("mutated: %#v", resp)
 	}
 }
+
+// 上游的创建时间要能穿过「投影成事件再聚合回来」这一圈：整份响应路径
+// 出站编码器从首帧取 Created，投影漏带就会被代理本地钟顶替。
+func TestResponseEventsCarriesCreated(t *testing.T) {
+	resp := &Response{ID: "m", Model: "m", Created: 1700000000}
+	evs := ResponseEvents(resp)
+	if evs[0].Created != 1700000000 {
+		t.Fatalf("start event = %#v", evs[0])
+	}
+	var agg Aggregator
+	for _, e := range evs {
+		agg.Add(e)
+	}
+	if got := agg.Response().Created; got != 1700000000 {
+		t.Errorf("aggregated created = %d", got)
+	}
+}
