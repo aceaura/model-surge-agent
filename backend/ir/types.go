@@ -503,6 +503,19 @@ type ThinkingConfig struct {
 	// "summarized"=正常回显 / "omitted"=只回签名供多轮续接）。仅 Anthropic
 	// 有这一维，跨族丢弃并报出。
 	Display string `json:"display,omitempty"`
+
+	// Summary 思考摘要的啰嗦程度（OpenAI Responses reasoning.summary：
+	// auto/concise/detailed）。与 Display 不同轴：Display 管可见性，Summary
+	// 管摘要详略，两者不构成等价物。仅 responses 一族有槽位，跨族丢弃并报出。
+	Summary string `json:"summary,omitempty"`
+	// Context / Mode reasoning 的另两维（context: auto/current_turn/all_turns；
+	// mode: standard/pro）。值形态仍在演进，按原文收下不解析（与 Moderation /
+	// Prediction 同款约定），仅 responses 一族能回写。
+	// omitempty 必须带：这两个键会随 ir.Request 走 JSON 序列化（流水脱敏、
+	// 重放），nil 不带标签会变成非空 "null"，出站据此判断「客户端给过」
+	// 就会凭空写出一个 context:null。
+	Context json.RawMessage `json:"context,omitempty"`
+	Mode    json.RawMessage `json:"mode,omitempty"`
 }
 
 // On 判定明确开启。nil 接收者与 nil Enabled 都算「没明确开启」。

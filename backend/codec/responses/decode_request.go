@@ -98,13 +98,34 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 		out.ResponseFormat = decodeTextFormat(w.Text.Format)
 	}
 
-	if w.Reasoning != nil && w.Reasoning.Effort != "" {
-		// "none" 是明确关闭，不是强度档位——同 chat_completions。
-		if w.Reasoning.Effort == effortNone {
-			out.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOff()}
-		} else {
-			out.Thinking = &ir.ThinkingConfig{Enabled: ir.ThinkingOn(), Effort: w.Reasoning.Effort}
+	// reasoning 的四个子参数逐轴收下。此前只在 effort 非空时才建 Thinking，
+	// 客户端单给 {"summary":"detailed"} 会让整个对象连 summary 一起消失。
+	// Enabled 只由 effort 决定：summary/context/mode 都不是「要不要思考」的
+	// 表态，只给子参数时开关保持三态的「没提」。
+	// minimal 算开思考——它是「最少的思考」，不是「不思考」；chat 入站同款
+	// 值就是这么读的，两族口径必须一致，否则同一个 vendor 值换个入口就变成
+	// 相反语义（出站按 Off 写 effort=none，彻底掐掉客户端要的思考）。
+	if w.Reasoning != nil {
+		th := &ir.ThinkingConfig{Summary: w.Reasoning.Summary}
+		switch w.Reasoning.Effort {
+		case "":
+			// 没表态开关，Effort 留空。
+		case effortNone:
+			// "none" 是明确关闭，不是强度档位——同 chat_completions。
+			th.Enabled = ir.ThinkingOff()
+		default:
+			th.Enabled = ir.ThinkingOn()
+			th.Effort = w.Reasoning.Effort
 		}
+		// 显式 null 等同没给（Moderation / Prediction 同款归一）：
+		// 不归一的话这个 "null" 会被当成客户端给过的值写回线上。
+		if string(w.Reasoning.Context) != "null" {
+			th.Context = w.Reasoning.Context
+		}
+		if string(w.Reasoning.Mode) != "null" {
+			th.Mode = w.Reasoning.Mode
+		}
+		out.Thinking = th
 	}
 	if w.User != "" {
 		out.Metadata = map[string]string{"user_id": w.User}

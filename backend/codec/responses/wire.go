@@ -106,6 +106,10 @@ type wireReasoning struct {
 	// Summary 控制是否返回推理摘要。本协议不返回原始思维链，
 	// 只在开启 summary 时给出摘要文本。
 	Summary string `json:"summary,omitempty"`
+	// Context 推理带多少会话上下文（auto/current_turn/all_turns）。
+	// Mode 推理模式（standard/pro）。两者值形态仍在演进，按原文透传不解析。
+	Context json.RawMessage `json:"context,omitempty"`
+	Mode    json.RawMessage `json:"mode,omitempty"`
 }
 
 // wireItem 是 input 与 output 数组的元素。各类型共用一个结构体：

@@ -801,6 +801,22 @@ func describeThinkingModernLossy(req *ir.Request, name string, caps Capabilities
 	if t == nil {
 		return
 	}
+	// reasoning 子参数三维（summary / context / mode）只有 responses 族有
+	// 线格：chat 的 reasoning_effort 是裸字符串，anthropic/gemini 的思考
+	// 参数也装不下。这三个轴与开/关轴独立（客户端可以只给 summary 不谈
+	// effort），所以不看 caps.Thinking——上面那条 "no reasoning mode"
+	// 报的是开关轴，这里报的是子参数轴，各自成立。
+	if name != ProtocolResponses {
+		if t.Summary != "" {
+			note(fmt.Sprintf("reasoning summary preference %q", t.Summary), "the target protocol has no summary-verbosity field, reasoning summaries come in the upstream default form")
+		}
+		if len(t.Context) > 0 {
+			note("reasoning context scope", "the target protocol's reasoning parameter takes only an effort level, reasoning runs over the upstream default context")
+		}
+		if len(t.Mode) > 0 {
+			note("reasoning mode", "the target protocol's reasoning parameter takes only an effort level, reasoning runs in the upstream default mode")
+		}
+	}
 	if name != ProtocolAnthropic {
 		if caps.Thinking {
 			if t.Adaptive {

@@ -97,14 +97,19 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 
 	switch {
 	case req.Thinking.On():
-		r := &wireReasoning{Effort: req.Thinking.Effort}
+		r := &wireReasoning{Effort: req.Thinking.Effort, Summary: req.Thinking.Summary,
+			Context: req.Thinking.Context, Mode: req.Thinking.Mode}
 		// 只有 token 预算没有档位时（来自 Anthropic 客户端）折成档位：
 		// 本协议无预算概念，不折等于把思考请求整个丢掉。
 		if r.Effort == "" {
 			r.Effort = effortForBudget(req.Thinking.BudgetTokens)
 		}
-		// 请求摘要，否则推理内容完全不可见，转回 Anthropic 时 thinking 块会是空的。
-		r.Summary = "auto"
+		// 客户端没点摘要详略时才补 auto：不请求摘要推理内容完全不可见，
+		// 转回 Anthropic 时 thinking 块会是空的。给了 detailed/concise 就
+		// 原样送——改写成 auto 是替客户端把摘要降级。
+		if r.Summary == "" {
+			r.Summary = "auto"
+		}
 		w.Reasoning = r
 		// 索要推理签名：store 恒为假（无状态转发），此时上游只在 include
 		// 里被明确点名才回 encrypted_content。不要等于永远拿不到签名，
@@ -112,8 +117,19 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 		w.Include = withIncluded(w.Include, includeReasoningSig)
 	case req.Thinking.Off():
 		// 关闭时不要 summary：没有推理内容可摘要，带着它是要求上游
-		// 为一个不存在的过程产出摘要，属于自相矛盾的请求。
-		w.Reasoning = &wireReasoning{Effort: effortNone}
+		// 为一个不存在的过程产出摘要，属于自相矛盾的请求。context/mode
+		// 照带：它们是客户端表达过的偏好，上游对 none 档自行忽略，
+		// 替客户端删掉才是改写意图。
+		w.Reasoning = &wireReasoning{Effort: effortNone,
+			Context: req.Thinking.Context, Mode: req.Thinking.Mode}
+	default:
+		// 开关没表态、只给了子参数（如单一个 summary）：子参数照送，
+		// effort 一维不写——补档位是替客户端发明「要思考」的意图，
+		// 省略则上游按自己的默认走，两者都不是客户端说过的话。
+		if t := req.Thinking; t != nil &&
+			(t.Summary != "" || len(t.Context) > 0 || len(t.Mode) > 0) {
+			w.Reasoning = &wireReasoning{Summary: t.Summary, Context: t.Context, Mode: t.Mode}
+		}
 	}
 	if id := req.Metadata["user_id"]; id != "" {
 		w.User = id
