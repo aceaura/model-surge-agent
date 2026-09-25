@@ -165,6 +165,23 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 		note("container", "no code-execution container reuse or skill declaration, the upstream starts with a fresh container and no skills loaded")
 	}
 
+	// 历史里的 custom 工具调用与结果（responses 的 custom_tool_call /
+	// custom_tool_call_output 条目）：只有 responses 一族有自由文本入参的
+	// 条目形态。跨族出站时调用降级成普通函数调用（自由文本包成
+	// {"input":…} 投影落进 JSON 参数槽），结果降级成普通函数结果。
+	// 内容不丢但形态变了：上游模型看到的是一段包在对象里的文本，
+	// 不再是原生的自由文本调用。responses 同族原样往返，不报。
+	if name != ProtocolResponses {
+		if calls, results := countRequestCustomTools(req); calls > 0 || results > 0 {
+			if calls > 0 {
+				notes["custom tool calls"] = CustomToolDowngradeNote(calls)
+			}
+			if results > 0 {
+				notes["custom tool outputs"] = CustomToolOutputDowngradeNote(results)
+			}
+		}
+	}
+
 	// chat 一族专属四维（modalities/audio/prediction/web_search_options）：
 	// responses 全系没有对应槽位，不作映射尝试，跨族丢了照实报。
 	// audio 依附 modalities：模态丢了音频配置必然随之丢，合并成一则；
@@ -946,6 +963,45 @@ func countRequestContainerUploads(req *ir.Request) int {
 		count(m.Content)
 	}
 	return n
+}
+
+// countRequestCustomTools 数出请求历史里的 custom 工具调用与结果块。
+// 计数分开：两种降级措辞不同，合成一个数字就分不清丢的是哪一半。
+func countRequestCustomTools(req *ir.Request) (calls, results int) {
+	count := func(blocks []ir.Block) {
+		for _, b := range blocks {
+			switch b.Type {
+			case ir.BlockToolUse:
+				if b.ToolUse != nil && b.ToolUse.Kind == ir.ToolCustom {
+					calls++
+				}
+			case ir.BlockToolResult:
+				if b.ToolResult != nil && b.ToolResult.Kind == ir.ToolCustom {
+					results++
+				}
+			}
+		}
+	}
+	count(req.System)
+	for _, m := range req.Messages {
+		count(m.Content)
+	}
+	return calls, results
+}
+
+// CustomToolDowngradeNote custom 工具调用跨族降级注记。自由文本入参没有
+// 丢失——它被包成 {"input":…} 投影落进目标协议的 JSON 参数槽，但原生形态
+// （自由文本调用）目标协议表达不了。入参原文属会话内容，不进注记。
+func CustomToolDowngradeNote(n int) string {
+	return fmt.Sprintf(
+		"downgraded %d custom tool call(s) to function calls: the target protocol has no free-form tool-input item, the input is wrapped as {\"input\":…} inside the JSON arguments", n)
+}
+
+// CustomToolOutputDowngradeNote custom 工具结果跨族降级注记。结果内容不丢，
+// 丢的是「这是自定义工具的输出」这一形态：目标协议只有普通函数结果条目。
+func CustomToolOutputDowngradeNote(n int) string {
+	return fmt.Sprintf(
+		"downgraded %d custom tool output(s) to ordinary function results: the target protocol has no custom_tool_call_output item", n)
 }
 
 // countRequestAudioRefs 数出请求历史里 assistant 消息携带的音频引用条数。

@@ -290,7 +290,14 @@ func (a *Aggregator) materialize() {
 			b.Thinking.Signature = x.sig.String()
 		}
 		if b.ToolUse != nil {
-			b.ToolUse.Input = x.input.String()
+			if b.ToolUse.Kind == ToolCustom {
+				// custom 调用的增量通道承载的是自由文本而不是 JSON 参数：
+				// 原文归 InputText，Input 放 {"input":...} 投影供外族降级。
+				b.ToolUse.InputText = x.input.String()
+				b.ToolUse.Input = b.ToolUse.ObjectInput()
+			} else {
+				b.ToolUse.Input = x.input.String()
+			}
 		}
 		if b.ServerToolUse != nil {
 			b.ServerToolUse.Input = x.input.String()

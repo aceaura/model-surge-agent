@@ -111,9 +111,13 @@ type openItem struct {
 	text     string
 	// cites 累积已下发的来源标注，闭合时随 done 帧的 part 给出终态快照：
 	// 只读终态不拼增量的客户端全靠它拿到标注。
-	cites     []ir.Citation
-	callID    string
-	name      string
+	cites  []ir.Citation
+	callID string
+	name   string
+	// toolKind 记调用形态：custom 的入参是自由文本，增量事件名、终态
+	// 条目类型与入参校验都不同。只在 EvBlockStart 给了 ToolUse.Kind 时
+	// 置位（同族上游的 custom_tool_call 条目）。
+	toolKind  ir.ToolKind
 	args      string
 	signature string
 	closed    bool
@@ -298,8 +302,14 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			return nil, err
 		}
 		item.args += ev.Text
-		frames, err := e.frame(evFunctionArgsDelta, wireStreamEvent{
-			Type:        evFunctionArgsDelta,
+		// custom 调用的入参增量走专属事件名：function_call_arguments.delta
+		// 会让客户端把自由文本当 JSON 参数去解析。
+		deltaKind := evFunctionArgsDelta
+		if item.toolKind == ir.ToolCustom {
+			deltaKind = evCustomToolInputDelta
+		}
+		frames, err := e.frame(deltaKind, wireStreamEvent{
+			Type:        deltaKind,
 			OutputIndex: item.outputIndex,
 			Delta:       ev.Text,
 		})
@@ -364,6 +374,7 @@ func (e *streamEncoder) openBlock(index int, kind ir.BlockType, block *ir.Block)
 	if block != nil && block.ToolUse != nil {
 		item.callID = block.ToolUse.ID
 		item.name = block.ToolUse.Name
+		item.toolKind = block.ToolUse.Kind
 	}
 
 	out, err := e.frame(evOutputItemAdded, wireStreamEvent{
@@ -424,7 +435,8 @@ func (e *streamEncoder) closeBlockAs(index int, status string) ([][]byte, error)
 	// 关块时校验累积的入参：增量已发出、改写不了，畸形的（多为
 	// max_tokens 截断）只能计数报出，让客户端知道这次调用的参数不能
 	// 安全执行，而不是看起来以空对象正常完成。
-	if item.kind == ir.BlockToolUse {
+	if item.kind == ir.BlockToolUse && item.toolKind != ir.ToolCustom {
+		// custom 的入参是自由文本，本就没有 JSON 合法性可言，不校验。
 		if _, valid := ir.NormalizeToolInput([]byte(item.args)); !valid {
 			e.badToolArgs++
 		}
@@ -655,6 +667,15 @@ func (i *openItem) wire(status string) *wireRespItem {
 	out := &wireRespItem{Status: status}
 	switch i.kind {
 	case ir.BlockToolUse:
+		if i.toolKind == ir.ToolCustom {
+			// custom 条目的入参终态在 input 键上（自由文本），没有
+			// arguments 键。
+			out.Type = itemCustomToolCall
+			out.CallID = i.callID
+			out.Name = i.name
+			out.Input = i.args
+			break
+		}
 		out.Type = itemFunctionCall
 		out.CallID = i.callID
 		out.Name = i.name
@@ -757,6 +778,16 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 				return nil, err
 			}
 			if b.ToolUse == nil {
+				continue
+			}
+			if b.ToolUse.Kind == ir.ToolCustom {
+				// 自由文本原文回本族专属槽位：投影是给外族降级用的，
+				// 写回本族会多包一层 {"input":…}。
+				out.Output = append(out.Output, wireRespItem{
+					Type: itemCustomToolCall, Status: "completed",
+					CallID: b.ToolUse.ID, Name: b.ToolUse.Name,
+					Input: b.ToolUse.InputText,
+				})
 				continue
 			}
 			// arguments 是字符串槽位：畸形原文照转义嵌入，响应体不会因此

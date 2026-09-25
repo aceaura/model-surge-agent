@@ -277,7 +277,8 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 		// input 是 RawMessage 对象槽位：残缺/非对象参数直接放进去会炸成
 		// 语法错误的请求体，静默换成 {} 则让工具不带参数执行（真实副作用，
 		// 比 400 更糟）。规整把原文挪进 ir.RawArgsKey 键位保真。
-		out.Input, _ = ir.NormalizeToolInput([]byte(b.ToolUse.Input))
+		// ObjectInput：custom 形态的自由文本以 {"input":…} 投影落进对象槽。
+		out.Input, _ = ir.NormalizeToolInput([]byte(b.ToolUse.ObjectInput()))
 	case ir.BlockToolResult:
 		if b.ToolResult == nil {
 			return out, false, fmt.Errorf("tool_result block without payload")

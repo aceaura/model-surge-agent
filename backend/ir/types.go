@@ -235,9 +235,19 @@ func (m *Media) HasPayload() bool {
 type ToolUse struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-	// Input 是工具入参的 JSON 对象。流式解码期间是逐片累积的不完整 JSON，
-	// 只有 BlockStop 之后才保证可解析。
+	// Kind 是调用形态。零值 ToolFunction 表示 Input 承载 JSON 对象参数；
+	// ToolCustom（responses 的 custom_tool_call）表示这是自由文本调用，
+	// 原文在 InputText，Input 里放的是 {"input":<原文>} 投影——供没有
+	// 自由文本槽位的协议（anthropic/chat/gemini）安全降级用。
+	Kind ToolKind `json:"kind,omitempty"`
+	// Input 是工具入参。function 形态下是 JSON 对象文本，流式解码期间是
+	// 逐片累积的不完整 JSON，只有 BlockStop 之后才保证可解析；custom 形态
+	// 下是 {"input":...} 投影（自由文本原文见 InputText）。
 	Input string `json:"input,omitempty"`
+	// InputText 是 custom 工具调用的自由文本原文。仅 Kind==ToolCustom 有意义：
+	// responses 的 custom_tool_call.input 是一段自由文本而不是 JSON 参数，
+	// 同族回写与流式增量都要用它，不能用投影（投影是给外族降级用的）。
+	InputText string `json:"input_text,omitempty"`
 	// Signature 是这次调用附带的推理签名。gemini 把它挂在 functionCall part
 	// 自身而不是 thought part 上，所以它必须跟着调用走而不是跟着思考块走。
 	//
@@ -248,10 +258,49 @@ type ToolUse struct {
 	SignatureFrom string `json:"signature_from,omitempty"`
 }
 
+// ToolKind 工具调用形态。零值等同 function，保持既有构造与黄金文件兼容。
+type ToolKind string
+
+const (
+	// ToolFunction 普通函数工具：入参是 JSON 对象。
+	ToolFunction ToolKind = ""
+	// ToolCustom 自定义工具（responses 的 custom_tool_call）：入参是自由文本。
+	ToolCustom ToolKind = "custom"
+)
+
+// ObjectInput 返回对象槽位协议可承载的入参文本。function 形态原样返回
+// Input（本就是 JSON 对象）；custom 形态返回 {"input":<原文>} 投影——
+// anthropic 的 input、chat/responses 的 arguments、gemini 的 args 都只接
+// JSON 对象，自由文本必须以投影形式落进去，既保住内容又不违反对象约束。
+// 投影始终是合法对象，不会被 NormalizeToolInput 判成畸形。
+func (t *ToolUse) ObjectInput() string {
+	if t == nil {
+		return "{}"
+	}
+	if t.Kind == ToolCustom {
+		return string(MarshalCustomInput(t.InputText))
+	}
+	return t.Input
+}
+
+// MarshalCustomInput 把自由文本包成 {"input":<文本>} 投影。导出给 responses
+// 的解码侧：请求历史里的 custom_tool_call 条目解码时就地把投影填好，
+// 跨族编码器便可以只读 Input 而无需知道 Kind。
+func MarshalCustomInput(text string) []byte {
+	b, _ := json.Marshal(struct {
+		Input string `json:"input"`
+	}{Input: text})
+	return b
+}
+
 type ToolResult struct {
-	ToolUseID string  `json:"tool_use_id"`
-	Content   []Block `json:"content,omitempty"`
-	IsError   bool    `json:"is_error,omitempty"`
+	ToolUseID string `json:"tool_use_id"`
+	// Kind 与产生它的调用同形态：custom 工具的结果回写 responses 时要落成
+	// custom_tool_call_output 条目（而不是 function_call_output），否则同族
+	// 往返会把自由文本调用的结果配到错误的条目类型上。
+	Kind    ToolKind `json:"kind,omitempty"`
+	Content []Block  `json:"content,omitempty"`
+	IsError bool     `json:"is_error,omitempty"`
 }
 
 // Thinking 是推理内容。SignatureFrom 记录签名的来源协议，

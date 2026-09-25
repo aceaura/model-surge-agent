@@ -96,12 +96,15 @@ type wireItem struct {
 	Content json.RawMessage `json:"content,omitempty"`
 	Status  string          `json:"status,omitempty"`
 
-	// function_call
+	// function_call / custom_tool_call
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
+	// Input 是 custom_tool_call 条目的自由文本入参（与 function_call 的
+	// arguments 互斥：自定义工具没有 JSON 参数概念）。
+	Input string `json:"input,omitempty"`
 
-	// function_call_output
+	// function_call_output / custom_tool_call_output
 	//
 	// 指针而非字符串：output 是 Required 键（官方 response_input_item_param），
 	// 空文本/纯媒体的工具结果也必须写 ""。string + omitempty 会把空串的键
@@ -143,38 +146,50 @@ type wireRespItem struct {
 	// message：客户端按下标往 content 里填 part，字段缺席时无处可填。
 	Content json.RawMessage `json:"content,omitempty"`
 
-	// function_call：三个字段客户端都要，arguments 为空字符串表示
-	// 「还没有入参」而不是「没有这个字段」，缺席会让客户端跳过该调用。
-	// 必填只对 function_call 条目生效，见 MarshalJSON。
+	// function_call / custom_tool_call：客户端要按条目类型读全字段，
+	// 空字符串表示「还没有入参」而不是「没有这个字段」，缺席会让客户端
+	// 跳过该调用。必填只对这两类条目生效，见 MarshalJSON。
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
+	// Input 是 custom_tool_call 的自由文本入参终态，与 arguments 互斥。
+	Input string `json:"input,omitempty"`
 
 	// reasoning
 	Summary          []wireSummary `json:"summary,omitempty"`
 	EncryptedContent string        `json:"encrypted_content,omitempty"`
 }
 
-// MarshalJSON 在 function_call 条目上补出三个必填键。
+// MarshalJSON 在 function_call / custom_tool_call 条目上补出必填键。
 //
 // 按条目类型而非无条件必填：reasoning 与 message 条目带一个空 call_id
 // 是本协议里不存在的形状，客户端 SDK 按 type 分派后读到不该有的字段会报错。
+// 两类条目的必填集不同：function_call 是 call_id/name/arguments，
+// custom_tool_call 是 call_id/name/input（自定义工具没有 JSON 参数概念）。
 func (i wireRespItem) MarshalJSON() ([]byte, error) {
 	type plain wireRespItem
 	data, err := json.Marshal(plain(i))
 	if err != nil {
 		return nil, err
 	}
-	if i.Type != itemFunctionCall {
+	var required map[string]string
+	switch i.Type {
+	case itemFunctionCall:
+		required = map[string]string{
+			"call_id": i.CallID, "name": i.Name, "arguments": i.Arguments,
+		}
+	case itemCustomToolCall:
+		required = map[string]string{
+			"call_id": i.CallID, "name": i.Name, "input": i.Input,
+		}
+	default:
 		return data, nil
 	}
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(data, &obj); err != nil {
 		return nil, err
 	}
-	for key, val := range map[string]string{
-		"call_id": i.CallID, "name": i.Name, "arguments": i.Arguments,
-	} {
+	for key, val := range required {
 		if _, ok := obj[key]; ok {
 			continue
 		}
@@ -322,6 +337,9 @@ type wireStreamEvent struct {
 	// Arguments 是 function_call_arguments.done 携带的完整参数终态：
 	// 不是新一份参数，已由 delta 交付的前缀不得重复。
 	Arguments string `json:"arguments,omitempty"`
+	// Input 是 custom_tool_call_input.done 携带的完整自由文本入参终态，
+	// 口径同 Arguments。
+	Input string `json:"input,omitempty"`
 	// Text / Refusal 是 done 帧携带的完整终态值而不是新一份内容：
 	// output_text.done 给 text，refusal.done 给 refusal，
 	// reasoning_summary_text.done / reasoning_text.done 给 text。
@@ -352,6 +370,10 @@ const (
 	itemFunctionCall       = "function_call"
 	itemFunctionCallOutput = "function_call_output"
 	itemReasoning          = "reasoning"
+	// custom_tool_call 是自定义工具的调用条目：入参是自由文本而非 JSON，
+	// 结果条目也独立成型（output 同样是自由文本）。
+	itemCustomToolCall       = "custom_tool_call"
+	itemCustomToolCallOutput = "custom_tool_call_output"
 )
 
 // part 类型名。input_ 前缀的用在请求，output_ 前缀的用在响应。
@@ -381,15 +403,19 @@ const (
 	evRefusalDone               = "response.refusal.done"
 	evFunctionArgsDelta         = "response.function_call_arguments.delta"
 	evFunctionArgsDone          = "response.function_call_arguments.done"
-	evReasoningSummaryText      = "response.reasoning_summary_text.delta"
-	evReasoningSummaryTextDone  = "response.reasoning_summary_text.done"
-	evReasoningSummaryPartDone  = "response.reasoning_summary_part.done"
-	evReasoningTextDelta        = "response.reasoning_text.delta"
-	evReasoningTextDone         = "response.reasoning_text.done"
-	evCompleted                 = "response.completed"
-	evIncomplete                = "response.incomplete"
-	evFailed                    = "response.failed"
-	evError                     = "error"
+	// custom_tool_call 的入参增量走独立事件对，delta 键名是 input 而非
+	// arguments，output_index 口径与 function_call 相同。
+	evCustomToolInputDelta     = "response.custom_tool_call_input.delta"
+	evCustomToolInputDone      = "response.custom_tool_call_input.done"
+	evReasoningSummaryText     = "response.reasoning_summary_text.delta"
+	evReasoningSummaryTextDone = "response.reasoning_summary_text.done"
+	evReasoningSummaryPartDone = "response.reasoning_summary_part.done"
+	evReasoningTextDelta       = "response.reasoning_text.delta"
+	evReasoningTextDone        = "response.reasoning_text.done"
+	evCompleted                = "response.completed"
+	evIncomplete               = "response.incomplete"
+	evFailed                   = "response.failed"
+	evError                    = "error"
 )
 
 const (
@@ -421,6 +447,8 @@ var requiredIndexFields = map[string][]string{
 	evRefusalDone:               {"output_index", "content_index"},
 	evFunctionArgsDelta:         {"output_index"},
 	evFunctionArgsDone:          {"output_index"},
+	evCustomToolInputDelta:      {"output_index"},
+	evCustomToolInputDone:       {"output_index"},
 	evReasoningSummaryText:      {"output_index", "summary_index"},
 	evReasoningSummaryTextDone:  {"output_index", "summary_index"},
 	evReasoningSummaryPartDone:  {"output_index", "summary_index"},

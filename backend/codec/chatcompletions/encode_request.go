@@ -180,8 +180,8 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 			// arguments 是 JSON 字符串槽位：原文照转义嵌入，请求体不会因此
 			// 非法。残缺参数不清空——{} 会让工具不带参数执行，是一次真实
 			// 副作用；原文透传让工具侧的解析失败暴露出来，损耗由
-			// DescribeLossy 报出。
-			args := b.ToolUse.Input
+			// DescribeLossy 报出。ObjectInput：custom 形态给 {"input":…} 投影。
+			args := b.ToolUse.ObjectInput()
 			calls = append(calls, wireToolCall{
 				ID:       b.ToolUse.ID,
 				Type:     "function",

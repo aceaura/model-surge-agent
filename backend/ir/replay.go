@@ -68,6 +68,20 @@ func splitBlock(index int, b Block) (Block, []Event) {
 	case BlockToolUse:
 		if b.ToolUse != nil {
 			u := *b.ToolUse
+			if u.Kind == ToolCustom {
+				// custom 调用的增量通道承载自由文本原文而不是投影：
+				// 同族流式编码器要按 custom_tool_call_input.delta 逐片下发，
+				// 投影 JSON 发进去等于把降级形态当成了原文。
+				if u.InputText != "" {
+					deltas = append(deltas, Event{Type: EvToolInput, Index: index, Text: u.InputText})
+				}
+				u.InputText = ""
+				// 投影也要从骨架上清掉：聚合器会把它当增量种子，与原文
+				// 增量拼在一起；物化时投影本就按 InputText 重算。
+				u.Input = ""
+				b.ToolUse = &u
+				break
+			}
 			if u.Input != "" {
 				// 入参走增量而不留在块上：Aggregator 的截断判定只认增量，
 				// 留在块里会让残缺入参判不出来——非流式上游给的入参同样

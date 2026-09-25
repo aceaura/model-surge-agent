@@ -157,6 +157,39 @@ func appendItem(out *ir.Request, item wireItem) error {
 		}})
 		return nil
 
+	case itemCustomToolCall:
+		// 自定义工具的历史调用条目：入参是自由文本。Input 里同时放一份
+		// {"input":…} 投影——别族协议只有 JSON 参数槽位，投影让跨族编码
+		// 无需知道 Kind 就能降级出合法形状；同族回写走 InputText 原文。
+		appendBlocks(out, ir.RoleAssistant, []ir.Block{{
+			Type: ir.BlockToolUse,
+			ToolUse: &ir.ToolUse{
+				ID:        item.CallID,
+				Name:      item.Name,
+				Kind:      ir.ToolCustom,
+				InputText: item.Input,
+				Input:     string(ir.MarshalCustomInput(item.Input)),
+			},
+		}})
+		return nil
+
+	case itemCustomToolCallOutput:
+		// output 与 function_call_output 同款双形态（字符串或 part 数组），
+		// 复用同一套解析；失败前缀也照认——那是我们出站写的，换目标重试时
+		// 不认回来模型会把失败当成功。
+		content := decodeToolCallOutput(item.Output)
+		content, isErr := codec.AdoptToolResultError(content)
+		appendBlocks(out, ir.RoleUser, []ir.Block{{
+			Type: ir.BlockToolResult,
+			ToolResult: &ir.ToolResult{
+				ToolUseID: item.CallID,
+				Kind:      ir.ToolCustom,
+				Content:   content,
+				IsError:   isErr,
+			},
+		}})
+		return nil
+
 	case itemFunctionCallOutput:
 		// output 官方允许字符串或 content part 数组两种形态。
 		content := decodeToolCallOutput(item.Output)

@@ -170,6 +170,17 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 			if b.ToolUse == nil {
 				return nil, fmt.Errorf("tool_use block without payload")
 			}
+			if b.ToolUse.Kind == ir.ToolCustom {
+				// 同族回写走自由文本原文：custom_tool_call 的 input 不是
+				// JSON 槽位，把 {"input":…} 投影写回去会多包一层。
+				callItems = append(callItems, wireItem{
+					Type:   itemCustomToolCall,
+					CallID: b.ToolUse.ID,
+					Name:   b.ToolUse.Name,
+					Input:  b.ToolUse.InputText,
+				})
+				continue
+			}
 			// arguments 是 JSON 字符串槽位：原文照转义嵌入，请求体不会因此
 			// 非法。残缺参数不清空——{} 会让工具不带参数执行，是一次真实
 			// 副作用；原文透传让工具侧的解析失败暴露出来，损耗由
@@ -186,15 +197,22 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 				return nil, fmt.Errorf("tool_result block without payload")
 			}
 			// 工具结果条目要排在承载它的消息之前发出，故先落进 out。
-			// 失败态改写成前缀：本协议的 function_call_output 只有
-			// call_id/output 两个键，没有放标记的位置，而丢掉它会让
-			// 模型把失败当成功。
+			// 失败态改写成前缀：本协议的结果条目只有 call_id/output 两个键
+			// （custom_tool_call_output 同形），没有放标记的位置，而丢掉它
+			// 会让模型把失败当成功。
 			output := joinText(codec.PrefixToolResultError(b.ToolResult, outboundCodec{}.Caps()))
 			// output 恒写键：空文本（纯媒体结果）也得是 ""，
 			// 依据见 wireItem.Output 的注释。字符串不会 marshal 失败。
 			enc, _ := json.Marshal(output)
+			// 条目类型跟着调用形态走：custom 调用的结果配到
+			// function_call_output 上，同族往返会把自由文本调用的结果
+			// 配到错误的条目类型上。
+			itemType := itemFunctionCallOutput
+			if b.ToolResult.Kind == ir.ToolCustom {
+				itemType = itemCustomToolCallOutput
+			}
 			out = append(out, wireItem{
-				Type:   itemFunctionCallOutput,
+				Type:   itemType,
 				CallID: b.ToolResult.ToolUseID,
 				Output: enc,
 			})

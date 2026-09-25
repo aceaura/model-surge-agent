@@ -476,7 +476,8 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			// arguments 是字符串槽位：畸形原文照转义嵌入，响应体不会因此
 			// 非法。不清空成 {}——那会让客户端把参数损坏的调用当无参调用
 			// 存进历史，损耗由 EncodeResponseLossy 报出。
-			args := b.ToolUse.Input
+			// ObjectInput：custom 形态给 {"input":…} 投影。
+			args := b.ToolUse.ObjectInput()
 			n := len(calls)
 			calls = append(calls, wireToolCall{
 				Index: &n, ID: b.ToolUse.ID, Type: "function",

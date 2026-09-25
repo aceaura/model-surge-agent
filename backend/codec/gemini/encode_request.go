@@ -195,7 +195,8 @@ func encodeMessage(m ir.Message, names map[string]string) ([]wireContent, error)
 			// args 是 RawMessage 对象槽位：残缺/非对象参数直接放进去会
 			// 让整个请求体 marshal 失败或违反对象约束，静默换成 {} 则让
 			// 工具不带参数执行（真实副作用）。原文挪进 ir.RawArgsKey 保真。
-			args, _ := ir.NormalizeToolInput([]byte(b.ToolUse.Input))
+			// ObjectInput：custom 形态的自由文本以 {"input":…} 投影落进对象槽。
+			args, _ := ir.NormalizeToolInput([]byte(b.ToolUse.ObjectInput()))
 			// 回指靠 name，但 id 是本协议的可选字段：上游原生的 id 带上，
 			// 能让它原样穿过一轮，省掉下一轮解码时的合成。
 			part := wirePart{FunctionCall: &wireFunctionCall{

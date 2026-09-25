@@ -45,6 +45,11 @@ type streamDecoder struct {
 	// 帧里；failed 帧再补一份空壳错误会让客户端看到两次报错。
 	// 反过来，见过错误后即使上游继续发 completed 也不能伪装成正常结束。
 	sawError bool
+	// customKinds 记「这个 output_index 的调用条目是 custom_tool_call」。
+	// 增量帧不带条目类型（delta 帧只有 output_index 与文本），而块开启
+	// 可能发生在增量帧上（上游漏发 added 帧），所以两处都要能查到形态，
+	// 且以先见者为准——同一序号不会出现两种形态的条目。
+	customKinds map[int]bool
 }
 
 // slot 把「两级序号构成的键」绑到分配给它的 IR 块索引。
@@ -61,7 +66,7 @@ type slot struct {
 }
 
 func newStreamDecoder() *streamDecoder {
-	return &streamDecoder{closed: map[string]struct{}{}}
+	return &streamDecoder{closed: map[string]struct{}{}, customKinds: map[int]bool{}}
 }
 
 // Notes 实现 codec.StreamNotes。
@@ -156,7 +161,7 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 
 	case evFunctionArgsDelta:
 		// 函数调用条目只有一个 arguments 流，用 output_index 单独成键。
-		idx, opened := d.slot(callKey(ev.OutputIndex), ir.BlockToolUse)
+		idx, opened := d.slotCall(ev.OutputIndex)
 		out := append(d.start(ev), opened...)
 		d.accText(idx, ev.Delta)
 		return append(out, ir.Event{Type: ir.EvToolInput, Index: idx, Text: ev.Delta}), nil
@@ -166,6 +171,20 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		// 全部入参，已发 delta 的前缀不得重复，分叉也不能追加成畸形 JSON。
 		return d.backfill(callKey(ev.OutputIndex), ir.BlockToolUse,
 			ev.Arguments, ir.EvToolInput), nil
+
+	case evCustomToolInputDelta:
+		// custom_tool_call 的入参增量：帧结构与 function_call 的 arguments
+		// 增量相同，只是键名从 arguments 换成 input、事件名独立。
+		d.customKinds[ev.OutputIndex] = true
+		idx, opened := d.slotCall(ev.OutputIndex)
+		out := append(d.start(ev), opened...)
+		d.accText(idx, ev.Delta)
+		return append(out, ir.Event{Type: ir.EvToolInput, Index: idx, Text: ev.Delta}), nil
+
+	case evCustomToolInputDone:
+		// 终态在 input 键上；口径同 evFunctionArgsDone。
+		return d.backfill(callKey(ev.OutputIndex), ir.BlockToolUse,
+			ev.Input, ir.EvToolInput), nil
 
 	case evReasoningSummaryText, evReasoningTextDelta:
 		// 推理摘要按 summary_index 分段，各段是同一块的续写：
@@ -289,6 +308,30 @@ func (d *streamDecoder) itemAdded(ev wireStreamEvent) ([]ir.Event, error) {
 			out = append(out, ir.Event{Type: ir.EvToolInput, Index: idx, Text: ev.Item.Arguments})
 		}
 		return out, nil
+	case itemCustomToolCall:
+		// 自定义工具调用条目：入参是自由文本，块要带 Kind 开启，
+		// 聚合器才知道终态该落 InputText 而不是 JSON 参数槽。
+		d.customKinds[ev.OutputIndex] = true
+		key := callKey(ev.OutputIndex)
+		if _, exists := d.lookup(key); exists {
+			return out, nil
+		}
+		idx := d.allocate(key)
+		out = append(out, ir.Event{
+			Type:  ir.EvBlockStart,
+			Index: idx,
+			Block: &ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
+				ID:   ev.Item.CallID,
+				Name: ev.Item.Name,
+				Kind: ir.ToolCustom,
+			}},
+		})
+		// 开启帧直接带全量 input 的实现同 function_call：当一次 delta 发出。
+		if ev.Item.Input != "" {
+			d.accText(idx, ev.Item.Input)
+			out = append(out, ir.Event{Type: ir.EvToolInput, Index: idx, Text: ev.Item.Input})
+		}
+		return out, nil
 	case itemReasoning:
 		key := reasoningKey(ev.OutputIndex)
 		if _, exists := d.lookup(key); exists {
@@ -322,6 +365,15 @@ func (d *streamDecoder) itemDone(ev wireStreamEvent) []ir.Event {
 			// 完整参数可能只在 item.done 里：只发终态的调用一帧增量都没有。
 			out = append(out, d.backfill(callKey(ev.OutputIndex), ir.BlockToolUse,
 				ev.Item.Arguments, ir.EvToolInput)...)
+		case itemCustomToolCall:
+			// done-only 上游的自由文本入参只在 item.input 里。
+			d.customKinds[ev.OutputIndex] = true
+			// 先按 custom 形态补开块再回补：backfill 自己开块时不知道形态，
+			// 会把自由文本落进 JSON 参数槽。
+			_, opened := d.slotCall(ev.OutputIndex)
+			out = append(out, opened...)
+			out = append(out, d.backfill(callKey(ev.OutputIndex), ir.BlockToolUse,
+				ev.Item.Input, ir.EvToolInput)...)
 		case itemReasoning:
 			// 摘要快照只在 item.done 里：有的网关不发任何 reasoning_* 终止帧。
 			// 回补必须排在下面的签名增量之前，思考正文才不会落到签名后面。
@@ -538,6 +590,23 @@ func (d *streamDecoder) slot(key string, kind ir.BlockType) (int, []ir.Event) {
 	return idx, []ir.Event{{Type: ir.EvBlockStart, Index: idx, Block: &block}}
 }
 
+// slotCall 是调用条目的 slot：块开启可能发生在增量帧上（上游漏发
+// output_item.added），此时要按 customKinds 把形态带上，聚合器才知道
+// 累积的入参是自由文本而不是 JSON 参数。
+func (d *streamDecoder) slotCall(output int) (int, []ir.Event) {
+	key := callKey(output)
+	if idx, ok := d.lookup(key); ok {
+		return idx, nil
+	}
+	idx := d.allocate(key)
+	tu := &ir.ToolUse{}
+	if d.customKinds[output] {
+		tu.Kind = ir.ToolCustom
+	}
+	return idx, []ir.Event{{Type: ir.EvBlockStart, Index: idx,
+		Block: &ir.Block{Type: ir.BlockToolUse, ToolUse: tu}}}
+}
+
 func (d *streamDecoder) lookup(key string) (int, bool) {
 	for _, s := range d.open {
 		if s.key == key {
@@ -633,6 +702,16 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 				ID:    item.CallID,
 				Name:  item.Name,
 				Input: item.Arguments,
+			}})
+		case itemCustomToolCall:
+			// 自由文本入参原文进 InputText，Input 放 {"input":…} 投影，
+			// 口径与请求侧 appendItem 相同。
+			out.Content = append(out.Content, ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
+				ID:        item.CallID,
+				Name:      item.Name,
+				Kind:      ir.ToolCustom,
+				InputText: item.Input,
+				Input:     string(ir.MarshalCustomInput(item.Input)),
 			}})
 		case itemReasoning:
 			out.Content = append(out.Content, ir.Block{Type: ir.BlockThinking, Thinking: &ir.Thinking{
@@ -761,7 +840,9 @@ func stopReasonFor(r *wireResponse) ir.StopReason {
 		return ir.StopContentFilter
 	}
 	for _, item := range r.Output {
-		if item.Type == itemFunctionCall {
+		// custom_tool_call 同样是一次待执行的调用：漏判会让客户端
+		// 以为回答正常结束而不去执行工具。
+		if item.Type == itemFunctionCall || item.Type == itemCustomToolCall {
 			return ir.StopToolUse
 		}
 	}
