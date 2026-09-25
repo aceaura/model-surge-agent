@@ -131,6 +131,23 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		d.accText(idx, ev.Delta)
 		return append(out, ir.Event{Type: ir.EvTextDelta, Index: idx, Text: ev.Delta}), nil
 
+	case evOutputTextAnnotationAdded:
+		// 标注增量帧。此前它与 output_text.delta 并成一个 case，而它没有
+		// delta 字段，整帧被静默丢掉——web 搜索回答的来源标注全部消失。
+		//
+		// 只挂到已存在的 part 槽位（lookup 不分配）：标注到达时正文必然
+		// 已开启，没开说明序号对不上，为一个不存在的 part 分配块索引
+		// 会让客户端多出一个空文本块。
+		cs := decodeAnnotations([]annotation{*orEmptyAnnotation(ev.Annotation)})
+		if len(cs) == 0 {
+			return nil, nil
+		}
+		idx, ok := d.lookup(partKey(ev.OutputIndex, ev.ContentIndex))
+		if !ok {
+			return nil, nil
+		}
+		return []ir.Event{{Type: ir.EvCitation, Index: idx, Citations: cs}}, nil
+
 	case evFunctionArgsDelta:
 		// 函数调用条目只有一个 arguments 流，用 output_index 单独成键。
 		idx, opened := d.slot(callKey(ev.OutputIndex), ir.BlockToolUse)
@@ -176,8 +193,10 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		}
 		switch ev.Part.Type {
 		case partOutputText, partRefusal, "":
-			return d.backfill(partKey(ev.OutputIndex, ev.ContentIndex), ir.BlockText,
-				partText(ev.Part), ir.EvTextDelta), nil
+			out := d.backfill(partKey(ev.OutputIndex, ev.ContentIndex), ir.BlockText,
+				partText(ev.Part), ir.EvTextDelta)
+			return append(out, d.doneCitations(
+				partKey(ev.OutputIndex, ev.ContentIndex), ev.Part)...), nil
 		}
 		return nil, nil
 
@@ -425,9 +444,29 @@ func (d *streamDecoder) completeItemParts(oi int, raw json.RawMessage) []ir.Even
 		case partOutputText, partRefusal, "":
 			out = append(out, d.backfill(partKey(oi, n), ir.BlockText,
 				partText(&parts[n]), ir.EvTextDelta)...)
+			out = append(out, d.doneCitations(partKey(oi, n), &parts[n])...)
 		}
 	}
 	return out
+}
+
+// doneCitations 从 done 帧的 part 快照回补来源标注：漏发 annotation.added
+// 增量帧的网关，标注只在终态里出现。只挂到已存在的正文槽位（backfill
+// 可能刚补开）；没有槽位说明该 part 没有正文，标注无处依附。
+// 与增量帧的重叠由聚合器的 DedupeCitations 兜住，重复回补无害。
+func (d *streamDecoder) doneCitations(key string, p *wirePart) []ir.Event {
+	if p == nil {
+		return nil
+	}
+	cs := decodeAnnotations(p.Annotations)
+	if len(cs) == 0 {
+		return nil
+	}
+	idx, ok := d.lookup(key)
+	if !ok {
+		return nil
+	}
+	return []ir.Event{{Type: ir.EvCitation, Index: idx, Citations: cs}}
 }
 
 // missingSuffix 判 done 帧携带的完整终态与已发出前缀的关系：终态是已发内容的

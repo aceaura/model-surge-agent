@@ -143,6 +143,8 @@ func appendMessage(out *ir.Request, m wireMessage) error {
 		if err != nil {
 			return err
 		}
+		// 消息级标注落到最后一个文本块：IR 的引用挂块上，本协议挂消息上。
+		blocks = attachCitations(blocks, decodeAnnotations(m.Annotations))
 		// 推理内容排在正文之前：这是各家推理模型的实际输出顺序，
 		// 转成 Anthropic 时 thinking 块也必须在 text 块之前。
 		if m.ReasoningContent != "" {

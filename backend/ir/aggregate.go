@@ -189,6 +189,14 @@ func (a *Aggregator) Add(ev Event) {
 				a.sawInput[ev.Index] = true
 			}
 		}
+	case EvCitation:
+		// 引用随正文之后到达（Anthropic 的 citations_delta、Chat 的
+		// delta.annotations 都在文本之后），必须累到已开的块上——落到新块会
+		// 让客户端多出一个空文本块，而标注与正文分离后偏移量全部失效。
+		// 不走 Builder：引用不是逐片累积的正文，去重后整份持有即可。
+		if b := a.blocks[ev.Index]; b != nil {
+			b.Citations = DedupeCitations(append(b.Citations, ev.Citations...))
+		}
 	case EvMessageDelta:
 		if ev.StopReason != "" {
 			a.resp.StopReason = ev.StopReason

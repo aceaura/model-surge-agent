@@ -129,6 +129,15 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 				Text:          ev.Delta.Signature,
 				SignatureFrom: Name,
 			}}, nil
+		case deltaCitations:
+			// 每帧只带一条引用；citation 键缺失（畸形上游）时 orEmptyCitation
+			// 给出零值，decodeCitations 会因 URL 为空把它丢掉，这里再判空
+			// 避免发一条零事件。
+			cs := decodeCitations([]citation{*orEmptyCitation(ev.Delta.Citation)})
+			if len(cs) == 0 {
+				return nil, nil
+			}
+			return []ir.Event{{Type: ir.EvCitation, Index: ev.Index, Citations: cs}}, nil
 		default:
 			// 未知 delta 类型：跳过而非报错，上游新增字段不该让整个流失败。
 			return nil, nil

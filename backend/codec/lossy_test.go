@@ -18,6 +18,7 @@ func fullCaps() Capabilities {
 		CacheControl:  true,
 		TopK:          true,
 		StopSequences: true,
+		Citations:     true,
 		MediaTypes:    []string{"image/png", "application/pdf"},
 	}
 }
@@ -133,6 +134,13 @@ func TestDescribeLossyJudgments(t *testing.T) {
 			req:  ir.Request{System: []ir.Block{{Type: ir.BlockText, Text: "sys", CacheCtl: "ephemeral"}}},
 			caps: func(c Capabilities) Capabilities { c.CacheControl = false; return c },
 			want: []string{"dropped cache_control"},
+		},
+		{
+			name: "citations dropped when protocol has no slot",
+			req: ir.Request{Messages: msg(ir.Block{Type: ir.BlockText, Text: "hi",
+				Citations: []ir.Citation{{URL: "https://a", Start: 0, End: 2}}})},
+			caps: func(c Capabilities) Capabilities { c.Citations = false; return c },
+			want: []string{"dropped 1 citation(s)", "no slot for source annotations"},
 		},
 	}
 

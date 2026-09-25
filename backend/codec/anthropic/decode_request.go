@@ -117,6 +117,7 @@ func decodeBlock(b wireBlock) (ir.Block, bool, error) {
 	case blockText:
 		out.Type = ir.BlockText
 		out.Text = b.Text
+		out.Citations = decodeCitations(b.Citations)
 	case blockImage, blockDocument:
 		if b.Source == nil {
 			return out, false, fmt.Errorf("%s block needs a source", b.Type)

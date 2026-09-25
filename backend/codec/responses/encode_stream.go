@@ -82,8 +82,11 @@ type openItem struct {
 	outputIndex int
 	kind        ir.BlockType
 	// partOpen 记录 message 条目是否已发过 content_part.added。
-	partOpen  bool
-	text      string
+	partOpen bool
+	text     string
+	// cites 累积已下发的来源标注，闭合时随 done 帧的 part 给出终态快照：
+	// 只读终态不拼增量的客户端全靠它拿到标注。
+	cites     []ir.Citation
 	callID    string
 	name      string
 	args      string
@@ -168,6 +171,40 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			return nil, err
 		}
 		return append(out, frames...), nil
+
+	case ir.EvCitation:
+		// 标注只挂到已开启的文本条目上，不 ensureOpen：为一批标注补开条目
+		// 会凭空多出一个空 message item，还烧掉一个 output_index。
+		if e.skipIdx[ev.Index] {
+			return nil, nil
+		}
+		item, ok := e.items[ev.Index]
+		if !ok {
+			return nil, nil
+		}
+		// 在已下发的正文上解析范围：客户端手里的正文就是它。
+		// 解析不了的条目照样发（本协议允许无范围标注），全空才不发。
+		as := encodeAnnotations(item.text, ev.Citations)
+		if len(as) == 0 {
+			return nil, nil
+		}
+		item.cites = append(item.cites, ev.Citations...)
+		var out [][]byte
+		// 一帧一条：本协议的 annotation.added 是单条形态。
+		for _, a := range as {
+			aa := a
+			frames, err := e.frame(evOutputTextAnnotationAdded, wireStreamEvent{
+				Type:         evOutputTextAnnotationAdded,
+				OutputIndex:  item.outputIndex,
+				ContentIndex: 0,
+				Annotation:   &aa,
+			})
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, frames...)
+		}
+		return out, nil
 
 	case ir.EvThinkingDelta:
 		if e.skipIdx[ev.Index] {
@@ -354,7 +391,8 @@ func (e *streamEncoder) closeBlockAs(index int, status string) ([][]byte, error)
 		part, err := e.frame(evContentPartDone, wireStreamEvent{
 			Type:        evContentPartDone,
 			OutputIndex: item.outputIndex,
-			Part:        &wirePart{Type: partOutputText, Text: item.text},
+			Part: &wirePart{Type: partOutputText, Text: item.text,
+				Annotations: encodeAnnotations(item.text, item.cites)},
 		})
 		if err != nil {
 			return nil, err
@@ -553,7 +591,8 @@ func (i *openItem) wire(status string) *wireRespItem {
 		out.Role = roleAssistant
 		parts := []wirePart{}
 		if i.text != "" {
-			parts = append(parts, wirePart{Type: partOutputText, Text: i.text})
+			parts = append(parts, wirePart{Type: partOutputText, Text: i.text,
+				Annotations: encodeAnnotations(i.text, i.cites)})
 		}
 		content, err := json.Marshal(parts)
 		if err == nil {
@@ -608,7 +647,8 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 	for _, b := range resp.Content {
 		switch b.Type {
 		case ir.BlockText:
-			parts = append(parts, wirePart{Type: partOutputText, Text: b.Text})
+			parts = append(parts, wirePart{Type: partOutputText, Text: b.Text,
+				Annotations: encodeAnnotations(b.Text, b.Citations)})
 		case ir.BlockThinking:
 			// 推理条目要排在它所解释的输出之前，所以先把攒着的文本条目发出去。
 			if err := flush(); err != nil {

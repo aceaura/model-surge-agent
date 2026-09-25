@@ -219,7 +219,7 @@ func TestDecoderFinishSynthesizesStop(t *testing.T) {
 func TestDecoderSkipsUnknownDeltaType(t *testing.T) {
 	dec := newStreamDecoder()
 	got, err := dec.Feed(evContentBlockDelta,
-		`{"type":"content_block_delta","index":0,"delta":{"type":"citation_delta"}}`)
+		`{"type":"content_block_delta","index":0,"delta":{"type":"some_future_delta"}}`)
 	if err != nil {
 		t.Fatalf("unknown delta must not fail the stream: %v", err)
 	}

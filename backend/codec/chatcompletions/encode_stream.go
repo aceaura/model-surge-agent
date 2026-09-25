@@ -3,6 +3,7 @@ package chatcompletions
 import (
 	"encoding/json"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/aceaura/model-surge-agent/backend/codec"
@@ -40,6 +41,9 @@ type streamEncoder struct {
 	// 校验累积值并计数，由 Notes 报出——否则客户端会把一次参数损坏的
 	// 调用当正常完成存进历史。
 	toolArgs map[int][]byte
+	// text 累积各块已下发的正文。标注到达时要在这份文本上解析范围——
+	// 客户端手里的正文就是它，偏移量对不上等于高亮指错位置。
+	text map[int]string
 	// badToolArgs 是关块时判定畸形的工具调用数，Notes() 报出。
 	badToolArgs int
 	stopReason  ir.StopReason
@@ -93,6 +97,7 @@ func newStreamEncoder() *streamEncoder {
 		sentToolHeader: map[int]bool{},
 		toolPending:    map[int]bool{},
 		toolArgs:       map[int][]byte{},
+		text:           map[int]string{},
 		created:        time.Now().Unix(),
 	}
 }
@@ -165,11 +170,23 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		if e.skipDelta(ev.Index) {
 			return nil, nil
 		}
+		// 先累积再编帧：随后的标注要用这份文本解析偏移量。
+		e.text[ev.Index] += ev.Text
 		content, err := json.Marshal(ev.Text)
 		if err != nil {
 			return nil, err
 		}
 		return e.chunk(wireMessage{Content: content}, "")
+
+	case ir.EvCitation:
+		// 标注编成 delta.annotations 一帧带全：本协议的标注不是逐条增量，
+		// 客户端按到达顺序累积。无法解析范围的条目照样发（本协议允许
+		// 无范围标注），全空才不发。
+		as := encodeAnnotations(e.text[ev.Index], ev.Citations)
+		if len(as) == 0 {
+			return nil, nil
+		}
+		return e.chunk(wireMessage{Annotations: as}, "")
 
 	case ir.EvThinkingDelta:
 		if e.skipDelta(ev.Index) {
@@ -377,6 +394,10 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 	var (
 		text  []ir.Block
 		calls []wireToolCall
+		// annotations 的偏移量相对整条消息 content 的拼接文本，
+		// 块内坐标逐块平移后统一编码。
+		cites    []ir.Citation
+		citeText strings.Builder
 	)
 	for _, b := range resp.Content {
 		switch b.Type {
@@ -408,6 +429,10 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			// 跳过，损耗由 EncodeResponseLossy 经 CountResponseServerTools 报出。
 			continue
 		default:
+			if b.Type == ir.BlockText {
+				cites = append(cites, shiftCitations(b.Citations, citeText.String(), b.Text)...)
+				citeText.WriteString(b.Text)
+			}
 			text = append(text, b)
 		}
 	}
@@ -417,6 +442,7 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 	}
 	msg.Content = content
 	msg.ToolCalls = calls
+	msg.Annotations = encodeAnnotations(citeText.String(), cites)
 
 	u := renderUsage(resp.Usage)
 	// 上游给过创建时间就原值回写；没给才回退本地钟——同族往返不能把上游的

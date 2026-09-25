@@ -94,6 +94,9 @@ func (outboundCodec) Caps() codec.Capabilities {
 		ServerTools:       true,
 		ToolResultError:   true,
 		MinThinkingBudget: 1024,
+		// text.citations 是本协议的来源标注槽位，四族里信息最全的一档
+		// （含 cited_text 与 rune 偏移量）。
+		Citations: true,
 		// 本协议的 max_tokens 必填，缺了直接 400。
 		RequiresMaxTokens: true,
 		// 4096 是个保守取值：宁可截断也不超出任何已知模型的输出上限。

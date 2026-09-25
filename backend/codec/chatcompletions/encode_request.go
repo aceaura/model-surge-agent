@@ -124,6 +124,11 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 		toolMsgs []wireMessage
 		calls    []wireToolCall
 		thinking strings.Builder
+		// cites 与 citeText 服务于消息级 annotations：本协议的偏移量相对
+		// 整条消息 content 的拼接文本，而 IR 的引用是块内坐标，必须逐块平移。
+		// 拼接顺序与 encodeContent 的全文本收敛一致（按块序串接）。
+		cites    []ir.Citation
+		citeText strings.Builder
 	)
 	for _, b := range m.Content {
 		switch b.Type {
@@ -170,6 +175,11 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 			// encodeContent 直接报错，伪装成 tool_calls 则是伪造一场
 			// 客户端从未发起、也永远等不到结果的调用。
 			continue
+		case ir.BlockText:
+			// 先在块内解析再平移：块内定位精确，拼接文本里搜可能命中别块。
+			cites = append(cites, shiftCitations(b.Citations, citeText.String(), b.Text)...)
+			citeText.WriteString(b.Text)
+			plain = append(plain, b)
 		default:
 			plain = append(plain, b)
 		}
@@ -183,6 +193,11 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 		return out, nil
 	}
 	msg := wireMessage{Role: string(m.Role), ToolCalls: calls, ReasoningContent: thinking.String()}
+	// annotations 是助手消息专属槽位：历史里的用户消息即使带了引用
+	// （跨协议转换的罕见形态）也不写，写出去是非法的消息形状。
+	if m.Role == ir.RoleAssistant {
+		msg.Annotations = encodeAnnotations(citeText.String(), cites)
+	}
 	if len(plain) > 0 {
 		content, err := encodeContent(plain)
 		if err != nil {

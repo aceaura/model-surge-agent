@@ -147,6 +147,7 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 	case ir.BlockText:
 		out.Type = blockText
 		out.Text = b.Text
+		out.Citations = encodeCitations(b.Text, b.Citations)
 	case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
 		if b.Media == nil {
 			return out, false, fmt.Errorf("%s block without payload", b.Type)

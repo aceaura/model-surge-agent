@@ -17,6 +17,9 @@ const (
 	EvThinkingDelta EventType = "thinking_delta"
 	EvSigDelta      EventType = "signature_delta"
 	EvToolInput     EventType = "tool_input_delta"
+	// EvCitation 引用标注增量，Citations 为本次新增的来源。
+	// 命名取 Anthropic 的 citations_delta 帧：事件词汇以它为超集。
+	EvCitation EventType = "citation_delta"
 	// EvBlockStop 关闭 Index 指向的块。
 	EvBlockStop EventType = "block_stop"
 	// EvMessageDelta 携带 StopReason 与最终 Usage。
@@ -59,4 +62,6 @@ type Event struct {
 	// 客户端按 created 做幂等/排序会拿到假数据。
 	Created int64  `json:"created,omitempty"`
 	Err     *Error `json:"error,omitempty"`
+	// Citations 仅在 EvCitation 出现，携带本次新增的来源标注。
+	Citations []Citation `json:"citations,omitempty"`
 }

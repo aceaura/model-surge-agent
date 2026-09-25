@@ -35,12 +35,20 @@ func blockEvents(index int, b Block) []Event {
 // splitBlock 把块拆成「不含正文的骨架」与「承载正文的增量」。
 func splitBlock(index int, b Block) (Block, []Event) {
 	var deltas []Event
+	// 引用改走 EvCitation：流式协议一律在正文之后单独下发标注
+	// （Anthropic 的 citations_delta、Chat 的 delta.annotations），
+	// 留在骨架上会让编码器在正文还没发出时就写出偏移量，反推全部失败。
+	cites := b.Citations
+	b.Citations = nil
 	switch b.Type {
 	case BlockText:
 		if b.Text != "" {
 			deltas = append(deltas, Event{Type: EvTextDelta, Index: index, Text: b.Text})
 		}
 		b.Text = ""
+		if len(cites) > 0 {
+			deltas = append(deltas, Event{Type: EvCitation, Index: index, Citations: cites})
+		}
 	case BlockThinking:
 		if b.Thinking != nil {
 			t := *b.Thinking

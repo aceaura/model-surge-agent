@@ -91,6 +91,9 @@ func (outboundCodec) Caps() codec.Capabilities {
 		Include:           true,
 		Truncation:        true,
 		ClientMetadata:    true,
+		// output_text.annotations 是本协议的来源标注槽位（扁平 url_citation，
+		// 无 cited_text）。流式增量走 response.output_text.annotation.added。
+		Citations: true,
 		// LogProbs 为真只覆盖 top_logprobs：本协议无独立的 logprobs 开关，
 		// 给了 top_logprobs 即表示要对数概率。客户端只给了开关时出站补
 		// 一个档位（见 LogProbsViaTopN）。

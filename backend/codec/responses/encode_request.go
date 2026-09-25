@@ -138,7 +138,8 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 	for _, b := range m.Content {
 		switch b.Type {
 		case ir.BlockText:
-			parts = append(parts, wirePart{Type: textPartType(m.Role), Text: b.Text})
+			parts = append(parts, wirePart{Type: textPartType(m.Role), Text: b.Text,
+				Annotations: encodeAnnotations(b.Text, b.Citations)})
 		case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
 			if b.Media == nil {
 				return nil, fmt.Errorf("%s block without payload", b.Type)

@@ -10,7 +10,8 @@ import (
 // done 事件携带的是完整终态值而不是新一份内容。只发终态不发增量的上游
 // （done-only 网关）整段正文只在终态帧里出现，此前整个事件被丢掉，
 // 客户端一个字都收不到。判据与 R 系列工具参数回补一致：只补尚未发出的后缀。
-// 引用（annotations 快照）的回补随 Citation 支持一起移植，不在本文件范围。
+// 引用（annotations 快照）的回补已随 Citation 支持移植：见 citation.go 与
+// decode_stream.go 的 doneCitations，其断言在 citation_test.go。
 
 // feedRaw 喂帧并返回全部 IR 事件（含 Finish），供事件序与计数断言。
 func feedRaw(t *testing.T, raw ...string) []ir.Event {

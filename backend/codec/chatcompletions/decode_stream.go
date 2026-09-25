@@ -177,6 +177,15 @@ func (d *streamDecoder) decodeDelta(delta wireMessage) ([]ir.Event, error) {
 		}
 	}
 
+	// 标注随正文增量在 delta.annotations 上到达。只挂到已存在的正文槽位：
+	// 没收到过正文就分配一个块，客户端会多出一个空文本块，而标注与正文
+	// 分离后偏移量全部失效。
+	if cs := decodeAnnotations(delta.Annotations); len(cs) > 0 {
+		if idx, ok := d.slots["text"]; ok {
+			out = append(out, ir.Event{Type: ir.EvCitation, Index: idx, Citations: cs})
+		}
+	}
+
 	calls, err := d.decodeToolCalls(delta.ToolCalls)
 	if err != nil {
 		return nil, err
@@ -433,6 +442,7 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 			return nil, nil, ir.NewError(ir.ErrUpstream, 0, "",
 				fmt.Sprintf("undecodable response content: %v", err))
 		}
+		blocks = attachCitations(blocks, decodeAnnotations(m.Annotations))
 		out.Content = append(out.Content, blocks...)
 		for _, tc := range m.ToolCalls {
 			out.Content = append(out.Content, ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{

@@ -66,6 +66,26 @@ type wireMessage struct {
 	ToolCalls        []wireToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string         `json:"tool_call_id,omitempty"`
 	Name             string         `json:"name,omitempty"`
+	// Annotations 是助手消息正文的来源标注（web 搜索引用）。
+	// 偏移量相对于整条消息 content 的拼接文本。
+	Annotations []annotation `json:"annotations,omitempty"`
+}
+
+// annotation 是消息级来源标注。type 目前只有 url_citation 一种，
+// 其余取值（file_citation 等）没有对应子对象，解码时跳过。
+type annotation struct {
+	Type        string       `json:"type"`
+	URLCitation *urlCitation `json:"url_citation,omitempty"`
+}
+
+// urlCitation 的偏移量是 rune 下标、半开区间，且没有 omitempty：
+// start=0 是合法取值，省略会让 0 与「没有偏移」无法区分。
+type urlCitation struct {
+	URL        string `json:"url"`
+	Title      string `json:"title,omitempty"`
+	StartIndex int    `json:"start_index"`
+	EndIndex   int    `json:"end_index"`
+	CitedText  string `json:"cited_text,omitempty"`
 }
 
 type wirePart struct {

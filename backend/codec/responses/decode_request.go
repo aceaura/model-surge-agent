@@ -245,7 +245,8 @@ func decodeContent(raw json.RawMessage) ([]ir.Block, error) {
 	for _, p := range parts {
 		switch p.Type {
 		case partInputText, partOutputText, "":
-			out = append(out, ir.Block{Type: ir.BlockText, Text: p.Text})
+			out = append(out, ir.Block{Type: ir.BlockText, Text: p.Text,
+				Citations: decodeAnnotations(p.Annotations)})
 		case partRefusal:
 			// 拒答文本当普通文本：客户端要看到内容，且它不是错误。
 			out = append(out, ir.Block{Type: ir.BlockText, Text: p.Refusal})

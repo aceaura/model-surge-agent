@@ -144,6 +144,14 @@ type Capabilities struct {
 	Truncation     bool
 	ClientMetadata bool
 
+	// Citations 为真表示正文的来源标注有槽位。anthropic 是 text.citations，
+	// chat_completions 是 message.annotations，responses 是
+	// output_text.annotations；gemini 的 groundingMetadata 只在它的客户端
+	// 方向存在，本服务对 gemini 只有出站请求侧，没有落点。装不下时正文
+	// 照常送达，丢的是「这句话出自哪里」——客户端会把有出处的结论渲染成
+	// 模型的自由发挥。
+	Citations bool
+
 	// RequiresMaxTokens 为真表示本协议的输出上限必填，不能省略。
 	RequiresMaxTokens bool
 	// DefaultMaxTokens 是必填协议在客户端没给时的兜底值。

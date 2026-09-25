@@ -76,10 +76,36 @@ type Block struct {
 	// 仅 Anthropic 一族可往返，外族编码整块跳过（见 IsServerTool）。
 	ServerToolUse       *ServerToolUse       `json:"server_tool_use,omitempty"`
 	WebSearchToolResult *WebSearchToolResult `json:"web_search_tool_result,omitempty"`
+	// Citations 本块正文引用的来源。挂在块上而非消息上，是因为各协议都把它
+	// 绑到单个文本块：Anthropic 的 text.citations、Chat 的 message.annotations、
+	// Responses 的 output_text.annotations。偏移量也只有在单块正文内才有意义
+	// ——跨块累加会在块被重排或降级时全部错位。
+	Citations []Citation `json:"citations,omitempty"`
 	// CacheCtl 是 Anthropic 的 cache_control 类型（通常 "ephemeral"）。
 	// 其他协议无此概念，编码时丢弃。
 	CacheCtl string `json:"cache_ctl,omitempty"`
 }
+
+// Citation 正文中一段文字的来源标注。
+//
+// Start/End 是本块 Text 内的 rune 下标（半开区间），零值表示上游没给范围。
+// 用 rune 而非 byte：Anthropic 与 OpenAI 的索引口径都是字符数，按字节算会让
+// 中文引用整体错位。CitedText 是被引用的原文片段；两者互为冗余但都要保留，
+// 因为各协议只给其中一种，缺的那种在编码时按另一种反推（参照 new-api
+// claude_messages/citations.go 与 oai_chat/citations.go 的双向互推）。
+type Citation struct {
+	URL       string `json:"url,omitempty"`
+	Title     string `json:"title,omitempty"`
+	CitedText string `json:"cited_text,omitempty"`
+	Start     int    `json:"start,omitempty"`
+	End       int    `json:"end,omitempty"`
+	// EncryptedIndex Anthropic 托管搜索回传时用的不透明游标。跨协议无对应槽位，
+	// 但同协议往返必须原样带回，否则上游拒绝续话。
+	EncryptedIndex string `json:"encrypted_index,omitempty"`
+}
+
+// HasRange 报告该引用是否带可用的正文范围。
+func (c Citation) HasRange() bool { return c.End > c.Start }
 
 // ServerToolUse 服务端托管工具调用（如上游代执行的 web_search）。
 // 外形同 ToolUse，但结果由上游自己给出（BlockWebSearchToolResult），
@@ -476,6 +502,9 @@ func cloneBlocks(in []Block) []Block {
 				v.Results = append([]WebSearchResult(nil), b.WebSearchToolResult.Results...)
 			}
 			out[i].WebSearchToolResult = &v
+		}
+		if b.Citations != nil {
+			out[i].Citations = append([]Citation(nil), b.Citations...)
 		}
 	}
 	return out

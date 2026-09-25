@@ -29,6 +29,9 @@ type wireMessage struct {
 type wireBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
+	// Citations 是 text 块的来源标注。偏移量没有 omitempty：start=0 是
+	// 合法取值（正文开头就被引用），省略会让下游把 0 和「没有偏移」混在一起。
+	Citations []citation `json:"citations,omitempty"`
 
 	// tool_use
 	ID    string          `json:"id,omitempty"`
@@ -50,6 +53,19 @@ type wireBlock struct {
 	Data string `json:"data,omitempty"`
 
 	CacheControl *wireCacheControl `json:"cache_control,omitempty"`
+}
+
+// citation 是 web 搜索来源标注。上游要求 cited_text 必须能在 text 里定位，
+// 因此编码时对无法回推的条目整条丢弃而不是编出残缺形状。
+type citation struct {
+	Type           string `json:"type"`
+	URL            string `json:"url"`
+	Title          string `json:"title,omitempty"`
+	CitedText      string `json:"cited_text,omitempty"`
+	EncryptedIndex string `json:"encrypted_index,omitempty"`
+	// 偏移量是 rune 下标，半开区间。不加 omitempty：0 是合法值。
+	StartCharIndex int `json:"start_char_index"`
+	EndCharIndex   int `json:"end_char_index"`
 }
 
 type wireSource struct {
@@ -173,13 +189,14 @@ type streamMsg struct {
 
 // streamDelta 既承载块内增量（text_delta 等），也承载 message_delta 的 stop_reason。
 type streamDelta struct {
-	Type         string `json:"type,omitempty"`
-	Text         string `json:"text,omitempty"`
-	PartialJSON  string `json:"partial_json,omitempty"`
-	Thinking     string `json:"thinking,omitempty"`
-	Signature    string `json:"signature,omitempty"`
-	StopReason   string `json:"stop_reason,omitempty"`
-	StopSequence string `json:"stop_sequence,omitempty"`
+	Type         string    `json:"type,omitempty"`
+	Text         string    `json:"text,omitempty"`
+	PartialJSON  string    `json:"partial_json,omitempty"`
+	Thinking     string    `json:"thinking,omitempty"`
+	Signature    string    `json:"signature,omitempty"`
+	Citation     *citation `json:"citation,omitempty"`
+	StopReason   string    `json:"stop_reason,omitempty"`
+	StopSequence string    `json:"stop_sequence,omitempty"`
 }
 
 // delta 类型名。
@@ -188,6 +205,8 @@ const (
 	deltaInputJSON = "input_json_delta"
 	deltaThinking  = "thinking_delta"
 	deltaSignature = "signature_delta"
+	// deltaCitations 每帧只带一条引用（上游的形状如此），多条时逐帧发送。
+	deltaCitations = "citations_delta"
 )
 
 type wireError struct {

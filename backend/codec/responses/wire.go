@@ -199,6 +199,20 @@ type wirePart struct {
 	Filename string `json:"filename,omitempty"`
 	FileData string `json:"file_data,omitempty"`
 	FileID   string `json:"file_id,omitempty"`
+	// Annotations 是 output_text 的来源标注，随 part 给出终态快照；
+	// 流式路径上的增量形态是 response.output_text.annotation.added 帧。
+	Annotations []annotation `json:"annotations,omitempty"`
+}
+
+// annotation 是 url_citation 标注。字段是平的（chat 形态嵌一层
+// url_citation 子对象，本族不嵌）。偏移量是 rune 下标、半开区间，
+// 没有 omitempty：start=0 是合法取值。本协议没有 cited_text 字段。
+type annotation struct {
+	Type       string `json:"type"`
+	URL        string `json:"url"`
+	Title      string `json:"title,omitempty"`
+	StartIndex int    `json:"start_index"`
+	EndIndex   int    `json:"end_index"`
 }
 
 // wireImageRef 是 input_image 的图片载荷。
@@ -306,9 +320,11 @@ type wireStreamEvent struct {
 	// output_text.done 给 text，refusal.done 给 refusal，
 	// reasoning_summary_text.done / reasoning_text.done 给 text。
 	// 只发终态不发增量的上游全靠这两个字段，漏读就是整段正文静默丢失。
-	// annotations 快照的回补随引用（Citation）支持一起移植。
 	Text    string `json:"text,omitempty"`
 	Refusal string `json:"refusal,omitempty"`
+	// Annotation 是 response.output_text.annotation.added 帧携带的单条
+	// 来源标注。一帧一条，多条逐帧发送。
+	Annotation *annotation `json:"annotation,omitempty"`
 	// SummaryIndex 是推理摘要分段的序号。
 	SummaryIndex int           `json:"summary_index,omitempty"`
 	Response     *wireResponse `json:"response,omitempty"`
@@ -345,27 +361,29 @@ const (
 
 // 流帧类型名。
 const (
-	evCreated                  = "response.created"
-	evInProgress               = "response.in_progress"
-	evOutputItemAdded          = "response.output_item.added"
-	evOutputItemDone           = "response.output_item.done"
-	evContentPartAdded         = "response.content_part.added"
-	evContentPartDone          = "response.content_part.done"
-	evOutputTextDelta          = "response.output_text.delta"
-	evOutputTextDone           = "response.output_text.done"
-	evRefusalDelta             = "response.refusal.delta"
-	evRefusalDone              = "response.refusal.done"
-	evFunctionArgsDelta        = "response.function_call_arguments.delta"
-	evFunctionArgsDone         = "response.function_call_arguments.done"
-	evReasoningSummaryText     = "response.reasoning_summary_text.delta"
-	evReasoningSummaryTextDone = "response.reasoning_summary_text.done"
-	evReasoningSummaryPartDone = "response.reasoning_summary_part.done"
-	evReasoningTextDelta       = "response.reasoning_text.delta"
-	evReasoningTextDone        = "response.reasoning_text.done"
-	evCompleted                = "response.completed"
-	evIncomplete               = "response.incomplete"
-	evFailed                   = "response.failed"
-	evError                    = "error"
+	evCreated          = "response.created"
+	evInProgress       = "response.in_progress"
+	evOutputItemAdded  = "response.output_item.added"
+	evOutputItemDone   = "response.output_item.done"
+	evContentPartAdded = "response.content_part.added"
+	evContentPartDone  = "response.content_part.done"
+	evOutputTextDelta  = "response.output_text.delta"
+	evOutputTextDone   = "response.output_text.done"
+	// evOutputTextAnnotationAdded 是正文来源标注的增量帧，一帧一条。
+	evOutputTextAnnotationAdded = "response.output_text.annotation.added"
+	evRefusalDelta              = "response.refusal.delta"
+	evRefusalDone               = "response.refusal.done"
+	evFunctionArgsDelta         = "response.function_call_arguments.delta"
+	evFunctionArgsDone          = "response.function_call_arguments.done"
+	evReasoningSummaryText      = "response.reasoning_summary_text.delta"
+	evReasoningSummaryTextDone  = "response.reasoning_summary_text.done"
+	evReasoningSummaryPartDone  = "response.reasoning_summary_part.done"
+	evReasoningTextDelta        = "response.reasoning_text.delta"
+	evReasoningTextDone         = "response.reasoning_text.done"
+	evCompleted                 = "response.completed"
+	evIncomplete                = "response.incomplete"
+	evFailed                    = "response.failed"
+	evError                     = "error"
 )
 
 const (
@@ -384,19 +402,22 @@ const (
 // 刻意不在表里：它们不属于任何条目，带上 output_index 会让客户端
 // 把这些帧归到第一个条目上。
 var requiredIndexFields = map[string][]string{
-	evOutputItemAdded:          {"output_index"},
-	evOutputItemDone:           {"output_index"},
-	evContentPartAdded:         {"output_index", "content_index"},
-	evContentPartDone:          {"output_index", "content_index"},
-	evOutputTextDelta:          {"output_index", "content_index"},
-	evOutputTextDone:           {"output_index", "content_index"},
-	evRefusalDelta:             {"output_index", "content_index"},
-	evRefusalDone:              {"output_index", "content_index"},
-	evFunctionArgsDelta:        {"output_index"},
-	evFunctionArgsDone:         {"output_index"},
-	evReasoningSummaryText:     {"output_index", "summary_index"},
-	evReasoningSummaryTextDone: {"output_index", "summary_index"},
-	evReasoningSummaryPartDone: {"output_index", "summary_index"},
-	evReasoningTextDelta:       {"output_index"},
-	evReasoningTextDone:        {"output_index"},
+	evOutputItemAdded:  {"output_index"},
+	evOutputItemDone:   {"output_index"},
+	evContentPartAdded: {"output_index", "content_index"},
+	evContentPartDone:  {"output_index", "content_index"},
+	evOutputTextDelta:  {"output_index", "content_index"},
+	evOutputTextDone:   {"output_index", "content_index"},
+	// 第一条标注常在 output_index=0、content_index=0 上，两个零值都必须写出，
+	// 否则客户端不知道这条标注属于哪个 part。
+	evOutputTextAnnotationAdded: {"output_index", "content_index"},
+	evRefusalDelta:              {"output_index", "content_index"},
+	evRefusalDone:               {"output_index", "content_index"},
+	evFunctionArgsDelta:         {"output_index"},
+	evFunctionArgsDone:          {"output_index"},
+	evReasoningSummaryText:      {"output_index", "summary_index"},
+	evReasoningSummaryTextDone:  {"output_index", "summary_index"},
+	evReasoningSummaryPartDone:  {"output_index", "summary_index"},
+	evReasoningTextDelta:        {"output_index"},
+	evReasoningTextDone:         {"output_index"},
 }
