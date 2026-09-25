@@ -335,7 +335,7 @@ func blockTypeForDelta(t ir.EventType) ir.BlockType {
 }
 
 func (e *streamEncoder) messageDelta(ev ir.Event) ([]byte, error) {
-	out := streamEvent{
+	out := messageDeltaEvent{
 		Type: evMessageDelta,
 		Delta: &streamDelta{
 			StopReason: renderStopReason(ev.StopReason),
@@ -351,7 +351,7 @@ func (e *streamEncoder) messageDelta(ev ir.Event) ([]byte, error) {
 	}
 	if ev.Usage != nil {
 		ir.MergeUsage(&e.usage, *ev.Usage)
-		u := renderUsage(*ev.Usage)
+		u := renderDeltaUsage(*ev.Usage)
 		out.Usage = &u
 	}
 	return marshalFrame(evMessageDelta, out)
@@ -572,6 +572,27 @@ func renderUsage(u ir.Usage) wireUsage {
 	return out
 }
 
+// renderDeltaUsage 编 message_delta 的专用 usage。官方 MessageDeltaUsage
+// 没有 cache_creation 对象与 inference_geo，这里不编——编了就是往帧里写
+// 官方 schema 没有的键（同族非流式→流式转换必然触发：聚合 usage 带着
+// 明细整体落进 EvMessageDelta）。明细与地理回显由 message_start 与
+// 非流式响应承担，delta 帧不丢可送达的信息。
+func renderDeltaUsage(u ir.Usage) wireMessageDeltaUsage {
+	out := wireMessageDeltaUsage{
+		InputTokens:              u.InputTokens,
+		OutputTokens:             u.OutputTokens,
+		CacheReadInputTokens:     u.CacheReadTokens,
+		CacheCreationInputTokens: u.CacheWriteTokens,
+	}
+	if u.WebSearchRequests > 0 || u.WebFetchRequests > 0 {
+		out.ServerToolUse = &wireServerToolUsage{
+			WebSearchRequests: u.WebSearchRequests,
+			WebFetchRequests:  u.WebFetchRequests,
+		}
+	}
+	return out
+}
+
 // encodeStopDetails 拒绝分类回写。type 恒 "refusal"（官方该对象只在这一档
 // 出现）；空字段省略——上游显式 null 与缺省语义相同，IR 不保留二者之别。
 func encodeStopDetails(sd *ir.StopDetails) *wireStopDetails {
@@ -593,7 +614,9 @@ func rawStringOrNil(s string) json.RawMessage {
 	return b
 }
 
-func marshalFrame(event string, payload streamEvent) ([]byte, error) {
+// marshalFrame 编一帧 SSE。payload 收 any：绝大多数帧是 streamEvent，
+// message_delta 用官方的专用 usage 形状（messageDeltaEvent）。
+func marshalFrame(event string, payload any) ([]byte, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err

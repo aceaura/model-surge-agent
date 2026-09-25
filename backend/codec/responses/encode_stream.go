@@ -78,6 +78,9 @@ type streamEncoder struct {
 	// 查询串增量仍会经 EvToolInput 到来，不挡住会被 ensureOpen 补开成一个
 	// 凭空的条目。
 	skipIdx map[int]bool
+	// frameSeq 帧序号计数：官方全事件 sequence_number api:required，逐帧
+	// 单调递增写在 frame() 漏斗里，各发射点不用各自维护。
+	frameSeq int64
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
 }
@@ -159,6 +162,9 @@ type openItem struct {
 	args      string
 	signature string
 	closed    bool
+	// annCount 本条目已发的 annotation.added 帧数：annotation_index 的
+	// per-part 序号源（本编码器 content_index 恒 0，条目即 part）。
+	annCount int
 }
 
 func newStreamEncoder() *streamEncoder {
@@ -253,6 +259,7 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		frames, err := e.frame(deltaKind, wireStreamEvent{
 			Type:        deltaKind,
 			OutputIndex: item.outputIndex,
+			ItemID:      item.itemID,
 			Delta:       ev.Text,
 		})
 		if err != nil {
@@ -281,18 +288,22 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		}
 		item.cites = append(item.cites, ev.Citations...)
 		var out [][]byte
-		// 一帧一条：本协议的 annotation.added 是单条形态。
+		// 一帧一条：本协议的 annotation.added 是单条形态。annotation_index
+		// 是官方 api:required 的 part 内序号，从条目自己的计数取。
 		for _, a := range as {
 			aa := a
 			frames, err := e.frame(evOutputTextAnnotationAdded, wireStreamEvent{
-				Type:         evOutputTextAnnotationAdded,
-				OutputIndex:  item.outputIndex,
-				ContentIndex: 0,
-				Annotation:   &aa,
+				Type:            evOutputTextAnnotationAdded,
+				OutputIndex:     item.outputIndex,
+				ContentIndex:    0,
+				ItemID:          item.itemID,
+				AnnotationIndex: idx(item.annCount),
+				Annotation:      &aa,
 			})
 			if err != nil {
 				return nil, err
 			}
+			item.annCount++
 			out = append(out, frames...)
 		}
 		return out, nil
@@ -309,6 +320,7 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		frames, err := e.frame(evReasoningSummaryText, wireStreamEvent{
 			Type:        evReasoningSummaryText,
 			OutputIndex: item.outputIndex,
+			ItemID:      item.itemID,
 			Delta:       ev.Text,
 		})
 		if err != nil {
@@ -350,6 +362,7 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		frames, err := e.frame(deltaKind, wireStreamEvent{
 			Type:        deltaKind,
 			OutputIndex: item.outputIndex,
+			ItemID:      item.itemID,
 			Delta:       ev.Text,
 		})
 		if err != nil {
@@ -442,6 +455,7 @@ func (e *streamEncoder) openBlock(index int, kind ir.BlockType, block *ir.Block)
 	part, err := e.frame(evContentPartAdded, wireStreamEvent{
 		Type:        evContentPartAdded,
 		OutputIndex: item.outputIndex,
+		ItemID:      item.itemID,
 		Part:        &wirePart{Type: partType},
 	})
 	if err != nil {
@@ -498,6 +512,7 @@ func (e *streamEncoder) closeBlockAs(index int, status string) ([][]byte, error)
 			done, err := e.frame(evRefusalDone, wireStreamEvent{
 				Type:        evRefusalDone,
 				OutputIndex: item.outputIndex,
+				ItemID:      item.itemID,
 				Refusal:     item.text,
 			})
 			if err != nil {
@@ -507,6 +522,7 @@ func (e *streamEncoder) closeBlockAs(index int, status string) ([][]byte, error)
 			part, err := e.frame(evContentPartDone, wireStreamEvent{
 				Type:        evContentPartDone,
 				OutputIndex: item.outputIndex,
+				ItemID:      item.itemID,
 				Part:        &wirePart{Type: partRefusal, Refusal: item.text},
 			})
 			if err != nil {
@@ -517,6 +533,7 @@ func (e *streamEncoder) closeBlockAs(index int, status string) ([][]byte, error)
 			done, err := e.frame(evOutputTextDone, wireStreamEvent{
 				Type:        evOutputTextDone,
 				OutputIndex: item.outputIndex,
+				ItemID:      item.itemID,
 				Text:        item.text,
 			})
 			if err != nil {
@@ -526,6 +543,7 @@ func (e *streamEncoder) closeBlockAs(index int, status string) ([][]byte, error)
 			part, err := e.frame(evContentPartDone, wireStreamEvent{
 				Type:        evContentPartDone,
 				OutputIndex: item.outputIndex,
+				ItemID:      item.itemID,
 				Part: &wirePart{Type: partOutputText, Text: item.text,
 					Annotations: encodeAnnotations(item.text, item.cites)},
 			})
@@ -539,6 +557,7 @@ func (e *streamEncoder) closeBlockAs(index int, status string) ([][]byte, error)
 		sumDone, err := e.frame(evReasoningSummaryTextDone, wireStreamEvent{
 			Type:        evReasoningSummaryTextDone,
 			OutputIndex: item.outputIndex,
+			ItemID:      item.itemID,
 			Text:        item.text,
 		})
 		if err != nil {
@@ -548,6 +567,7 @@ func (e *streamEncoder) closeBlockAs(index int, status string) ([][]byte, error)
 		partDone, err := e.frame(evReasoningSummaryPartDone, wireStreamEvent{
 			Type:        evReasoningSummaryPartDone,
 			OutputIndex: item.outputIndex,
+			ItemID:      item.itemID,
 			Part:        &wirePart{Type: partSummaryText, Text: item.text},
 		})
 		if err != nil {
@@ -669,7 +689,17 @@ func (e *streamEncoder) messageID() string {
 	return e.id
 }
 
+// idx 把序号写进指针槽位（含 0）：annotation_index 这类「0 是合法值」的
+// 键靠 omitempty 区分不了「第一条」与「没有」，只能显式给指针。
+func idx(v int) *int { return &v }
+
 func (e *streamEncoder) frame(kind string, payload wireStreamEvent) ([][]byte, error) {
+	// 官方全事件 sequence_number api:required：客户端靠它检测丢帧与重排。
+	// 放在漏斗处与序号补齐同理——所有流帧都经过 frame，编一次即全覆盖。
+	// 流内错误帧（RenderStreamError）不经这里，序号键写出 0：那已是流的
+	// 终止，客户端不会再拿它做重排检测。
+	payload.SequenceNumber = e.frameSeq
+	e.frameSeq++
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err

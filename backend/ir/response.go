@@ -8,6 +8,11 @@ const (
 	StopStopSequence  StopReason = "stop_sequence"
 	StopToolUse       StopReason = "tool_use"
 	StopContentFilter StopReason = "content_filter"
+	// StopContextWindow 输入占满上下文窗口挤断输出（anthropic 官方 beta 档
+	// model_context_window_exceeded）。单列而不并进 StopMaxTokens：两者的
+	// 客户端补救动作相反——这个要压缩输入，max_tokens 要抬输出配额。
+	// 外族协议没有对应取值，出站按各协议的「输出不完整」档投影。
+	StopContextWindow StopReason = "context_window_exceeded"
 )
 
 // Usage 是一次调用的 token 用量。

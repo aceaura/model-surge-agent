@@ -445,6 +445,14 @@ type ToolChoice struct {
 	// 因此这一维通常不产生损耗，只有白名单与已声明工具全无交集时才无从
 	// 收窄，由整形阶段报出。
 	AllowedTools []string `json:"allowed_tools,omitempty"`
+	// Raw responses 一族 typed tool_choice 变体的不透明槽：{"type":"mcp"}、
+	// {"type":"file_search"} 等托管工具指名形态（官方 ToolChoiceTypesParam /
+	// ToolChoiceMcpParam），字段互不相同且随官方演进，没有跨族统一维度可
+	// 建模。Mode 留零值：外族出站编不出对应形状（tool_choice 缺省），损耗
+	// 由 DescribeLossy 报出；同族出站原样回写，一个字节不变。字节内容视为
+	// 不可变，Clone 随结构体值拷贝；omitempty 承重——IR 级 JSON 序列化下
+	// 空值不得变成字面量 null 再被当成原文。
+	Raw json.RawMessage `json:"raw,omitempty"`
 }
 
 // AllowlistApplies 白名单是否落在「靠收窄实现」的模式上。
@@ -566,12 +574,16 @@ type Request struct {
 	// 解码器会产生，改接口要动四个 codec 与全部调用点。零值即「没有」。
 	DecodeNotes []string `json:"decode_notes,omitempty"`
 
-	MaxTokens     int      `json:"max_tokens,omitempty"`
-	Temperature   *float64 `json:"temperature,omitempty"`
-	TopP          *float64 `json:"top_p,omitempty"`
-	TopK          *int     `json:"top_k,omitempty"`
-	StopSequences []string `json:"stop_sequences,omitempty"`
-	Stream        bool     `json:"stream,omitempty"`
+	MaxTokens int `json:"max_tokens,omitempty"`
+	// MaxCompletionKey 客户端用的是现代键名 max_completion_tokens（true）
+	// 还是已废弃的 max_tokens（false）。官方注明旧键不兼容 o 系推理模型，
+	// chat 同族往返时原键名带回；跨族投影不受影响（别的协议没有这对键名）。
+	MaxCompletionKey bool     `json:"max_completion_key,omitempty"`
+	Temperature      *float64 `json:"temperature,omitempty"`
+	TopP             *float64 `json:"top_p,omitempty"`
+	TopK             *int     `json:"top_k,omitempty"`
+	StopSequences    []string `json:"stop_sequences,omitempty"`
+	Stream           bool     `json:"stream,omitempty"`
 
 	Thinking *ThinkingConfig   `json:"thinking,omitempty"`
 	Metadata map[string]string `json:"metadata,omitempty"`

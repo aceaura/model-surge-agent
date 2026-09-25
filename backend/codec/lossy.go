@@ -179,6 +179,14 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	if req.Container != nil && name != ProtocolAnthropic {
 		note("container", "no code-execution container reuse or skill declaration, the upstream starts with a fresh container and no skills loaded")
 	}
+	// responses 的 typed tool_choice（mcp/file_search/computer_use 等无 name
+	// 变体，IR 的 Raw 不透明槽、Mode 留零值）：外族的 tool_choice 形状只有
+	// auto/any/none/具名函数四档，托管工具指名变体整条编不出，出站缺省后
+	// 模型自由选工具。responses 同族原样回写，报了就是谎报；带 Mode 的
+	// 指名变体（function/custom）结构化字段照常编码，不在这里报。
+	if req.ToolChoice != nil && req.ToolChoice.Mode == "" && len(req.ToolChoice.Raw) > 0 && name != ProtocolResponses {
+		note("tool_choice", "no typed tool-choice variant (mcp/file_search and friends), the choice was dropped and the model picks tools freely")
+	}
 
 	// 历史里的 custom 工具调用与结果（responses 的 custom_tool_call /
 	// custom_tool_call_output 条目）：自由文本入参的调用形态 responses 与

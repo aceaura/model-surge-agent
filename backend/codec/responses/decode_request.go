@@ -508,10 +508,27 @@ func decodeToolChoice(raw json.RawMessage) (*ir.ToolChoice, error) {
 		out.AllowedTools = decodeAllowedToolNames(obj.Tools)
 		return out, nil
 	}
+	// typed 变体（{"type":"mcp"/"file_search"/"computer_use"/...}，官方
+	// ToolChoiceTypesParam 与 ToolChoiceMcpParam）：没有 name，字段随变体
+	// 互不相同，没有跨族统一维度可建模。整个进 Raw 不透明槽，同族出站
+	// 原样回写；外族编不出对应形状（tool_choice 缺省），损耗由
+	// DescribeLossy 报出。此前这个形态被下面的 "name is required" 400
+	// 拒掉——客户端的合法请求根本进不来。function/custom 是已建模变体，
+	// 缺 name 依然是客户端错误，照旧拒（Raw 收下只会在上游再挨一次 400）。
+	if obj.Type != "" && obj.Type != "function" && obj.Type != "custom" {
+		return &ir.ToolChoice{Raw: append(json.RawMessage(nil), raw...)}, nil
+	}
 	if obj.Name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	return &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: obj.Name}, nil
+	out := &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: obj.Name}
+	if obj.Type != "" {
+		// 带 type 的已建模变体（function / custom）原文进 Raw：同族回写
+		// 逐字保留客户端的形状（custom 指名换成 function 会让上游找不到
+		// 工具），结构化字段照常供整形与跨族使用。
+		out.Raw = append(json.RawMessage(nil), raw...)
+	}
+	return out, nil
 }
 
 // decodeAllowedToolNames 取 allowed_tools.tools 里的工具名。条目通常是

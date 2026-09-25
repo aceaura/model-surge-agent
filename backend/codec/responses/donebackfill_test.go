@@ -418,12 +418,14 @@ func TestStreamEncodeEmitsPartDoneFramesInOfficialOrder(t *testing.T) {
 		t.Fatalf("终止帧顺序不对：%d/%d/%d\n%s", textDone, partDone, itemDone, s)
 	}
 	// 完整正文要在 done 帧里，否则只读终态的下游拿不到内容。
-	// 帧体经序号补齐后按字典序序列化，载荷字段排在 type 之前，所以按
-	// 「载荷紧邻类型名」断言，而不是从类型名的位置往前切。
-	if !strings.Contains(s, `"text":"正文","type":"response.output_text.done"`) {
+	// 帧体按字典序序列化且 part/text 与 type 之间还隔着 sequence_number，
+	// 载荷与事件名分开断言。
+	if !strings.Contains(s, `"text":"正文"`) ||
+		!strings.Contains(s, `"type":"response.output_text.done"`) {
 		t.Fatalf("output_text.done 没带完整终态：\n%s", s)
 	}
-	if !strings.Contains(s, `"part":{"type":"output_text","text":"正文"},"type":"response.content_part.done"`) {
+	if !strings.Contains(s, `"part":{"type":"output_text","text":"正文"}`) ||
+		!strings.Contains(s, `"type":"response.content_part.done"`) {
 		t.Fatalf("content_part.done 没带完整终态：\n%s", s)
 	}
 }

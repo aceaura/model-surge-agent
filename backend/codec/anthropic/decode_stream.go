@@ -339,6 +339,11 @@ func convertStopReason(s string) ir.StopReason {
 	case "pause_turn":
 		// 该状态表示回合可以续跑，语义上等同于「没说完」。
 		return ir.StopMaxTokens
+	case "model_context_window_exceeded":
+		// 官方 beta 档：输入占满窗口挤断输出。兜底成 content_filter 会把
+		// 截断回答伪装成被拦截，客户端的补救动作（压缩输入）与 max_tokens
+		// （抬输出配额）、refusal（换问法）都不同，须单列。
+		return ir.StopContextWindow
 	case "":
 		// 上游没给：留空由聚合层兜底，不能当成被拦截。
 		return ""
@@ -361,6 +366,10 @@ func renderStopReason(s ir.StopReason) string {
 		return "tool_use"
 	case ir.StopContentFilter:
 		return "refusal"
+	case ir.StopContextWindow:
+		// 同族原值带回：外族上游给不出这一档，只有 anthropic 入站的
+		// 往返会走到这里。
+		return "model_context_window_exceeded"
 	default:
 		return ""
 	}

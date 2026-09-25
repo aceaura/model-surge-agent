@@ -31,7 +31,14 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	}
 	if req.MaxTokens > 0 {
 		n := req.MaxTokens
-		w.MaxTokens = &n
+		// 按来路键名带回：客户端给的现代键 max_completion_tokens 不换写成
+		// 官方已废弃的旧键——旧键不兼容 o 系推理模型，换写会直接 400。
+		// 非 chat 来源的请求 MaxCompletionKey 为 false，维持旧键既有形状。
+		if req.MaxCompletionKey {
+			w.MaxCompletionTokens = &n
+		} else {
+			w.MaxTokens = &n
+		}
 	}
 	if len(req.StopSequences) > 0 {
 		raw, err := json.Marshal(req.StopSequences)

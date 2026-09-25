@@ -414,6 +414,13 @@ func encodeToolChoice(tc *ir.ToolChoice) (json.RawMessage, error) {
 	if tc == nil {
 		return nil, nil
 	}
+	// Raw 不透明槽优先：同族往返一个字节不动。typed 变体（mcp/file_search
+	// 等）只有这条通路；带 type 的指名变体（function/custom）也走原文，
+	// 保住客户端的原始形状。整形阶段降级过的（指向未声明工具被改 auto）
+	// Raw 已被清掉，走下面的结构化分支。
+	if len(tc.Raw) > 0 {
+		return append(json.RawMessage(nil), tc.Raw...), nil
+	}
 	switch tc.Mode {
 	case ir.ToolChoiceAuto:
 		return json.Marshal("auto")

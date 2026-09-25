@@ -943,6 +943,7 @@ func convertUsage(u wireUsage) ir.Usage {
 	out := ir.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens}
 	if u.InputTokensDetails != nil {
 		out.CacheReadTokens = u.InputTokensDetails.CachedTokens
+		out.CacheWriteTokens = u.InputTokensDetails.CacheWriteTokens
 	}
 	// 本协议的 output_tokens 已含推理，IR 同口径，故只记维度不做扣减。
 	if u.OutputTokensDetails != nil {
@@ -965,8 +966,11 @@ func renderUsage(u ir.Usage) wireUsage {
 		OutputTokens: u.OutputTokens,
 		TotalTokens:  input + u.OutputTokens,
 	}
-	if u.CacheReadTokens > 0 {
-		out.InputTokensDetails = &wireInputDetails{CachedTokens: u.CacheReadTokens}
+	if u.CacheReadTokens > 0 || u.CacheWriteTokens > 0 {
+		out.InputTokensDetails = &wireInputDetails{
+			CachedTokens:     u.CacheReadTokens,
+			CacheWriteTokens: u.CacheWriteTokens,
+		}
 	}
 	// 本协议表达得了推理维度，如实写出，让客户端看得见推理占比。
 	if u.ReasoningTokens > 0 {
@@ -1049,7 +1053,10 @@ func outputHasRefusal(r *wireResponse) bool {
 // 命中停止序列确实是一次正常收尾，只是「因何而停」这一位表达不出来。
 func renderStatus(s ir.StopReason) (status string, incomplete *wireIncomplete) {
 	switch s {
-	case ir.StopMaxTokens:
+	case ir.StopMaxTokens, ir.StopContextWindow:
+		// context_window（输入占满窗口挤断输出）没有本族专属 reason 取值，
+		// 归 max_output_tokens：两者同为「输出不完整」，status=incomplete
+		// 至少让客户端不会把半截结果当终稿。真正的语义无法保留。
 		return "incomplete", &wireIncomplete{Reason: "max_output_tokens"}
 	case ir.StopContentFilter:
 		return "incomplete", &wireIncomplete{Reason: "content_filter"}

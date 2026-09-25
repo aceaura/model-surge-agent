@@ -87,8 +87,10 @@ func TestRefusalStreamEncode(t *testing.T) {
 	if strings.Contains(delta, `"response.output_text.delta"`) {
 		t.Fatalf("拒绝增量走了 output_text.delta: %s", delta)
 	}
-	// refusal.done 终态必须带全量文本（字母序重排后 refusal 在 type 之前）。
-	if !strings.Contains(stop, `"refusal":"我不能","type":"response.refusal.done"`) {
+	// refusal.done 终态必须带全量文本（字母序重排后 refusal 与 type 之间
+	// 还隔着 sequence_number，分开断言）。
+	if !strings.Contains(stop, `"type":"response.refusal.done"`) ||
+		!strings.Contains(stop, `"refusal":"我不能"`) {
 		t.Fatalf("关块缺 refusal.done: %s", stop)
 	}
 	// 顶层键被 backfillIndexFields 按字母序重排，事件名断言不能带前导引号。

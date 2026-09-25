@@ -34,9 +34,12 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 		// 混淆开关三态透传：没提保持 nil，出站不替客户端造键。
 		out.IncludeObfuscation = w.StreamOptions.IncludeObfuscation
 	}
-	// max_completion_tokens 是新写法，同时出现时以它为准。
+	// max_completion_tokens 是新写法，同时出现时以它为准。记下客户端用的
+	// 是哪个键名：旧键官方已废弃且不兼容 o 系推理模型，同族往返时原键名
+	// 带回，不在客户端背后换写。
 	if w.MaxCompletionTokens != nil {
 		out.MaxTokens = *w.MaxCompletionTokens
+		out.MaxCompletionKey = true
 	} else if w.MaxTokens != nil {
 		out.MaxTokens = *w.MaxTokens
 	}

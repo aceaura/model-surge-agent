@@ -264,6 +264,28 @@ type wireCacheCreationUsage struct {
 	Ephemeral1hInputTokens int64 `json:"ephemeral_1h_input_tokens"`
 }
 
+// wireMessageDeltaUsage message_delta 帧的专用 usage（官方 MessageDeltaUsage）：
+// 没有 cache_creation 对象、inference_geo——那两个只属于 message_start 与
+// 非流式响应的完整 Usage。message_delta 复用完整 wireUsage 会把官方 schema
+// 没有的键写进帧里（同族「上游非流式→客户端流式」路径必然触发：聚合
+// usage 带着明细整体落进 EvMessageDelta）。解码侧仍按 wireUsage 宽松读：
+// 官方 delta 帧的键是它的子集，多出来的 IR 维度保持零值。
+type wireMessageDeltaUsage struct {
+	InputTokens              int64                `json:"input_tokens,omitempty"`
+	OutputTokens             int64                `json:"output_tokens"`
+	CacheReadInputTokens     int64                `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int64                `json:"cache_creation_input_tokens,omitempty"`
+	ServerToolUse            *wireServerToolUsage `json:"server_tool_use,omitempty"`
+}
+
+// messageDeltaEvent message_delta 帧的编码专用载荷：字段名与 streamEvent
+// 相同，usage 换成官方的 delta 专用形状。
+type messageDeltaEvent struct {
+	Type  string                 `json:"type"`
+	Delta *streamDelta           `json:"delta,omitempty"`
+	Usage *wireMessageDeltaUsage `json:"usage,omitempty"`
+}
+
 // SSE 事件名。
 const (
 	evMessageStart      = "message_start"

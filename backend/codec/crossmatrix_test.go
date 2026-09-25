@@ -1574,7 +1574,8 @@ func TestCacheWriteTokensSurviveWhereExpressible(t *testing.T) {
 	expressible := map[string]bool{
 		codec.ProtocolAnthropic:       true,
 		codec.ProtocolChatCompletions: true,
-		codec.ProtocolResponses:       false,
+		// responses 的 input_tokens_details.cache_write_tokens 表达得了这一维。
+		codec.ProtocolResponses: true,
 	}
 	for _, up := range outboundNames() {
 		raw, ok := cacheWriteUsageFixture[up]

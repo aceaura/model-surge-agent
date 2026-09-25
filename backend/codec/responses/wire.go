@@ -335,6 +335,10 @@ type wireUsage struct {
 
 type wireInputDetails struct {
 	CachedTokens int64 `json:"cached_tokens,omitempty"`
+	// CacheWriteTokens 缓存写入量（官方 input_tokens_details 的细分键）。
+	// 与 anthropic 的 cache_creation_input_tokens 同一位，不读就把对账
+	// 凭证弄丢；同族往返双向保留。
+	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
 }
 
 // wireOutputDetails 的 reasoning_tokens 已含在 output_tokens 内，
@@ -357,6 +361,19 @@ type wireErrorEnvelope struct {
 // wireStreamEvent 是所有 response.* 流帧的联合体。
 type wireStreamEvent struct {
 	Type string `json:"type"`
+	// SequenceNumber 帧序号（官方全事件 api:required）：客户端靠它检测丢帧
+	// 与重排。编码侧在 frame() 漏斗里逐帧单调递增写；无 omitempty——0 是
+	// 首帧的合法值。解码侧不读：本服务的聚合按事件语义推进，不靠序号。
+	SequenceNumber int64 `json:"sequence_number"`
+	// ItemID 所属 output item 的 id（delta/done/part/annotation 帧官方均
+	// api:required）：客户端拿它把增量帧关联到 output 数组里的条目，缺了
+	// 只能按 output_index 猜。只在条目真有原号时写（同族上游给的
+	// ToolUse/Thinking.ItemID），不凭空合成假号，故 omitempty。
+	ItemID string `json:"item_id,omitempty"`
+	// AnnotationIndex 本 part 内的标注序号（annotation.added 上
+	// api:required）。指针：0 是合法值，omitempty 区分不了「第一条」与
+	// 「没有」。
+	AnnotationIndex *int `json:"annotation_index,omitempty"`
 	// OutputIndex 是条目序号，充当 IR 的块索引来源。不保证连续。
 	OutputIndex int `json:"output_index,omitempty"`
 	// ContentIndex 是条目内 part 的序号；一个 message 条目可以有多个 part。
