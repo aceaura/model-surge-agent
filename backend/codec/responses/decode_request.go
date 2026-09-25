@@ -83,6 +83,14 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	out.ClientMetadata = w.Metadata
 	out.ServiceTier = w.ServiceTier
 	out.PromptCacheKey = w.PromptCacheKey
+	out.SafetyIdentifier = w.SafetyIdentifier
+	// 显式 null 等同没给（与 chat 同款归一）。
+	if string(w.Moderation) != "null" {
+		out.Moderation = w.Moderation
+	}
+	if string(w.PromptCacheOptions) != "null" {
+		out.PromptCacheOptions = w.PromptCacheOptions
+	}
 	out.ParallelToolCalls = w.ParallelToolCalls
 	out.TopLogProbs = w.TopLogProbs
 	if w.Text != nil {

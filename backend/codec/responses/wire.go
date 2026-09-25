@@ -46,6 +46,13 @@ type wireRequest struct {
 	PromptCacheKey    string `json:"prompt_cache_key,omitempty"`
 	ParallelToolCalls *bool  `json:"parallel_tool_calls,omitempty"`
 	TopLogProbs       *int   `json:"top_logprobs,omitempty"`
+	// SafetyIdentifier 滥用检测标识，user 字段的官方替代。与 user 同一
+	// 维度。值是用户标识，日志与诊断不回显。
+	SafetyIdentifier string `json:"safety_identifier,omitempty"`
+	// Moderation 请求级审核策略 {model, policy{input/output}}，原文透传。
+	Moderation json.RawMessage `json:"moderation,omitempty"`
+	// PromptCacheOptions 显式缓存断点控制 {mode, ttl, ...}，原文透传。
+	PromptCacheOptions json.RawMessage `json:"prompt_cache_options,omitempty"`
 
 	// 以下四个字段把对话状态托管在上游那一侧，本服务表达不了：请求会被
 	// 分发到任意一个目标账号，那里没有这条 id 指向的历史。收下再忽略等于

@@ -146,8 +146,20 @@ type Capabilities struct {
 	// PromptCacheKey 有提示缓存路由键槽位（OpenAI 两系的
 	// prompt_cache_key）。anthropic 走显式 cache_control 断点，没有
 	// 路由键概念；gemini 没有。值是客户端自选串，诊断与日志不回显。
-	PromptCacheKey    bool
-	ParallelToolCalls bool
+	PromptCacheKey bool
+	// SafetyIdentifier 为真表示滥用检测标识能送达上游：OpenAI 两系有原生
+	// safety_identifier 槽位；anthropic 没有独立槽位但 metadata.user_id
+	// 是同一维度，槽空着时可以映进去（被 user_id 占了才丢，丢要单独报）。
+	// gemini 没有任何用户标识槽位。
+	SafetyIdentifier bool
+	// Moderation 有请求级审核策略槽位（OpenAI 两系的 moderation）。
+	// 其余两族没有：策略丢弃后审核回落到上游默认。
+	Moderation bool
+	// PromptCacheOptions 有显式缓存断点控制槽位（OpenAI 两系的
+	// prompt_cache_options）。anthropic 的缓存走 cache_control 断点、
+	// 形状不同不构成等价物；gemini 没有。
+	PromptCacheOptions bool
+	ParallelToolCalls  bool
 	// ResponseFormat 为真表示支持「输出必须是合法 JSON」这一档（纯 JSON 模式）；
 	// ResponseSchema 为真表示支持按 JSON Schema 约束结构。
 	//

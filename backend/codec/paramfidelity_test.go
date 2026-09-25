@@ -180,6 +180,9 @@ func TestUnsupportedParamsAreReportedLossy(t *testing.T) {
 		//（priority 去 anthropic 等）由 routingloss_test 专测。
 		{"service_tier", func(r *ir.Request) { r.ServiceTier = "auto" }},
 		{"prompt_cache_key", func(r *ir.Request) { r.PromptCacheKey = "k" }},
+		{"safety_identifier", func(r *ir.Request) { r.SafetyIdentifier = "si" }},
+		{"moderation", func(r *ir.Request) { r.Moderation = []byte(`{"model":"m"}`) }},
+		{"prompt_cache_options", func(r *ir.Request) { r.PromptCacheOptions = []byte(`{"mode":"auto"}`) }},
 		{"parallel_tool_calls", func(r *ir.Request) { v := true; r.ParallelToolCalls = &v }},
 		{"response_format", func(r *ir.Request) { r.ResponseFormat = &ir.ResponseFormat{Kind: ir.ResponseFormatJSON} }},
 		{"verbosity", func(r *ir.Request) { r.Verbosity = "low" }},
@@ -243,6 +246,12 @@ func supportsField(t *testing.T, proto, field string) bool {
 		return caps.ServiceTier
 	case "prompt_cache_key":
 		return caps.PromptCacheKey
+	case "safety_identifier":
+		return caps.SafetyIdentifier
+	case "moderation":
+		return caps.Moderation
+	case "prompt_cache_options":
+		return caps.PromptCacheOptions
 	case "parallel_tool_calls":
 		return caps.ParallelToolCalls
 	case "response_format":

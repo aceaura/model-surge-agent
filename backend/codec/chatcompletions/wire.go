@@ -36,9 +36,20 @@ type wireRequest struct {
 	LogitBias        map[string]float64 `json:"logit_bias,omitempty"`
 	ServiceTier      string             `json:"service_tier,omitempty"`
 	// PromptCacheKey 提示缓存路由键。值是客户端自选串，日志与诊断不回显。
-	PromptCacheKey    string              `json:"prompt_cache_key,omitempty"`
-	ParallelToolCalls *bool               `json:"parallel_tool_calls,omitempty"`
-	ResponseFormat    *wireResponseFormat `json:"response_format,omitempty"`
+	PromptCacheKey    string `json:"prompt_cache_key,omitempty"`
+	ParallelToolCalls *bool  `json:"parallel_tool_calls,omitempty"`
+	// Verbosity 输出啰嗦程度档位（low/medium/high），本协议是顶层字段
+	//（responses 挪进了 text 下）。
+	Verbosity string `json:"verbosity,omitempty"`
+	// SafetyIdentifier 滥用检测标识，user 字段的官方替代。与 user 同一
+	// 维度，IR 里独立成槽。值是用户标识，日志与诊断不回显。
+	SafetyIdentifier string `json:"safety_identifier,omitempty"`
+	// Moderation 请求级审核策略 {model, policy{input/output}}。结构属于
+	// 上游产品语义，代理不解析，原文透传。
+	Moderation json.RawMessage `json:"moderation,omitempty"`
+	// PromptCacheOptions 显式缓存断点控制 {mode, ttl, ...}。同样原文透传。
+	PromptCacheOptions json.RawMessage     `json:"prompt_cache_options,omitempty"`
+	ResponseFormat     *wireResponseFormat `json:"response_format,omitempty"`
 
 	// Modalities 输出模态（"text"/"audio"），chat 一族专属。
 	Modalities []string `json:"modalities,omitempty"`

@@ -119,6 +119,10 @@ func (outboundCodec) Caps() codec.Capabilities {
 		//（flex/scale/priority/fast/ultrafast 在本族值集里 provably 无等价）。
 		// 没有 prompt_cache_key：缓存走显式 cache_control 断点，无路由键概念。
 		ServiceTier: true,
+		// safety_identifier 没有独立槽位，但 metadata.user_id 是同一维度：
+		// 槽空着时出站编码映进去（被 user_id 占了才丢，丢由诊断单独报）。
+		// verbosity / moderation / prompt_cache_options 一个都没有。
+		SafetyIdentifier: true,
 		// 调参能力位大多留假：本协议的请求体只有 model/messages/system/
 		// max_tokens/metadata/stop_sequences/stream/temperature/top_k/top_p/
 		// tools/tool_choice/thinking/output_config/service_tier，没有承载

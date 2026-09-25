@@ -106,10 +106,14 @@ func (outboundCodec) Caps() codec.Capabilities {
 		// prompt_cache_key 有原生槽位；值集是 chat 的超集（另有 ultrafast）。
 		PromptCacheKey:    true,
 		ParallelToolCalls: true,
-		ResponseFormat:    true,
-		ResponseSchema:    true,
-		Verbosity:         true,
-		Include:           true,
+		// 2026 新增的三个请求修饰槽位都有原生落点（verbosity 在 text 下）。
+		SafetyIdentifier:   true,
+		Moderation:         true,
+		PromptCacheOptions: true,
+		ResponseFormat:     true,
+		ResponseSchema:     true,
+		Verbosity:          true,
+		Include:            true,
 		// background 是本协议独有的后台运行模式槽位。槽位存在但本服务兑现
 		// 不了（对上游一律流式 + store:false），注记措辞由此位区分。
 		Background: true,

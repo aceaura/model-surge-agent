@@ -666,6 +666,23 @@ func describeParamsLossy(req *ir.Request, name string, caps Capabilities, note, 
 		// 值是客户端自选串，不回显（与 user id 同款纪律）。
 		note("prompt_cache_key", "no cache routing field, repeated prefixes may recompute instead of hitting the cache")
 	}
+	if req.SafetyIdentifier != "" {
+		// safety_identifier 与 user_id 同一维度：无槽位的协议直接丢；
+		// anthropic 映进 metadata.user_id，该槽被 user_id 占了才挤不进去。
+		// 值是用户标识，不回显。
+		switch {
+		case !caps.SafetyIdentifier:
+			note("safety_identifier", "no abuse-tracking identifier parameter, the upstream safety system will not see it")
+		case name == ProtocolAnthropic && req.Metadata["user_id"] != "":
+			note("safety_identifier", "the request already carries a user id and the target keeps a single abuse-tracking slot, only the user id reaches the upstream")
+		}
+	}
+	if len(req.Moderation) > 0 && !caps.Moderation {
+		note("moderation", "no request-level moderation parameter, moderation falls back to the upstream default")
+	}
+	if len(req.PromptCacheOptions) > 0 && !caps.PromptCacheOptions {
+		note("prompt_cache_options", "no explicit cache breakpoint control, caching follows the upstream default policy")
+	}
 	if req.ParallelToolCalls != nil && !caps.ParallelToolCalls {
 		note("parallel_tool_calls", "no parallel tool call switch")
 	}

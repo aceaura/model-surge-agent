@@ -132,7 +132,13 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 			w.Thinking = th
 		}
 	}
-	if id := req.Metadata["user_id"]; id != "" {
+	// safety_identifier 与 user_id 同一维度（滥用检测标识）：metadata.user_id
+	// 槽空着时映进去；两边都有时 user_id 优先，safety_identifier 由诊断报出。
+	id := req.Metadata["user_id"]
+	if id == "" {
+		id = req.SafetyIdentifier
+	}
+	if id != "" {
 		w.Metadata = &wireMetadata{UserID: id}
 	}
 	// 只回写 schema 约束形态：纯 JSON 模式（没给 schema）在 anthropic 没有

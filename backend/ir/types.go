@@ -559,6 +559,13 @@ type Request struct {
 	// PromptCacheKey 提示缓存路由键（OpenAI 两系的 prompt_cache_key）。
 	// 值可能是客户端自选串，诊断与日志一律不回显值本身。
 	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
+	// Moderation 请求级审核策略（OpenAI 两系 {model, policy{input/output}}）。
+	// 不透明原文透传：代理不解释审核策略，只负责送达或报出。字节按
+	// RawMessage 不可变惯例随值共享（Clone 同 Prediction 的处理）。
+	Moderation json.RawMessage `json:"moderation,omitempty"`
+	// PromptCacheOptions 显式缓存断点控制（OpenAI 两系 {mode, ttl, ...}）。
+	// 不透明原文透传，共享惯例同 Moderation。
+	PromptCacheOptions json.RawMessage `json:"prompt_cache_options,omitempty"`
 
 	// 以下两维只有 Anthropic 一族有，外族没有任何对应物。收进 IR 只为
 	// 同协议回写 + 跨协议诊断，不作映射尝试。
@@ -582,8 +589,15 @@ type Request struct {
 	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
 	// ResponseFormat 是结构化输出要求。
 	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
-	// Verbosity 是输出详略（responses 的 text.verbosity）。
+	// Verbosity 是输出详略档位（low/medium/high）。分族落位：chat 是顶层
+	// verbosity，responses 是 text.verbosity；其余两族没有输出长度转向
+	// 这一维，跨族丢弃由诊断报出。
 	Verbosity string `json:"verbosity,omitempty"`
+	// SafetyIdentifier 滥用检测标识（OpenAI 两系的 safety_identifier，
+	// user 字段的官方替代）。与 Metadata 的 user_id 同一维度：跨族到
+	// anthropic 时映进 metadata.user_id 槽位（该槽被 user_id 占了才丢，
+	// 丢要报）。值是用户标识，诊断与日志不回显。
+	SafetyIdentifier string `json:"safety_identifier,omitempty"`
 	// Include 要求上游额外返回哪些内容（responses 的 include）。
 	Include []string `json:"include,omitempty"`
 	// Background 是后台运行模式（responses 的 background）。三态指针：

@@ -84,6 +84,16 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	out.ServiceTier = w.ServiceTier
 	out.PromptCacheKey = w.PromptCacheKey
 	out.ParallelToolCalls = w.ParallelToolCalls
+	out.Verbosity = w.Verbosity
+	out.SafetyIdentifier = w.SafetyIdentifier
+	// 显式 null 等同没给：不归一的话出站会多一个上游解不动的 null 键，
+	// 诊断也会误报（len>0 而值是 "null"）。
+	if string(w.Moderation) != "null" {
+		out.Moderation = w.Moderation
+	}
+	if string(w.PromptCacheOptions) != "null" {
+		out.PromptCacheOptions = w.PromptCacheOptions
+	}
 	out.ResponseFormat = decodeResponseFormat(w.ResponseFormat)
 
 	// chat 一族专属四维：同族往返靠它们，跨族损耗由 DescribeLossy 报出。
