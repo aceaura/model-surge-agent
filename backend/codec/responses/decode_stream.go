@@ -729,14 +729,34 @@ func DecodeError(status int, header http.Header, body []byte) *ir.Error {
 }
 
 func decodeErrorBody(status int, body []byte) *ir.Error {
+	// 字段类型不匹配不算「什么都没解到」：外层 body 已是合法 JSON，Go 的
+	// 解码器记下类型错误后仍会解完其余键——message 写成数字时，解得好的
+	// code/type 不能跟着一起丢，归因靠的是它们。
 	var env wireErrorEnvelope
-	if err := json.Unmarshal(body, &env); err == nil && env.Error.Message != "" {
+	_ = json.Unmarshal(body, &env)
+	if env.Error.Message != "" {
 		return codec.WithParam(convertError(status, &env.Error), body)
 	}
 	// 有些错误是裸的 response 对象，错误挂在 error 字段上。
 	var resp wireResponse
-	if err := json.Unmarshal(body, &resp); err == nil && resp.Error != nil {
+	_ = json.Unmarshal(body, &resp)
+	if resp.Error != nil && resp.Error.Message != "" {
 		return codec.WithParam(convertError(status, resp.Error), body)
+	}
+	// 两种规范形状都没解出消息：可能是 message 位上的类型不匹配，
+	// 其余键已经解完——code 救回来，消息回落原文。
+	code := env.Error.Code
+	if code == "" {
+		code = env.Error.Type
+	}
+	if code == "" && resp.Error != nil {
+		code = resp.Error.Code
+		if code == "" {
+			code = resp.Error.Type
+		}
+	}
+	if code != "" {
+		return codec.WithParam(codec.SalvagedError(status, body, code), body)
 	}
 	// 两种规范形状都不匹配：尽力从任意形状里挖消息，挖不到才回落状态码描述。
 	return codec.WithParam(codec.FallbackError(status, body), body)

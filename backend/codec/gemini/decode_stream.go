@@ -376,15 +376,24 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 
 func DecodeError(status int, header http.Header, body []byte) *ir.Error {
 	var env wireErrorEnvelope
-	if err := json.Unmarshal(body, &env); err == nil && env.Error.Message != "" {
-		out := codec.WithParam(convertError(status, &env.Error), body)
-		// 本协议是四个里唯一把到期时刻放在体内的：google.rpc.RetryInfo。
-		// 先填体内的，再让 WithRetryAfter 与头里的取更早者。
-		out.RetryAfter = retryInfoAt(env.Error.Details, time.Now())
-		return codec.WithRetryAfter(out, header)
+	// 字段类型不匹配不算「什么都没解到」：外层 body 已是合法 JSON，Go 的
+	// 解码器记下类型错误后仍会解完其余键——message 写成数字时，解得好的
+	// status 串与 RetryInfo 不能跟着一起丢：前者是归因，后者是退避依据。
+	_ = json.Unmarshal(body, &env)
+	if env.Error.Message == "" && env.Error.Status == "" && len(env.Error.Details) == 0 {
+		// 不是本协议的错误结构：尽力从任意形状里挖消息，挖不到才回落状态码描述。
+		return codec.WithRetryAfter(codec.WithParam(codec.FallbackError(status, body), body), header)
 	}
-	// 不是本协议的错误结构：尽力从任意形状里挖消息，挖不到才回落状态码描述。
-	return codec.WithRetryAfter(codec.WithParam(codec.FallbackError(status, body), body), header)
+	var out *ir.Error
+	if env.Error.Message != "" {
+		out = convertError(status, &env.Error)
+	} else {
+		out = codec.SalvagedError(status, body, env.Error.Status)
+	}
+	// 本协议是四个里唯一把到期时刻放在体内的：google.rpc.RetryInfo。
+	// 先填体内的，再让 WithRetryAfter 与头里的取更早者。
+	out.RetryAfter = retryInfoAt(env.Error.Details, time.Now())
+	return codec.WithRetryAfter(codec.WithParam(out, body), header)
 }
 
 // retryInfoAt 从 details 数组里取 RetryInfo.retryDelay 并换成绝对时刻。

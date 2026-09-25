@@ -62,6 +62,24 @@ func FallbackError(status int, body []byte) *ir.Error {
 	return ir.NewError(KindForStatus(status, message), status, "", message)
 }
 
+// SalvagedError 是消息解不出、但同一 error 对象的其余字段解出来了的出口。
+//
+// 典型形态是代理把 message 写成数字：外层 body 已是合法 JSON，内层只可能
+// 类型不匹配，而 Go 的解码器记下类型错误后仍会把其余键解完——code 其实
+// 已经拿到了。拿 err != nil 当「什么都没解到」会把上游自报的错误码一并
+// 丢掉：归因靠的是 code，回落原文只负责让失败可见，替代不了归因。
+//
+// 消息按 ExtractMessage → 状态码描述回落，与 FallbackError 同口径；
+// 分类走 KindFor，与各协议 convertError 同判据：status 非零时与
+// KindForStatus 等价，零时（流内帧）才按救回来的 code 归类。
+func SalvagedError(status int, body []byte, code string) *ir.Error {
+	message := ExtractMessage(body)
+	if message == "" {
+		message = StatusMessage(status, body)
+	}
+	return ir.NewError(KindFor(status, code, message), status, code, message)
+}
+
 // WithParam 给已归一的错误补上出问题的字段名，已有值时不覆盖。
 //
 // 放在 DecodeError 的出口统一调用，而不是各协议自己从 wire 结构里取：

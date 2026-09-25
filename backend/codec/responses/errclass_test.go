@@ -165,3 +165,18 @@ func TestErrorClosesItemsThenFails(t *testing.T) {
 		t.Errorf("错误收尾闭合的条目应标 incomplete: %s", joined)
 	}
 }
+
+// message 写成数字（部分代理的形态）时不得连累解得好的 code 与 param：
+// 消息回落原文/状态码描述，归因靠的错误码留住。
+func TestDecodeErrorKeepsCodeWhenMessageIsNumeric(t *testing.T) {
+	got := DecodeError(429, nil, []byte(`{"error":{"code":"rate_limit_exceeded","message":429,"param":"max_tokens"}}`))
+	if got.Code != "rate_limit_exceeded" {
+		t.Errorf("code = %q, want rate_limit_exceeded", got.Code)
+	}
+	if got.Param != "max_tokens" {
+		t.Errorf("param = %q, want max_tokens", got.Param)
+	}
+	if got.Message == "" {
+		t.Error("message 不得为空：流水里查不出任何东西")
+	}
+}

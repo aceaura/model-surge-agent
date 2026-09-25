@@ -484,12 +484,24 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 
 func DecodeError(status int, header http.Header, body []byte) *ir.Error {
 	var env wireErrorEnvelope
-	if err := json.Unmarshal(body, &env); err != nil || env.Error.Message == "" {
-		// 本协议的兼容实现最多，错误体形状五花八门：先尽力挖消息，
-		// 挖不到才回落状态码描述。
-		return codec.WithRetryAfter(codec.WithParam(codec.FallbackError(status, body), body), header)
+	// 字段类型不匹配不算「什么都没解到」：外层 body 已是合法 JSON，Go 的
+	// 解码器记下类型错误后仍会解完其余键——message 写成数字（部分代理的
+	// 形态）时，解得好的 code/type 不能跟着一起丢，归因靠的是它们。
+	_ = json.Unmarshal(body, &env)
+	if env.Error.Message != "" {
+		return codec.WithRetryAfter(codec.WithParam(convertError(status, &env.Error), body), header)
 	}
-	return codec.WithRetryAfter(codec.WithParam(convertError(status, &env.Error), body), header)
+	code := env.Error.Type
+	if code == "" {
+		code = errorCode(env.Error.Code)
+	}
+	if code != "" {
+		return codec.WithRetryAfter(codec.WithParam(
+			codec.SalvagedError(status, body, code), body), header)
+	}
+	// 本协议的兼容实现最多，错误体形状五花八门：先尽力挖消息，
+	// 挖不到才回落状态码描述。
+	return codec.WithRetryAfter(codec.WithParam(codec.FallbackError(status, body), body), header)
 }
 
 func convertError(status int, e *wireError) *ir.Error {

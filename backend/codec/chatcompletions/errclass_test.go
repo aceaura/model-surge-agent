@@ -156,3 +156,16 @@ func TestErrorStreamCarriesDoneWithoutFinishReason(t *testing.T) {
 		t.Errorf("[DONE] 只该出现一次: %s", joined)
 	}
 }
+
+// message 写成数字（部分代理的形态）时不得连累解得好的 code：消息回落
+// 原文/状态码描述，归因靠的错误码留住。修复前整个 error 对象被丢弃，
+// Code 恒空、消息是一整段转义原文。
+func TestDecodeErrorKeepsCodeWhenMessageIsNumeric(t *testing.T) {
+	got := DecodeError(400, nil, []byte(`{"error":{"code":"context_length_exceeded","message":400}}`))
+	if got.Code != "context_length_exceeded" {
+		t.Errorf("code = %q, want context_length_exceeded", got.Code)
+	}
+	if got.Message == "" {
+		t.Error("message 不得为空：流水里查不出任何东西")
+	}
+}

@@ -91,3 +91,19 @@ func TestDecodeErrorLeavesParamEmptyWhenAbsent(t *testing.T) {
 		t.Errorf("param = %q, 上游没给就该缺席而不是空串以外的值", got.Param)
 	}
 }
+
+// message 写成数字时不得连累解得好的 status 串：它是流内错误帧唯一的
+// 分类依据，也是 HTTP 路径上归因用的错误码。数字 code 只是状态码回声，
+// 不当错误码收下。
+func TestDecodeErrorKeepsStatusWhenMessageIsNumeric(t *testing.T) {
+	got := DecodeError(429, nil, []byte(`{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":429}}`))
+	if got.Code != "RESOURCE_EXHAUSTED" {
+		t.Errorf("code = %q, want RESOURCE_EXHAUSTED", got.Code)
+	}
+	if got.Kind != ir.ErrRateLimit {
+		t.Errorf("kind = %q, want rate_limit", got.Kind)
+	}
+	if got.Message == "" {
+		t.Error("message 不得为空：流水里查不出任何东西")
+	}
+}
