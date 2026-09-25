@@ -247,6 +247,11 @@ type Tool struct {
 	// 服务端工具不能被当成普通函数工具发出去：上游会把它当成「等客户端
 	// 回结果」的函数，而本服务永远不会回——对话就停在那里，没有报错。
 	ServerType string `json:"server_type,omitempty"`
+	// Strict 工具入参 schema 严格校验开关（anthropic tool.strict、OpenAI 两系
+	// function.strict，同义同形）。三态指针：nil=没给（上游默认），显式
+	// false 是「明确不要严格校验」，与没给语义不同。gemini 的工具定义
+	// 没有这一维。
+	Strict *bool `json:"strict,omitempty"`
 }
 
 type ToolChoiceMode string
@@ -404,7 +409,13 @@ func (r *Request) Clone() *Request {
 	out := *r
 	out.Messages = cloneMessages(r.Messages)
 	out.System = cloneBlocks(r.System)
-	out.Tools = append([]Tool(nil), r.Tools...)
+	if r.Tools != nil {
+		out.Tools = make([]Tool, len(r.Tools))
+		for i, tl := range r.Tools {
+			tl.Strict = cloneBool(tl.Strict)
+			out.Tools[i] = tl
+		}
+	}
 	out.StopSequences = append([]string(nil), r.StopSequences...)
 	out.DecodeNotes = append([]string(nil), r.DecodeNotes...)
 	if r.ToolChoice != nil {

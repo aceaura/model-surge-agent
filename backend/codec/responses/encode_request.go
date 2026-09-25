@@ -51,7 +51,7 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	w.Input = input
 
 	for _, t := range req.Tools {
-		tool := wireTool{Type: "function", Name: t.Name, Description: t.Description}
+		tool := wireTool{Type: "function", Name: t.Name, Description: t.Description, Strict: t.Strict}
 		if t.Schema != "" {
 			tool.Parameters = json.RawMessage(t.Schema)
 		}

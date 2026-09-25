@@ -76,10 +76,12 @@ func (outboundCodec) Caps() codec.Capabilities {
 		Tools:       true,
 		// tool_use.input 是 JSON 对象槽位。
 		ToolInputObject: true,
-		Images:          true,
-		CacheControl:    true,
-		TopK:            true,
-		StopSequences:   true,
+		// 官方 Tool.strict：schema 严格校验保证。
+		ToolStrict:    true,
+		Images:        true,
+		CacheControl:  true,
+		TopK:          true,
+		StopSequences: true,
 		// 官方限定至多 4 个 cache_control 断点，超出即 400。
 		CacheBreakpoints: 4,
 		// 开启 thinking 时 temperature / top_p 必须缺席。

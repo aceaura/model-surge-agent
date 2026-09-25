@@ -158,6 +158,8 @@ type wireFunctionDef struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	// Strict 严格 schema 校验开关（官方 FunctionDefinition.strict）。
+	Strict *bool `json:"strict,omitempty"`
 }
 
 type wireToolChoiceObject struct {

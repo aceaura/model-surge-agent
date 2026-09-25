@@ -84,8 +84,10 @@ func (outboundCodec) Caps() codec.Capabilities {
 		// role:tool 消息不接受媒体 part：编出 image_url 会被上游按格式错误
 		// 拒收整个请求（cc-switch 也明确写了这一条）。
 		ToolResultTextOnly: true,
-		Images:             true,
-		StopSequences:      true,
+		// 官方 FunctionDefinition.strict：schema 严格校验保证。
+		ToolStrict:    true,
+		Images:        true,
+		StopSequences: true,
 		// 官方 stop 数组至多 4 项，超出即 400。
 		MaxStopSequences: 4,
 		// 本协议是这批调参字段的来源协议，除三个 responses 专有项

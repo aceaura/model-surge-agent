@@ -125,6 +125,8 @@ type wireTool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+	// Strict 保证工具名与入参的 schema 校验（官方 Tool.strict）。
+	Strict *bool `json:"strict,omitempty"`
 }
 
 type wireToolChoice struct {

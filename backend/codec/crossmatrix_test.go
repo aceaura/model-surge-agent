@@ -1665,6 +1665,18 @@ func lossyProbes() []lossyProbe {
 			expressible: func(c codec.Capabilities) bool { return c.Tools },
 		},
 		{
+			field: "strict flag",
+			build: func() *ir.Request {
+				req := probeRequest(ir.Block{Type: ir.BlockText, Text: "ok"})
+				strict := true
+				req.Tools = []ir.Tool{{Name: "grep",
+					Schema: `{"type":"object","properties":{"pattern":{"type":"string"}}}`,
+					Strict: &strict}}
+				return req
+			},
+			expressible: func(c codec.Capabilities) bool { return c.ToolStrict },
+		},
+		{
 			field: "top_k",
 			build: func() *ir.Request {
 				req := probeRequest(ir.Block{Type: ir.BlockText, Text: "ok"})

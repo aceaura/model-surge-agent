@@ -61,6 +61,7 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 			Name:        t.Name,
 			Description: t.Description,
 			Schema:      string(t.Parameters),
+			Strict:      t.Strict,
 		})
 	}
 	choice, err := decodeToolChoice(w.ToolChoice)

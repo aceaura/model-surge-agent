@@ -51,6 +51,7 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 			Name:        t.Name,
 			Description: t.Description,
 			Schema:      string(t.InputSchema),
+			Strict:      t.Strict,
 		}
 		// custom 是函数工具的显式写法，与省略同义，不当服务端工具记。
 		if t.Type != "" && t.Type != "custom" {

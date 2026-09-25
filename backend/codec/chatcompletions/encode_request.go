@@ -53,7 +53,7 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	}
 
 	for _, t := range req.Tools {
-		def := wireFunctionDef{Name: t.Name, Description: t.Description}
+		def := wireFunctionDef{Name: t.Name, Description: t.Description, Strict: t.Strict}
 		if t.Schema != "" {
 			def.Parameters = json.RawMessage(t.Schema)
 		}

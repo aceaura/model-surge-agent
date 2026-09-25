@@ -104,7 +104,11 @@ type Capabilities struct {
 	// ServerTools 为真表示本协议表达得了「由上游自己执行的工具」。
 	// 只有 anthropic 是这样。为假时这类声明整条丢弃并出说明，而不是
 	// 降级成函数工具：降级后上游会等一个永远不来的工具结果。
-	ServerTools   bool
+	ServerTools bool
+	// ToolStrict 为真表示工具定义有 strict 槽位（schema 严格校验保证）：
+	// anthropic tool.strict、OpenAI 两系 function.strict，三族同义同形。
+	// gemini 的工具定义没有这一维，装不下时报数不报值。
+	ToolStrict    bool
 	Images        bool
 	CacheControl  bool
 	TopK          bool

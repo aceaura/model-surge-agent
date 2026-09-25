@@ -69,6 +69,21 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	if len(req.Tools) > 0 && !caps.Tools {
 		note("tools", "no tool calling")
 	}
+	if !caps.ToolStrict {
+		// 报数不报值：客户端关心的是「几个工具的保证没了」，逐个列名
+		// 会把说明拖成工具清单；显式 false 也计数——它同样是客户端的
+		// 表态（明确不要严格校验），到了没有这一维的协议一样无从表达。
+		n := 0
+		for _, t := range req.Tools {
+			if t.Strict != nil {
+				n++
+			}
+		}
+		if n > 0 {
+			notes["strict flag"] = fmt.Sprintf(
+				"dropped strict flag on %d tool(s): the target protocol has no schema-strictness switch, tool call arguments are not guaranteed to validate against the schema", n)
+		}
+	}
 	if !caps.ToolResultError && hasFailedToolResult(req) {
 		rewrote("tool_result.is_error",
 			fmt.Sprintf("prefixed the content with %q", toolErrorPrefix))
