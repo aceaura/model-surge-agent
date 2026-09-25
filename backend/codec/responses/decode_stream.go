@@ -130,7 +130,14 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		// 函数调用条目只有一个 arguments 流，用 output_index 单独成键。
 		idx, opened := d.slot(callKey(ev.OutputIndex), ir.BlockToolUse)
 		out := append(d.start(ev), opened...)
+		d.accText(idx, ev.Delta)
 		return append(out, ir.Event{Type: ir.EvToolInput, Index: idx, Text: ev.Delta}), nil
+
+	case evFunctionArgsDone:
+		// 终态帧携带完整参数而不是新一份：只发终态的上游靠这一帧拿到
+		// 全部入参，已发 delta 的前缀不得重复，分叉也不能追加成畸形 JSON。
+		return d.backfill(callKey(ev.OutputIndex), ir.BlockToolUse,
+			ev.Arguments, ir.EvToolInput), nil
 
 	case evReasoningSummaryText, evReasoningTextDelta:
 		// 推理摘要按 summary_index 分段，各段是同一块的续写：
@@ -183,10 +190,6 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		return d.backfill(reasoningKey(ev.OutputIndex), ir.BlockThinking,
 			ev.Part.Text, ir.EvThinkingDelta), nil
 
-	case evFunctionArgsDone:
-		// 块闭合统一在 output_item.done 做；参数终态回补是独立的移植点。
-		return nil, nil
-
 	case evCompleted, evIncomplete, evFailed:
 		return d.complete(ev), nil
 
@@ -237,6 +240,7 @@ func (d *streamDecoder) itemAdded(ev wireStreamEvent) ([]ir.Event, error) {
 		})
 		// 有实现在开启帧就给出完整 arguments 且不再发增量，当一次 delta 发出。
 		if ev.Item.Arguments != "" {
+			d.accText(idx, ev.Item.Arguments)
 			out = append(out, ir.Event{Type: ir.EvToolInput, Index: idx, Text: ev.Item.Arguments})
 		}
 		return out, nil
@@ -269,6 +273,10 @@ func (d *streamDecoder) itemDone(ev wireStreamEvent) []ir.Event {
 		case itemMessage:
 			// done-only 上游的整条正文只在 item.content 里，前面一帧增量都没有。
 			out = append(out, d.completeItemParts(ev.OutputIndex, ev.Item.Content)...)
+		case itemFunctionCall:
+			// 完整参数可能只在 item.done 里：只发终态的调用一帧增量都没有。
+			out = append(out, d.backfill(callKey(ev.OutputIndex), ir.BlockToolUse,
+				ev.Item.Arguments, ir.EvToolInput)...)
 		case itemReasoning:
 			// 摘要快照只在 item.done 里：有的网关不发任何 reasoning_* 终止帧。
 			// 回补必须排在下面的签名增量之前，思考正文才不会落到签名后面。

@@ -291,6 +291,9 @@ type wireStreamEvent struct {
 	Item         *wireRespItem `json:"item,omitempty"`
 	Part         *wirePart     `json:"part,omitempty"`
 	Delta        string        `json:"delta,omitempty"`
+	// Arguments 是 function_call_arguments.done 携带的完整参数终态：
+	// 不是新一份参数，已由 delta 交付的前缀不得重复。
+	Arguments string `json:"arguments,omitempty"`
 	// Text / Refusal 是 done 帧携带的完整终态值而不是新一份内容：
 	// output_text.done 给 text，refusal.done 给 refusal，
 	// reasoning_summary_text.done / reasoning_text.done 给 text。
