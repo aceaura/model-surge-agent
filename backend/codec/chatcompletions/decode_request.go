@@ -232,8 +232,10 @@ func decodeContent(raw json.RawMessage) ([]ir.Block, error) {
 					media.URL = p.File.FileData
 				}
 			} else {
-				// file_id 指向上游已存的文件，本服务不解引用，原样当 URL 带过去。
-				media.URL = p.File.FileID
+				// file_id 指向上游已存的文件，本服务不解引用：
+				// 原样进 FileID，同族编码时带回；当 URL 透传会让别族
+				// 上游拿一个 id 去当链接抓。
+				media.FileID = p.File.FileID
 			}
 			out = append(out, ir.Block{Type: codec.MediaKindFor(codec.SniffMediaType(media)), Media: media})
 		default:

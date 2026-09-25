@@ -179,20 +179,53 @@ func (i wireRespItem) MarshalJSON() ([]byte, error) {
 type wirePart struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
-	// ImageURL 承载 data URI 或远程链接。
-	ImageURL string `json:"image_url,omitempty"`
+	// ImageURL 承载 data URI 或远程链接，双形态见 wireImageRef。
+	ImageURL *wireImageRef `json:"image_url,omitempty"`
 	// Detail 决定识别精度与计费档位，与 chat_completions 的
-	// image_url.detail 同名同义。
+	// image_url.detail 同名同义。官方把它放在 part 顶层、与 image_url
+	// 平级，不是嵌在 image_url 里——chat 形态才嵌。
 	Detail string `json:"detail,omitempty"`
 	// Refusal 是安全拒答文本，作为普通文本处理。
 	Refusal string `json:"refusal,omitempty"`
 	// InputAudio 的 format 是裸格式名（"wav"、"mp3"）而非完整 media type。
 	InputAudio *wireInputAudio `json:"input_audio,omitempty"`
 	// input_file 的三个字段是扁平的，不像音频那样嵌一层。
+	// FileID 同时是 input_image 的第二种合法载体。
 	Filename string `json:"filename,omitempty"`
 	FileData string `json:"file_data,omitempty"`
 	FileID   string `json:"file_id,omitempty"`
 }
+
+// wireImageRef 是 input_image 的图片载荷。
+//
+// 本族的规范形状是裸字符串（data URI 或远程 URL），但 chat 风格的对象
+// {"url":…,"detail":…} 也会到这里来：sub2api 的 responses 桥对这两路都做了
+// 分支，客户端确实混发。只认字符串时遇到对象会让整个 part 的 Unmarshal
+// 失败：若它是消息里唯一的部件，图片连同所在消息一起消失。
+// 出站一律写回裸字符串：本族上游只认这一种。
+type wireImageRef struct {
+	URL    string
+	Detail string
+}
+
+func (r *wireImageRef) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		r.URL = s
+		return nil
+	}
+	var o struct {
+		URL    string `json:"url"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(b, &o); err != nil {
+		return err
+	}
+	r.URL, r.Detail = o.URL, o.Detail
+	return nil
+}
+
+func (r wireImageRef) MarshalJSON() ([]byte, error) { return json.Marshal(r.URL) }
 
 type wireInputAudio struct {
 	Data   string `json:"data"`

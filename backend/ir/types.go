@@ -73,6 +73,24 @@ type Media struct {
 	// 零值表示客户端没给，此时出站不合成：合成一个会把「按上游默认」
 	// 变成「按我们猜的」，而两者的计费可能不同。
 	Detail string `json:"detail,omitempty"`
+	// FileID 是上游文件服务里的引用（Responses 的 input_image / input_file
+	// 都收这一种载体）。本服务不代取文件内容，只在同族往返时原样带回；
+	// 投给不认它的目标协议会丢，由有损诊断报告。
+	FileID string `json:"file_id,omitempty"`
+}
+
+// HasPayload 是否有可投递的媒体载荷。
+//
+// Data 与 URL 全空的媒体块编不成任何协议的合法部件：anthropic 会写出一个
+// 缺 media_type 与 data 的 base64 source，OpenAI 两系写出 url:"" 或连
+// image_url 键都没有——都是上游按必填字段校验直接 400 的形状，而报错只说
+// 媒体无效，读者看不出是哪一段输入害的。常见来源是 Responses 的 input_image
+// 只给了 file_id，或客户端用了本层没建模的键名。
+//
+// FileID 刻意不算载荷：它只对 Responses 一族可投递，判「跨协议是否还有
+// 东西可发」时必须排除。
+func (m *Media) HasPayload() bool {
+	return m != nil && (m.Data != "" || m.URL != "")
 }
 
 type ToolUse struct {

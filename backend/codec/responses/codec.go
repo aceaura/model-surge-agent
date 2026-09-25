@@ -90,8 +90,10 @@ func (outboundCodec) Caps() codec.Capabilities {
 		// 一个档位（见 LogProbsViaTopN）。
 		LogProbs:        true,
 		LogProbsViaTopN: true,
-		// input_image 有 detail 层级，与 chat_completions 同名同义。
-		ImageDetail: true,
+		// input_image 有 detail 层级，与 chat_completions 同名同义；
+		// file_id 是它的第二种合法载体，同族往返原样带回。
+		ImageDetail:  true,
+		ImageFileRef: true,
 		// ThinkingExcludesForcedTools 留零值：无账号、无官方文档，
 		// 推理与强制工具是否互斥**未核实**。零值不等于已确认允许，
 		// 拿到能发请求的账号后要补实测，别把它当成已有结论。

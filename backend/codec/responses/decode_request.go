@@ -241,11 +241,18 @@ func decodeContent(raw json.RawMessage) ([]ir.Block, error) {
 			// 拒答文本当普通文本：客户端要看到内容，且它不是错误。
 			out = append(out, ir.Block{Type: ir.BlockText, Text: p.Refusal})
 		case partInputImage:
-			if p.ImageURL == "" {
-				return nil, fmt.Errorf("input_image part needs an image_url")
+			var url, nested string
+			if p.ImageURL != nil {
+				url, nested = p.ImageURL.URL, p.ImageURL.Detail
 			}
-			media := decodeImageURL(p.ImageURL)
+			media := decodeImageURL(url)
+			media.FileID = p.FileID
+			// detail 的规范位置是 part 顶层；chat 形态把它嵌在 image_url
+			// 对象里。两处都给了以顶层为准——那是本族自己的键位。
 			media.Detail = p.Detail
+			if media.Detail == "" {
+				media.Detail = nested
+			}
 			out = append(out, ir.Block{Type: ir.BlockImage, Media: media})
 		case partInputAudio:
 			if p.InputAudio == nil {
@@ -264,8 +271,10 @@ func decodeContent(raw json.RawMessage) ([]ir.Block, error) {
 					media.URL = p.FileData
 				}
 			} else {
-				// file_id 指向上游已存的文件，本服务不解引用，原样当 URL 带过去。
-				media.URL = p.FileID
+				// file_id 指向上游已存的文件，本服务不解引用：
+				// 原样进 FileID，同族编码时带回；当 URL 透传会让别族
+				// 上游拿一个 id 去当链接抓。
+				media.FileID = p.FileID
 			}
 			out = append(out, ir.Block{Type: codec.MediaKindFor(codec.SniffMediaType(media)), Media: media})
 		case partSummaryText:

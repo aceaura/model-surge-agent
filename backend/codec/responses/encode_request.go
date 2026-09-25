@@ -134,6 +134,7 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 		callItems      []wireItem
 		reasoningItems []wireItem
 	)
+	start := len(out)
 	for _, b := range m.Content {
 		switch b.Type {
 		case ir.BlockText:
@@ -141,6 +142,16 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 		case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
 			if b.Media == nil {
 				return nil, fmt.Errorf("%s block without payload", b.Type)
+			}
+			if b.Type == ir.BlockImage {
+				// 图片有独立的编码判据（含 file_id 载体与空壳跳过），
+				// 不走按媒体类型分流的通用路径。
+				part, ok := encodeImagePart(b.Media)
+				if !ok {
+					continue
+				}
+				parts = append(parts, part)
+				continue
 			}
 			part, ok := encodeMediaPart(b)
 			if !ok {
@@ -208,7 +219,22 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 		}
 		out = append(out, wireItem{Type: itemMessage, Role: string(m.Role), Content: content})
 	}
-	return append(out, callItems...), nil
+	out = append(out, callItems...)
+	if len(out) == start && len(m.Content) > 0 {
+		// 这条消息的部件被编码器全丢了（空壳图片等），于是整条从 input 里
+		// 消失。这比留一个占位更糟：若它是唯一的一条，input 会连键都没有，
+		// 而上游把 input 当必填字段，400 拒整轮；即便还有别的消息，轮次结构
+		// 也被悄悄改写，后续 tool_call 的配对随之错位。与 anthropic 侧同口径
+		// 落约定占位。丢了什么由有损诊断报出。
+		content, err := json.Marshal([]wirePart{{
+			Type: textPartType(m.Role), Text: codec.ConversationPlaceholder,
+		}})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, wireItem{Type: itemMessage, Role: string(m.Role), Content: content})
+	}
+	return out, nil
 }
 
 // textPartType 按角色选 part 类型：助手消息用 output_text，其余用 input_text。
@@ -233,6 +259,12 @@ func joinText(blocks []ir.Block) string {
 // encodeMediaPart 把媒体块编成本协议的原生 part。
 // 返回 ok=false 表示本协议表达不了，交由调用方降级为文本。
 func encodeMediaPart(b ir.Block) (wirePart, bool) {
+	if b.Media.FileID != "" && !b.Media.HasPayload() {
+		// input_file 原生收 file_id：同族往返原样带回，不代取内容。
+		// 这一支不看媒体类型——引用形态本来就不带字节，类型无从嗅起。
+		return wirePart{Type: partInputFile, Filename: b.Media.Name,
+			FileID: b.Media.FileID}, true
+	}
 	media := codec.SniffMediaType(b.Media)
 	// 白名单判定与有损诊断共用 Caps，避免两处漂移。
 	if !(outboundCodec{}.Caps().AcceptsMedia(media)) {
@@ -240,8 +272,8 @@ func encodeMediaPart(b ir.Block) (wirePart, bool) {
 	}
 	switch {
 	case strings.HasPrefix(media, "image/"):
-		return wirePart{Type: partInputImage, ImageURL: renderImageURL(b.Media),
-			Detail: b.Media.Detail}, true
+		// 图片的三种载体与空壳跳过都在 encodeImagePart 一处判定。
+		return encodeImagePart(b.Media)
 
 	case strings.HasPrefix(media, "audio/"):
 		// input_audio 只接受内联 base64 与它认得的格式名。
@@ -260,6 +292,31 @@ func encodeMediaPart(b ir.Block) (wirePart, bool) {
 	default:
 		return wirePart{}, false
 	}
+}
+
+// encodeImagePart 图片块 -> input_image 部分。
+//
+// ok 为假表示三种载体（base64 / URL / file_id）一个都没有，本族的图片槽位
+// 无从表达：照编会写出一个连 image_url 键都没有的 {"type":"input_image"}，
+// 上游按必填字段校验直接 400，而报错只说图片无效，读者看不出是哪一段输入。
+// 常见来源是客户端用了本层没建模的键名。损耗由有损诊断报告。
+func encodeImagePart(img *ir.Media) (wirePart, bool) {
+	if img == nil {
+		return wirePart{}, false
+	}
+	switch {
+	case img.URL != "":
+		return wirePart{Type: partInputImage, ImageURL: &wireImageRef{URL: img.URL},
+			Detail: img.Detail, FileID: img.FileID}, true
+	case img.Data != "":
+		return wirePart{Type: partInputImage,
+			ImageURL: &wireImageRef{URL: renderImageURL(img)},
+			Detail:   img.Detail, FileID: img.FileID}, true
+	case img.FileID != "":
+		// file_id 是本族图片槽位的第二种合法载体，同族往返原样带回。
+		return wirePart{Type: partInputImage, Detail: img.Detail, FileID: img.FileID}, true
+	}
+	return wirePart{}, false
 }
 
 // audioFormat 把 media type 折成本协议要的裸格式名，不认得返回空串。

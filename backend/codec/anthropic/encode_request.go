@@ -58,6 +58,14 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("anthropic: messages[%d]: %w", i, err)
 		}
+		if string(raw) == "[]" && len(m.Content) > 0 {
+			// 部件被编码器全丢（空壳图片等），空 content 数组会被上游按校验
+			// 拒整轮，比丢内容更糟。落约定占位，与 chat / responses 同口径。
+			raw, err = encodeBlocks([]ir.Block{{Type: ir.BlockText, Text: codec.ConversationPlaceholder}})
+			if err != nil {
+				return nil, fmt.Errorf("anthropic: messages[%d] placeholder: %w", i, err)
+			}
+		}
 		w.Messages = append(w.Messages, wireMessage{Role: string(m.Role), Content: raw})
 	}
 
@@ -142,6 +150,15 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 	case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
 		if b.Media == nil {
 			return out, false, fmt.Errorf("%s block without payload", b.Type)
+		}
+		if b.Type == ir.BlockImage && !b.Media.HasPayload() {
+			// 空壳图片整块跳过：官方 image source 只有 base64（media_type
+			// 与 data 都是 Required）与 url 两种，两者皆空编出来是
+			// {"type":"image","source":{"type":"base64"}}——连必填键都没有的
+			// 形状，上游 400 拒整轮。常见来源是 Responses 客户端只给了
+			// file_id，而本族没有「引用上游文件服务里的图片」这一维。
+			// 损耗由有损诊断报出。
+			return out, false, nil
 		}
 		media := codec.SniffMediaType(b.Media)
 		container, ok := anthropicMediaContainer(media)

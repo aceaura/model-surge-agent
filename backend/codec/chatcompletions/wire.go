@@ -83,13 +83,31 @@ type wireImageURL struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// UnmarshalJSON 同时接受对象形态 {"url":…,"detail":…} 与裸字符串形态
+// "https://…"。
+//
+// 字符串形态不是臆造的兼容分支：new-api 把 image_url 声明成 any 再按
+// string / map 两路取值，sub2api 的 responses 桥同样 switch 两种类型——
+// 历史客户端与部分厂商桥接确实这么发。只认对象时遇到字符串会让整个 part
+// 的 json.Unmarshal 失败：若它是消息里唯一的部件，用户的图片连同所在消息
+// 一起消失。
+func (u *wireImageURL) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		u.URL = s
+		return nil
+	}
+	type plain wireImageURL
+	return json.Unmarshal(b, (*plain)(u))
+}
+
 type wireInputAudio struct {
 	Data   string `json:"data"`
 	Format string `json:"format"`
 }
 
-// wireFile 的 FileData 是 data URI。FileID 指向已上传的文件，
-// 本服务不做文件上传，只在解码时把它当 URL 承载。
+// wireFile 的 FileData 是 data URI。FileID 指向上游文件服务里已存的文件，
+// 本服务不解引用，解码时进 Media.FileID、同族编码时原样带回。
 type wireFile struct {
 	Filename string `json:"filename,omitempty"`
 	FileData string `json:"file_data,omitempty"`

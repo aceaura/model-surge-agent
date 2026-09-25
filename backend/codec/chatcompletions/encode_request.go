@@ -184,6 +184,15 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 		if err != nil {
 			return nil, err
 		}
+		if string(content) == "[]" {
+			// 部件被编码器全丢（空壳图片），整条消息落空：上游看来等于
+			// 「这一方什么都没说」，客户端也无从分辨是占位还是正文。
+			// 落约定占位，与 anthropic / responses 同口径。
+			content, err = json.Marshal(codec.ConversationPlaceholder)
+			if err != nil {
+				return nil, err
+			}
+		}
 		msg.Content = content
 	}
 	return append(out, msg), nil
@@ -216,6 +225,14 @@ func encodeContent(blocks []ir.Block) (json.RawMessage, error) {
 			if b.Media == nil {
 				return nil, fmt.Errorf("%s block without payload", b.Type)
 			}
+			if b.Type == ir.BlockImage && !b.Media.HasPayload() {
+				// 空壳图片整块跳过：照编会写出 {"url":""} 或 "data:;base64,"
+				// 的非法形状，上游按 URL 形态校验直接 400，而报错只指向
+				// 「图片无效」，读者看不出是哪一段输入害的。只带 file_id 的
+				// Responses 图片也落在这里——本族的图片槽位不认 file_id。
+				// 损耗由有损诊断报出。
+				continue
+			}
 			part, ok := encodeMediaPart(b)
 			if !ok {
 				part = wirePart{Type: partText, Text: codec.DowngradeMedia(b).Text}
@@ -231,6 +248,14 @@ func encodeContent(blocks []ir.Block) (json.RawMessage, error) {
 // encodeMediaPart 把媒体块编成本协议的原生 part。
 // 返回 ok=false 表示本协议表达不了，交由调用方降级为文本。
 func encodeMediaPart(b ir.Block) (wirePart, bool) {
+	if b.Media.FileID != "" && !b.Media.HasPayload() {
+		// file 槽位原生收 file_id：同族往返原样带回，不代取内容。
+		// 这一支不看媒体类型——引用形态本来就不带字节，类型无从嗅起。
+		return wirePart{Type: partFile, File: &wireFile{
+			Filename: b.Media.Name,
+			FileID:   b.Media.FileID,
+		}}, true
+	}
 	media := codec.SniffMediaType(b.Media)
 	// 白名单判定与有损诊断共用 Caps，避免两处漂移。
 	if !(outboundCodec{}.Caps().AcceptsMedia(media)) {

@@ -119,7 +119,13 @@ type Capabilities struct {
 	// （chat_completions 与 responses 的 image_url/input_image）。
 	// 为假时这一维丢弃并出说明：它决定计费与识别精度，客户端给过的
 	// 东西悄悄没了会让账单对不上。
-	ImageDetail       bool
+	ImageDetail bool
+	// ImageFileRef 为真表示图片槽位可只凭上游文件服务的 id 投递
+	// （Responses 的 input_image.file_id）。图片字节从未内联进请求体，
+	// 本服务也不代取，所以这一维装不下就等于这张图彻底没了——与远程
+	// URL 那种「换成 base64 即可」不同，读者无从补救，故单独立一位。
+	// 当前只有 Responses 一族有这一维。
+	ImageFileRef      bool
 	LogitBias         bool
 	ServiceTier       bool
 	ParallelToolCalls bool
