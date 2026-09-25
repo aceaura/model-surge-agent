@@ -175,6 +175,11 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 			w.Container, _ = json.Marshal(p)
 		}
 	}
+	// 值集装不下的档位（flex/scale/priority/fast/ultrafast 等）丢弃，
+	// 由 DescribeLossy 报出；default 翻译成 standard_only（语义相同）。
+	if tier, ok := codec.MapServiceTier(req.ServiceTier, Name); ok {
+		w.ServiceTier = tier
+	}
 	return json.Marshal(w)
 }
 

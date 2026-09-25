@@ -82,6 +82,7 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	out.TopLogProbs = w.TopLogProbs
 	out.LogitBias = w.LogitBias
 	out.ServiceTier = w.ServiceTier
+	out.PromptCacheKey = w.PromptCacheKey
 	out.ParallelToolCalls = w.ParallelToolCalls
 	out.ResponseFormat = decodeResponseFormat(w.ResponseFormat)
 

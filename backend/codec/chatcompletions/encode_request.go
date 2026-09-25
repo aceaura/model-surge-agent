@@ -77,7 +77,12 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	w.LogProbs = req.LogProbs
 	w.TopLogProbs = req.TopLogProbs
 	w.LogitBias = req.LogitBias
-	w.ServiceTier = req.ServiceTier
+	// anthropic 方言 standard_only 翻译成 default；ultrafast 是 responses
+	// 专属，本族值集 provably 装不下——丢弃由 DescribeLossy 报出。
+	if tier, ok := codec.MapServiceTier(req.ServiceTier, Name); ok {
+		w.ServiceTier = tier
+	}
+	w.PromptCacheKey = req.PromptCacheKey
 	w.ParallelToolCalls = req.ParallelToolCalls
 	w.ResponseFormat = encodeResponseFormat(req.ResponseFormat)
 

@@ -135,9 +135,18 @@ type Capabilities struct {
 	// 本服务也不代取，所以这一维装不下就等于这张图彻底没了——与远程
 	// URL 那种「换成 base64 即可」不同，读者无从补救，故单独立一位。
 	// 当前只有 Responses 一族有这一维。
-	ImageFileRef      bool
-	LogitBias         bool
-	ServiceTier       bool
+	ImageFileRef bool
+	LogitBias    bool
+	// ServiceTier 有服务质量档位槽位。三家值集不同：anthropic 只有
+	// auto/standard_only，chat 是 auto/default/flex/scale/priority/fast，
+	// responses 的值集是 chat 的超集（另有 ultrafast）。有槽位不代表
+	// 装得下所有值：跨族可映射性由 MapServiceTier 判定，装不下的档位
+	// 出站丢弃并由诊断报出。gemini 没有这一维。
+	ServiceTier bool
+	// PromptCacheKey 有提示缓存路由键槽位（OpenAI 两系的
+	// prompt_cache_key）。anthropic 走显式 cache_control 断点，没有
+	// 路由键概念；gemini 没有。值是客户端自选串，诊断与日志不回显。
+	PromptCacheKey    bool
 	ParallelToolCalls bool
 	// ResponseFormat 为真表示支持「输出必须是合法 JSON」这一档（纯 JSON 模式）；
 	// ResponseSchema 为真表示支持按 JSON Schema 约束结构。
@@ -255,6 +264,51 @@ type Capabilities struct {
 	// 同样全为 0：有实测证据的只有 Kiro（~615KB 起回一个 reason 为 null 的
 	// 误导性 400），而 Kiro 的数据面归 Upstream 服务，不在本服务的出站协议里。
 	MaxPayloadBytes int
+}
+
+// MapServiceTier 把 service_tier 原值映射到目标协议值集。
+// 返回 ok=false 表示目标协议的值集里 provably 没有等价物（出站丢 + 诊断）。
+// 映射规则：
+//   - auto 三家都有，恒通；
+//   - standard_only（anthropic 方言）与 default（OpenAI 方言）互译，
+//     语义同为「只用标准容量，不占优先级」；
+//   - ultrafast 是 responses 专属，chat 与 anthropic 的值集 provably 没有它；
+//   - 其余 OpenAI 方言值（flex/scale/priority/fast）去 anthropic 无等价；
+//   - 目标族内不认识的值原样透传——可能是核对 SDK 之后官方新增的档位，
+//     丢了比让上游照实 400 更糟（只报不拒）。
+//
+// 没有槽位的协议（gemini）不走这里：Caps.ServiceTier 为假时字段在
+// 编码前就被诊断报丢，映射无意义。
+func MapServiceTier(tier, protoName string) (string, bool) {
+	if tier == "" || tier == "auto" {
+		return tier, true
+	}
+	switch protoName {
+	case ProtocolAnthropic:
+		switch tier {
+		case "standard_only":
+			return tier, true
+		case "default":
+			return "standard_only", true
+		}
+		return "", false
+	case ProtocolChatCompletions:
+		switch tier {
+		case "standard_only":
+			return "default", true
+		case "ultrafast":
+			return "", false
+		}
+		return tier, true
+	case ProtocolResponses:
+		// 值集是 chat 的超集：只有 anthropic 方言需要翻译。
+		if tier == "standard_only" {
+			return "default", true
+		}
+		return tier, true
+	default:
+		return tier, true
+	}
 }
 
 // AcceptsMedia 判断本协议能否原生承载该 media type。

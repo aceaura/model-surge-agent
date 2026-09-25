@@ -131,6 +131,8 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 		return nil, wrapField("container", err)
 	}
 	out.Container = ct
+	// 原值进 IR，跨族映射是出站编码的事（codec.MapServiceTier）。
+	out.ServiceTier = w.ServiceTier
 	return out, nil
 }
 

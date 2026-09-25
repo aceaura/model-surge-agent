@@ -651,8 +651,20 @@ func describeParamsLossy(req *ir.Request, name string, caps Capabilities, note, 
 		// 没有正确答案。
 		note("logit_bias", "no logit bias parameter")
 	}
-	if req.ServiceTier != "" && !caps.ServiceTier {
-		note("service_tier", "no service tier parameter")
+	if req.ServiceTier != "" {
+		if !caps.ServiceTier {
+			note("service_tier", "no service tier parameter, scheduling falls back to the upstream default")
+		} else if _, ok := MapServiceTier(req.ServiceTier, name); !ok {
+			// 有槽位不代表装得下：三家值集不同，provably 无等价的档位
+			//（如 anthropic 收不了 priority、chat 收不了 ultrafast）照实
+			// 报出。档位值是官方枚举不是敏感串，回显帮读者定位。
+			note(fmt.Sprintf("service_tier %q", req.ServiceTier),
+				"the target protocol's tier set has no equivalent, scheduling falls back to the upstream default")
+		}
+	}
+	if req.PromptCacheKey != "" && !caps.PromptCacheKey {
+		// 值是客户端自选串，不回显（与 user id 同款纪律）。
+		note("prompt_cache_key", "no cache routing field, repeated prefixes may recompute instead of hitting the cache")
 	}
 	if req.ParallelToolCalls != nil && !caps.ParallelToolCalls {
 		note("parallel_tool_calls", "no parallel tool call switch")

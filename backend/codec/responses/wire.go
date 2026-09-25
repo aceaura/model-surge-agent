@@ -39,11 +39,13 @@ type wireRequest struct {
 	// MaxToolCalls 单轮响应允许的工具调用总上限。
 	MaxToolCalls *int `json:"max_tool_calls,omitempty"`
 	// StreamOptions 流式选项；本族目前只有 include_obfuscation。
-	StreamOptions     *wireStreamOptions `json:"stream_options,omitempty"`
-	Metadata          map[string]string  `json:"metadata,omitempty"`
-	ServiceTier       string             `json:"service_tier,omitempty"`
-	ParallelToolCalls *bool              `json:"parallel_tool_calls,omitempty"`
-	TopLogProbs       *int               `json:"top_logprobs,omitempty"`
+	StreamOptions *wireStreamOptions `json:"stream_options,omitempty"`
+	Metadata      map[string]string  `json:"metadata,omitempty"`
+	ServiceTier   string             `json:"service_tier,omitempty"`
+	// PromptCacheKey 提示缓存路由键。值是客户端自选串，日志与诊断不回显。
+	PromptCacheKey    string `json:"prompt_cache_key,omitempty"`
+	ParallelToolCalls *bool  `json:"parallel_tool_calls,omitempty"`
+	TopLogProbs       *int   `json:"top_logprobs,omitempty"`
 
 	// 以下四个字段把对话状态托管在上游那一侧，本服务表达不了：请求会被
 	// 分发到任意一个目标账号，那里没有这条 id 指向的历史。收下再忽略等于

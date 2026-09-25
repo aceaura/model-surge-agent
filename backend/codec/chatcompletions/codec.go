@@ -111,9 +111,11 @@ func (outboundCodec) Caps() codec.Capabilities {
 		// 官方 metadata：至多 16 对客户端键值，随响应回显。
 		ClientMetadata: true,
 		// image_url.detail 决定识别精度与计费档位。
-		ImageDetail:       true,
-		LogitBias:         true,
-		ServiceTier:       true,
+		ImageDetail: true,
+		LogitBias:   true,
+		ServiceTier: true,
+		// prompt_cache_key 有原生槽位。
+		PromptCacheKey:    true,
 		ParallelToolCalls: true,
 		ResponseFormat:    true,
 		ResponseSchema:    true,

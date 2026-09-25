@@ -102,7 +102,9 @@ func (outboundCodec) Caps() codec.Capabilities {
 		// 本协议独有三项：verbosity（text.verbosity）、include、truncation，
 		// 另有客户端自定义 metadata。结构化输出在 text.format 下而非顶层
 		// response_format。penalty / seed / n / logit_bias 本协议没有。
-		ServiceTier:       true,
+		ServiceTier: true,
+		// prompt_cache_key 有原生槽位；值集是 chat 的超集（另有 ultrafast）。
+		PromptCacheKey:    true,
 		ParallelToolCalls: true,
 		ResponseFormat:    true,
 		ResponseSchema:    true,

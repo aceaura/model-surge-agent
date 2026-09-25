@@ -176,7 +176,10 @@ func TestUnsupportedParamsAreReportedLossy(t *testing.T) {
 		{"n", func(r *ir.Request) { v := 3; r.Candidates = &v }},
 		{"logprobs", func(r *ir.Request) { v := true; r.LogProbs = &v }},
 		{"logit_bias", func(r *ir.Request) { r.LogitBias = map[string]float64{"1": 1} }},
-		{"service_tier", func(r *ir.Request) { r.ServiceTier = "priority" }},
+		// auto 三家值集都有：本矩阵只测「槽位有无」，值集装不下的档位
+		//（priority 去 anthropic 等）由 routingloss_test 专测。
+		{"service_tier", func(r *ir.Request) { r.ServiceTier = "auto" }},
+		{"prompt_cache_key", func(r *ir.Request) { r.PromptCacheKey = "k" }},
 		{"parallel_tool_calls", func(r *ir.Request) { v := true; r.ParallelToolCalls = &v }},
 		{"response_format", func(r *ir.Request) { r.ResponseFormat = &ir.ResponseFormat{Kind: ir.ResponseFormatJSON} }},
 		{"verbosity", func(r *ir.Request) { r.Verbosity = "low" }},
@@ -238,6 +241,8 @@ func supportsField(t *testing.T, proto, field string) bool {
 		return caps.LogitBias
 	case "service_tier":
 		return caps.ServiceTier
+	case "prompt_cache_key":
+		return caps.PromptCacheKey
 	case "parallel_tool_calls":
 		return caps.ParallelToolCalls
 	case "response_format":

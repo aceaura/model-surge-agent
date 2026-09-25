@@ -551,9 +551,14 @@ type Request struct {
 	// LogitBias 是 token id → 偏置。跨模型不可翻译（词表不同），
 	// 只在目标协议支持时原样透传，否则报丢弃。
 	LogitBias map[string]float64 `json:"logit_bias,omitempty"`
-	// ServiceTier 是计费与优先级档位。取值由各家定义，本服务不校验——
-	// 上游是唯一知道哪些档位有效的一方。
+	// ServiceTier 是计费与优先级档位。保留原值不规整（anthropic
+	// auto/standard_only；OpenAI 两系 auto/default/flex/scale/priority/
+	// fast，responses 另有 ultrafast）：跨族映射在出站编码按目标协议
+	// 值集进行（codec.MapServiceTier），装不下的档位丢弃并由诊断报出。
 	ServiceTier string `json:"service_tier,omitempty"`
+	// PromptCacheKey 提示缓存路由键（OpenAI 两系的 prompt_cache_key）。
+	// 值可能是客户端自选串，诊断与日志一律不回显值本身。
+	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
 
 	// 以下两维只有 Anthropic 一族有，外族没有任何对应物。收进 IR 只为
 	// 同协议回写 + 跨协议诊断，不作映射尝试。

@@ -114,10 +114,16 @@ func (outboundCodec) Caps() codec.Capabilities {
 		// 而截断至少给出部分回答、且 stop_reason 说明了原因。
 		// 兜底一旦发生会报一条有损诊断，客户端能看出这个上限不是它给的。
 		DefaultMaxTokens: 4096,
+		// service_tier（auto/standard_only）有槽位：OpenAI 方言值由出站
+		// 编码按 codec.MapServiceTier 翻译（default→standard_only）或丢弃
+		//（flex/scale/priority/fast/ultrafast 在本族值集里 provably 无等价）。
+		// 没有 prompt_cache_key：缓存走显式 cache_control 断点，无路由键概念。
+		ServiceTier: true,
 		// 调参能力位大多留假：本协议的请求体只有 model/messages/system/
 		// max_tokens/metadata/stop_sequences/stream/temperature/top_k/top_p/
-		// tools/tool_choice/thinking/output_config，没有承载 penalty、seed、n、
-		// logprobs、logit_bias、service_tier、parallel_tool_calls 的字段。
+		// tools/tool_choice/thinking/output_config/service_tier，没有承载
+		// penalty、seed、n、logprobs、logit_bias、prompt_cache_key、
+		// parallel_tool_calls 的字段。
 		// 结构化输出走 output_config.format，但只接 schema 约束形态（见上）。
 		// 这是照官方请求体核实的结果，不是没填。
 		// SchemaDialect 留零值：本协议接受完整 JSON Schema。

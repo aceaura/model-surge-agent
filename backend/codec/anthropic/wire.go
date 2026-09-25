@@ -30,6 +30,9 @@ type wireRequest struct {
 	// Container 代码执行容器复用标识与技能声明。官方两形态：string 简写
 	// （仅 id）或 {id, skills} 对象——RawMessage 延迟判断。
 	Container json.RawMessage `json:"container,omitempty"`
+	// ServiceTier 服务质量档位：auto / standard_only。OpenAI 方言值
+	//（default/flex/...）由出站编码按 codec.MapServiceTier 翻译或丢弃。
+	ServiceTier string `json:"service_tier,omitempty"`
 }
 
 // containerParams 请求侧 container 的对象形态（官方 ContainerParams）。

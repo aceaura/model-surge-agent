@@ -82,6 +82,7 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	}
 	out.ClientMetadata = w.Metadata
 	out.ServiceTier = w.ServiceTier
+	out.PromptCacheKey = w.PromptCacheKey
 	out.ParallelToolCalls = w.ParallelToolCalls
 	out.TopLogProbs = w.TopLogProbs
 	if w.Text != nil {

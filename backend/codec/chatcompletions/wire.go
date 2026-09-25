@@ -27,14 +27,16 @@ type wireRequest struct {
 	// 调参字段。全部用指针以区分「客户端没给」与「给了零值」：
 	// penalty 的 0 是不惩罚、seed 的 0 是一个具体种子、logprobs 的 false
 	// 是明确不要，三者都与没提不同。
-	PresencePenalty   *float64            `json:"presence_penalty,omitempty"`
-	FrequencyPenalty  *float64            `json:"frequency_penalty,omitempty"`
-	Seed              *int                `json:"seed,omitempty"`
-	N                 *int                `json:"n,omitempty"`
-	LogProbs          *bool               `json:"logprobs,omitempty"`
-	TopLogProbs       *int                `json:"top_logprobs,omitempty"`
-	LogitBias         map[string]float64  `json:"logit_bias,omitempty"`
-	ServiceTier       string              `json:"service_tier,omitempty"`
+	PresencePenalty  *float64           `json:"presence_penalty,omitempty"`
+	FrequencyPenalty *float64           `json:"frequency_penalty,omitempty"`
+	Seed             *int               `json:"seed,omitempty"`
+	N                *int               `json:"n,omitempty"`
+	LogProbs         *bool              `json:"logprobs,omitempty"`
+	TopLogProbs      *int               `json:"top_logprobs,omitempty"`
+	LogitBias        map[string]float64 `json:"logit_bias,omitempty"`
+	ServiceTier      string             `json:"service_tier,omitempty"`
+	// PromptCacheKey 提示缓存路由键。值是客户端自选串，日志与诊断不回显。
+	PromptCacheKey    string              `json:"prompt_cache_key,omitempty"`
 	ParallelToolCalls *bool               `json:"parallel_tool_calls,omitempty"`
 	ResponseFormat    *wireResponseFormat `json:"response_format,omitempty"`
 

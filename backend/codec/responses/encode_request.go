@@ -75,7 +75,11 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 		w.StreamOptions = &wireStreamOptions{IncludeObfuscation: req.IncludeObfuscation}
 	}
 	w.Metadata = req.ClientMetadata
-	w.ServiceTier = req.ServiceTier
+	// 本族值集是 chat 的超集：只有 anthropic 方言 standard_only 需要翻译。
+	if tier, ok := codec.MapServiceTier(req.ServiceTier, Name); ok {
+		w.ServiceTier = tier
+	}
+	w.PromptCacheKey = req.PromptCacheKey
 	w.ParallelToolCalls = req.ParallelToolCalls
 	w.TopLogProbs = req.TopLogProbs
 	// 本协议没有独立的 logprobs 开关，top_logprobs 兼任开关与档位。
