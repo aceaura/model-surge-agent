@@ -14,7 +14,7 @@ func ResponseEvents(resp *Response) []Event {
 		return nil
 	}
 	out := []Event{{Type: EvMessageStart, MessageID: resp.ID, Model: resp.Model,
-		ServiceTier: resp.ServiceTier}}
+		ServiceTier: resp.ServiceTier, Container: resp.Container}}
 	for i, b := range resp.Content {
 		out = append(out, blockEvents(i, b)...)
 	}

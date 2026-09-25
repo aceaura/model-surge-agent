@@ -27,6 +27,30 @@ type wireRequest struct {
 	CacheControl *wireCacheControl `json:"cache_control,omitempty"`
 	// InferenceGeo 推理地理偏好（如 "us"）；缺省按 workspace 默认。
 	InferenceGeo string `json:"inference_geo,omitempty"`
+	// Container 代码执行容器复用标识与技能声明。官方两形态：string 简写
+	// （仅 id）或 {id, skills} 对象——RawMessage 延迟判断。
+	Container json.RawMessage `json:"container,omitempty"`
+}
+
+// containerParams 请求侧 container 的对象形态（官方 ContainerParams）。
+type containerParams struct {
+	ID     string           `json:"id,omitempty"`
+	Skills []containerSkill `json:"skills,omitempty"`
+}
+
+// container 响应侧容器回显（官方 Container：id/expires_at/skills 恒在，
+// skills 可为 null）。请求侧技能 version 可缺省（=latest），响应侧必有值，
+// 同形复用。
+type container struct {
+	ID        string           `json:"id"`
+	ExpiresAt string           `json:"expires_at"`
+	Skills    []containerSkill `json:"skills"`
+}
+
+type containerSkill struct {
+	SkillID string `json:"skill_id"`
+	Type    string `json:"type"` // "anthropic" / "custom"
+	Version string `json:"version,omitempty"`
 }
 
 // wireOutputConfig 输出控制。format 只定义了 json_schema 一种 type：
@@ -170,6 +194,8 @@ type wireResponse struct {
 	StopReason   string      `json:"stop_reason,omitempty"`
 	StopSequence string      `json:"stop_sequence,omitempty"`
 	Usage        wireUsage   `json:"usage"`
+	// Container 代码执行容器回显（按需出场，缺键与 null 同义）。
+	Container *container `json:"container,omitempty"`
 }
 
 // wireUsage 没有推理 token 维度：本协议把推理消耗直接算进 output_tokens。
@@ -243,6 +269,8 @@ type streamMsg struct {
 	Model string    `json:"model"`
 	Role  string    `json:"role"`
 	Usage wireUsage `json:"usage"`
+	// Container 代码执行容器回显（message_start 首帧携带，缺键与 null 同义）。
+	Container *container `json:"container,omitempty"`
 }
 
 // streamDelta 既承载块内增量（text_delta 等），也承载 message_delta 的 stop_reason。
@@ -258,6 +286,8 @@ type streamDelta struct {
 	Citation     json.RawMessage `json:"citation,omitempty"`
 	StopReason   string          `json:"stop_reason,omitempty"`
 	StopSequence string          `json:"stop_sequence,omitempty"`
+	// Container message_delta 上晚到的容器回显（官方 Delta.container）。
+	Container *container `json:"container,omitempty"`
 }
 
 // delta 类型名。

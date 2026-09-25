@@ -140,6 +140,19 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 		w.CacheControl = &wireCacheControl{Type: req.TopCacheCtl, TTL: req.TopCacheTTL}
 	}
 	w.InferenceGeo = req.InferenceGeo
+	// container 回写：仅 id 无技能时用 string 简写形态（官方简写与对象
+	// {id} 无 skills 语义等价，取最简）；带技能时用对象形态。
+	if req.Container != nil {
+		if len(req.Container.Skills) == 0 {
+			w.Container, _ = json.Marshal(req.Container.ID)
+		} else {
+			p := containerParams{ID: req.Container.ID}
+			for _, s := range req.Container.Skills {
+				p.Skills = append(p.Skills, containerSkill{SkillID: s.SkillID, Type: s.Type, Version: s.Version})
+			}
+			w.Container, _ = json.Marshal(p)
+		}
+	}
 	return json.Marshal(w)
 }
 

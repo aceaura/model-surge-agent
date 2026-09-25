@@ -54,6 +54,9 @@ type streamEncoder struct {
 	// droppedCites 带不出本族的引用条数（Anthropic 的文档类引用没有 URL，
 	// 而本族的标注槽位以 URL 为来源身份），同上。
 	droppedCites int
+	// droppedContainer 容器回显（anthropic 专属维度）被丢标记：本协议响应
+	// 没有 container 槽位。首帧或收尾帧任一带到即置位，Notes() 报一次。
+	droppedContainer bool
 	// badToolArgs 是关块时判定畸形的函数调用入参数（增量已发出、改写
 	// 不了，只能计数），Notes() 报出。
 	badToolArgs int
@@ -79,6 +82,9 @@ func (e *streamEncoder) Notes() []string {
 	}
 	if e.badToolArgs > 0 {
 		notes = append(notes, ir.RawArgsPassNote(e.badToolArgs))
+	}
+	if e.droppedContainer {
+		notes = append(notes, codec.ContainerDropNote())
 	}
 	return codec.DedupeNotes(notes)
 }
@@ -115,6 +121,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		// 档位要在 snapshot 之前收下：created 帧里的 response 对象就该带它。
 		if ev.ServiceTier != "" {
 			e.serviceTier = ev.ServiceTier
+		}
+		if ev.Container != nil {
+			e.droppedContainer = true
 		}
 		// 上游给过创建时间就原值回写（覆盖构造时的本地钟）；没给才用本地钟。
 		if ev.Created != 0 {
@@ -279,6 +288,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		// 上游可能只在收尾帧给档位。
 		if ev.ServiceTier != "" {
 			e.serviceTier = ev.ServiceTier
+		}
+		if ev.Container != nil {
+			e.droppedContainer = true
 		}
 		if ev.Usage != nil {
 			ir.MergeUsage(&e.usage, *ev.Usage)

@@ -66,6 +66,7 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		if ev.Message != nil {
 			out.MessageID = ev.Message.ID
 			out.Model = ev.Message.Model
+			out.Container = decodeContainer(ev.Message.Container)
 			u := convertUsage(ev.Message.Usage)
 			out.Usage = &u
 		}
@@ -152,6 +153,8 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		if ev.Delta != nil {
 			out.StopReason = convertStopReason(ev.Delta.StopReason)
 			out.StopSequence = adoptStopSequence(out.StopReason, ev.Delta.StopSequence)
+			// 容器回显也可能落在 message_delta 上（官方 Delta.container）。
+			out.Container = decodeContainer(ev.Delta.Container)
 		}
 		if ev.Usage != nil {
 			u := convertUsage(*ev.Usage)
@@ -194,6 +197,7 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 		Model:      w.Model,
 		StopReason: convertStopReason(w.StopReason),
 		Usage:      convertUsage(w.Usage),
+		Container:  decodeContainer(w.Container),
 	}
 	out.StopSequence = adoptStopSequence(out.StopReason, w.StopSequence)
 	out.Content = make([]ir.Block, 0, len(w.Content))

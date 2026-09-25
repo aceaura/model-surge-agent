@@ -148,6 +148,12 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	if req.InferenceGeo != "" && name != ProtocolAnthropic {
 		note("inference_geo", "no geographic-region preference, inference runs wherever the upstream's default region is")
 	}
+	// 代码执行容器复用标识与技能声明：外族没有容器概念，丢了上游只能开
+	// 新容器、技能不加载，客户端期待的状态全丢。anthropic 同族原样往返，
+	// 报了就是谎报。
+	if req.Container != nil && name != ProtocolAnthropic {
+		note("container", "no code-execution container reuse or skill declaration, the upstream starts with a fresh container and no skills loaded")
+	}
 
 	// 历史里的托管工具块（server_tool_use / web_search_tool_result）：三个
 	// 外族出站编码器都整块跳过。两种块型成对出现、一起丢反而不撕毁
@@ -716,6 +722,14 @@ func FinishDetailNote(detail string) string {
 // DroppedServiceTierNote 是上游回了执行档位而入站协议无处安放的说明。
 func DroppedServiceTierNote(name string) string {
 	return "dropped service_tier from the response (" + name + " has no such field)"
+}
+
+// ContainerDropNote 是代码执行容器回显丢失的说明。容器回显是 anthropic
+// 专属维度，外族响应没有 container 槽位：客户端拿不到容器 id 与过期时间，
+// 下一轮无法复用同一容器续话，文件与已加载技能全部清零。非流式与流式
+// 两条路径共用。
+func ContainerDropNote() string {
+	return "dropped container info: this protocol's response has no container field, the client cannot see or reuse the code-execution container that served the request"
 }
 
 // MediaOutputDropNote 是模型产出附件丢失的说明：图片与非图片附件分开计数，

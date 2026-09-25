@@ -49,8 +49,11 @@ type Event struct {
 	// 两处都允许而不是钉死一处：chat_completions 把它放在每个 chunk 的
 	// 顶层，responses 放在 response 对象里、随 created 与 completed 两次
 	// 出现。哪一帧先到取决于上游，只认一处就会在另一种形态下丢。
-	ServiceTier string     `json:"service_tier,omitempty"`
-	StopReason  StopReason `json:"stop_reason,omitempty"`
+	ServiceTier string `json:"service_tier,omitempty"`
+	// Container 代码执行容器回显（EvMessageStart 首帧携带；anthropic 的
+	// message_delta 也可能晚到，EvMessageDelta 上也收，后值覆盖）。
+	Container  *Container `json:"container,omitempty"`
+	StopReason StopReason `json:"stop_reason,omitempty"`
 	// StopSequence 与 Response.StopSequence 同义，随收尾帧抵达。
 	StopSequence string `json:"stop_sequence,omitempty"`
 	Usage        *Usage `json:"usage,omitempty"`

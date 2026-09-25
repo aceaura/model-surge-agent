@@ -60,6 +60,10 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	}
 	// 畸形工具参数：arguments 是字符串槽位，原文透传，报出不可安全执行。
 	notes = append(notes, codec.DescribeResponseToolArgsLoss(resp, false)...)
+	// 代码执行容器回显是 anthropic 专属：本协议响应没有 container 槽位。
+	if resp.Container != nil {
+		notes = append(notes, codec.ContainerDropNote())
+	}
 	return body, codec.DedupeNotes(notes), nil
 }
 

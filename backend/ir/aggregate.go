@@ -103,6 +103,7 @@ func (a *Aggregator) Add(ev Event) {
 		a.resp.ID = ev.MessageID
 		a.resp.Model = ev.Model
 		a.mergeServiceTier(ev.ServiceTier)
+		a.mergeContainer(ev.Container)
 		if ev.Created != 0 {
 			a.resp.Created = ev.Created
 		}
@@ -205,6 +206,8 @@ func (a *Aggregator) Add(ev Event) {
 			a.resp.StopSequence = ev.StopSequence
 		}
 		a.mergeServiceTier(ev.ServiceTier)
+		// anthropic 的 container 回显也可能落在 message_delta 上。
+		a.mergeContainer(ev.Container)
 		if ev.Usage != nil {
 			a.mergeUsage(*ev.Usage)
 		}
@@ -297,6 +300,15 @@ func (a *Aggregator) mergeUsage(u Usage) { MergeUsage(&a.resp.Usage, u) }
 func (a *Aggregator) mergeServiceTier(tier string) {
 	if tier != "" {
 		a.resp.ServiceTier = tier
+	}
+}
+
+// mergeContainer 用「后到覆盖」：容器回显可能先随 message_start 给出、再随
+// message_delta 晚到一份更完整的（带技能终态），与 usage 的输出维度同口径。
+// 没带这一维的帧不该把已收到的容器清零。
+func (a *Aggregator) mergeContainer(ct *Container) {
+	if ct != nil {
+		a.resp.Container = ct
 	}
 }
 

@@ -110,7 +110,58 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 		out.TopCacheTTL = w.CacheControl.TTL
 	}
 	out.InferenceGeo = w.InferenceGeo
+	// container 两形态（string 简写 / {id,skills} 对象）统一进 IR。
+	ct, err := decodeContainerParam(w.Container)
+	if err != nil {
+		return nil, wrapField("container", err)
+	}
+	out.Container = ct
 	return out, nil
+}
+
+// decodeContainerParam 解请求侧 container：string 简写（仅 id）或
+// {id, skills} 对象。空/显式 null 都视为没给。
+func decodeContainerParam(raw json.RawMessage) (*ir.Container, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var id string
+	if err := json.Unmarshal(raw, &id); err == nil {
+		return &ir.Container{ID: id}, nil
+	}
+	var p containerParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, fmt.Errorf("decode container: %w", err)
+	}
+	ct := &ir.Container{ID: p.ID}
+	for _, s := range p.Skills {
+		ct.Skills = append(ct.Skills, ir.Skill{SkillID: s.SkillID, Type: s.Type, Version: s.Version})
+	}
+	return ct, nil
+}
+
+// decodeContainer 响应侧容器回显进 IR。
+func decodeContainer(c *container) *ir.Container {
+	if c == nil {
+		return nil
+	}
+	ct := &ir.Container{ID: c.ID, ExpiresAt: c.ExpiresAt}
+	for _, s := range c.Skills {
+		ct.Skills = append(ct.Skills, ir.Skill{SkillID: s.SkillID, Type: s.Type, Version: s.Version})
+	}
+	return ct
+}
+
+// encodeContainerInfo 响应侧回写：IR -> {id, expires_at, skills}。
+func encodeContainerInfo(ct *ir.Container) *container {
+	if ct == nil {
+		return nil
+	}
+	out := &container{ID: ct.ID, ExpiresAt: ct.ExpiresAt}
+	for _, s := range ct.Skills {
+		out.Skills = append(out.Skills, containerSkill{SkillID: s.SkillID, Type: s.Type, Version: s.Version})
+	}
+	return out
 }
 
 // decodeContent 认字符串与块数组两种形态。Anthropic 允许

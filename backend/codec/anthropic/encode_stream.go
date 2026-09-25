@@ -242,6 +242,8 @@ func (e *streamEncoder) encodeStart(ev ir.Event) ([][]byte, error) {
 	if msg.ID == "" {
 		msg.ID = "msg_unknown"
 	}
+	// container 是本家维度，直接下发。
+	msg.Container = encodeContainerInfo(ev.Container)
 	if ev.Usage != nil {
 		msg.Usage = renderUsage(*ev.Usage)
 	}
@@ -307,6 +309,7 @@ func (e *streamEncoder) messageDelta(ev ir.Event) ([]byte, error) {
 			// 走同一个采纳判据：兜底成 end_turn 的那一支不该带着序列，
 			// 而兜底发生在下面几行，所以这里先按原始终止原因判。
 			StopSequence: adoptStopSequence(ev.StopReason, ev.StopSequence),
+			Container:    encodeContainerInfo(ev.Container),
 		},
 	}
 	if out.Delta.StopReason == "" {
@@ -411,6 +414,7 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 		StopReason:   renderStopReason(resp.StopReason),
 		StopSequence: adoptStopSequence(resp.StopReason, resp.StopSequence),
 		Usage:        renderUsage(resp.Usage),
+		Container:    encodeContainerInfo(resp.Container),
 	}
 	if w.ID == "" {
 		w.ID = "msg_unknown"
