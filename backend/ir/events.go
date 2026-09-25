@@ -52,8 +52,11 @@ type Event struct {
 	ServiceTier string `json:"service_tier,omitempty"`
 	// Container 代码执行容器回显（EvMessageStart 首帧携带；anthropic 的
 	// message_delta 也可能晚到，EvMessageDelta 上也收，后值覆盖）。
-	Container  *Container `json:"container,omitempty"`
-	StopReason StopReason `json:"stop_reason,omitempty"`
+	Container *Container `json:"container,omitempty"`
+	// Audio 非流式完整响应转事件流时随 EvMessageStart 携带。所有流式客户端
+	// 协议都没有官方的完整音频槽位，各编码器收下它只为记账并报出丢失。
+	Audio      *AudioOutput `json:"audio,omitempty"`
+	StopReason StopReason   `json:"stop_reason,omitempty"`
 	// StopSequence 与 Response.StopSequence 同义，随收尾帧抵达。
 	StopSequence string `json:"stop_sequence,omitempty"`
 	Usage        *Usage `json:"usage,omitempty"`

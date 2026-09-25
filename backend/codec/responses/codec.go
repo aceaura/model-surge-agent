@@ -69,6 +69,10 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	if n := codec.CountResponseContainerUploads(resp); n > 0 {
 		notes = append(notes, codec.ContainerUploadDropNote(n))
 	}
+	// 模型音频输出是 chat 非流式专属维度：本协议响应没有完整音频槽位。
+	if resp != nil && resp.Audio != nil {
+		notes = append(notes, codec.AudioOutputDropNote())
+	}
 	return body, codec.DedupeNotes(notes), nil
 }
 

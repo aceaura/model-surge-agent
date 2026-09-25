@@ -58,9 +58,12 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("anthropic: messages[%d]: %w", i, err)
 		}
-		if string(raw) == "[]" && len(m.Content) > 0 {
+		if string(raw) == "[]" && (len(m.Content) > 0 || m.AudioID != "") {
 			// 部件被编码器全丢（空壳图片等），空 content 数组会被上游按校验
 			// 拒整轮，比丢内容更糟。落约定占位，与 chat / responses 同口径。
+			// AudioID -only 的 assistant 历史（chat 音频引用，本协议无槽位）
+			// 同样命中：引用本身被丢弃已由 DescribeLossy 报出，但消息不能
+			// 以空 content 形态发给上游。
 			raw, err = encodeBlocks([]ir.Block{{Type: ir.BlockText, Text: codec.ConversationPlaceholder}})
 			if err != nil {
 				return nil, fmt.Errorf("anthropic: messages[%d] placeholder: %w", i, err)

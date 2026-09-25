@@ -189,6 +189,16 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 		}
 	}
 
+	// assistant 历史里的音频引用（chat 多轮音频上下文的 {audio:{id}}）：
+	// 外族协议没有 replay-id 槽位，模型看得到文字却取不回前几轮生成的音频。
+	// id 是上游的服务端引用，属会话内容，值不进注记。
+	// chat 同族原样回传，不报。
+	if name != ProtocolChatCompletions {
+		if n := countRequestAudioRefs(req); n > 0 {
+			notes["assistant audio references"] = AudioRefDropNote(n)
+		}
+	}
+
 	if !caps.Citations {
 		if n := ir.CountCitations(req); n > 0 {
 			// 历史消息里的来源标注会被抹掉。读者能做的是别指望模型在后续轮次里
@@ -914,6 +924,37 @@ func countRequestContainerUploads(req *ir.Request) int {
 		count(m.Content)
 	}
 	return n
+}
+
+// countRequestAudioRefs 数出请求历史里 assistant 消息携带的音频引用条数。
+// 只数 assistant：官方只在 assistant 历史上接受 {audio:{id}}，其余角色
+// 出现的引用是伪造形态，不计数也不外发。
+func countRequestAudioRefs(req *ir.Request) int {
+	n := 0
+	for _, m := range req.Messages {
+		if m.Role == ir.RoleAssistant && m.AudioID != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// AudioRefDropNote 请求侧 assistant 音频引用丢失注记。音频 id 是 chat
+// 多轮上下文里的服务端引用，外族既没有引用槽位，也不能据此取回音频本体。
+// id 值属会话内容，不进注记。
+func AudioRefDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped %d assistant audio reference(s): the target protocol has no replay-id slot, the model cannot recover audio generated in earlier turns", n)
+}
+
+// AudioOutputDropNote 模型音频输出丢失注记。完整音频只存在于 chat 非流式
+// 响应的 message.audio：chat 的 SSE delta 与 anthropic / responses 的响应
+// 都没有等价槽位，音频本体、转写文本与回放 id 一起消失。
+//
+// 两条路径共用：流式编码器 Notes() 与非流式 EncodeResponseLossy。
+// 措辞只此一份，按说明检索流水的人不会把同一件事当成多种故障。
+func AudioOutputDropNote() string {
+	return "dropped model audio output: this response format has no complete-audio slot, the client cannot play the generated audio or recover its transcript and replay id"
 }
 
 // ServerToolDropNote 服务端托管工具块丢失注记。server_tool_use 与

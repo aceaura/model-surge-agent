@@ -262,6 +262,11 @@ type Thinking struct {
 type Message struct {
 	Role    Role    `json:"role"`
 	Content []Block `json:"content"`
+	// AudioID 是 chat assistant 历史消息的音频引用（官方请求侧只接受
+	// {audio:{id}} 形态，完整音频数据不在多轮上下文里重复回传）。挂在消息上
+	// 而不是块上：它没有内容本体，只是指向上游音频存储的 id。外族协议没有
+	// 引用槽位，跨族丢弃由有损诊断报出。
+	AudioID string `json:"audio_id,omitempty"`
 }
 
 type Tool struct {
@@ -519,6 +524,20 @@ type AudioOut struct {
 	Voice  string `json:"voice,omitempty"`
 }
 
+// AudioOutput 是 chat 非流式响应的模型音频输出（message.audio）。
+// ID 是下一轮 assistant 历史唯一允许回传的引用（进 Message.AudioID）；
+// Data/ExpiresAt/Transcript 只属于本轮完整响应，不能塞回请求——官方
+// 请求侧的 audio 只接受 {id} 形态。
+//
+// 完整音频只存在于 chat 非流式这一处：chat 的 SSE delta 没有官方音频槽位，
+// anthropic 与 responses 的响应也没有等价物，编码边界必须丢弃并报出。
+type AudioOutput struct {
+	ID         string `json:"id,omitempty"`
+	Data       string `json:"data,omitempty"`
+	ExpiresAt  int64  `json:"expires_at,omitempty"`
+	Transcript string `json:"transcript,omitempty"`
+}
+
 // Clone 深拷贝，供换目标重试时复用同一份原始请求。
 // 每次尝试都要独立编码（native model 与参数覆盖不同），共享底层切片会串味。
 func (r *Request) Clone() *Request {
@@ -645,7 +664,7 @@ func cloneMessages(in []Message) []Message {
 	}
 	out := make([]Message, len(in))
 	for i, m := range in {
-		out[i] = Message{Role: m.Role, Content: cloneBlocks(m.Content)}
+		out[i] = Message{Role: m.Role, Content: cloneBlocks(m.Content), AudioID: m.AudioID}
 	}
 	return out
 }

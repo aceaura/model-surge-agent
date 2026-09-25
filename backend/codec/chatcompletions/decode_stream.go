@@ -431,6 +431,16 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 		}
 		out.StopReason = convertFinishReason(choice.FinishReason)
 		m := *choice.Message
+		// 模型音频输出只在非流式响应的 message.audio 上出现，收下四键：
+		// id 是客户端下一轮回传的凭证，data/transcript 是本体与转写。
+		if len(m.Audio) > 0 && string(m.Audio) != "null" {
+			var a audioOutput
+			if json.Unmarshal(m.Audio, &a) == nil {
+				out.Audio = &ir.AudioOutput{
+					ID: a.ID, Data: a.Data, ExpiresAt: a.ExpiresAt, Transcript: a.Transcript,
+				}
+			}
+		}
 		if m.ReasoningContent != "" {
 			out.Content = append(out.Content, ir.Block{
 				Type:     ir.BlockThinking,

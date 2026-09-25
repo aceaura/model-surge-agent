@@ -78,6 +78,9 @@ type Response struct {
 	// Container 实际使用的代码执行容器回显（仅 anthropic：id/expires_at/
 	// 已加载技能）。nil = 上游没用容器。客户端要靠它复用容器续话。
 	Container *Container `json:"container,omitempty"`
+	// Audio chat 非流式的模型音频输出。流式 chat delta 没有官方音频槽位，
+	// 非 chat 客户端也无从接收，编码边界必须丢弃并报出。
+	Audio *AudioOutput `json:"audio,omitempty"`
 	// Created 上游回显的创建时间（chat created / responses created_at，Unix
 	// 秒）。零值=上游没给，出站才回退本地钟——否则同族往返会把上游的真实
 	// 创建时间换成代理本地钟，客户端按 created 做幂等/排序会拿到假数据。

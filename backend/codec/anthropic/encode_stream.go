@@ -244,6 +244,10 @@ func (e *streamEncoder) encodeStart(ev ir.Event) ([][]byte, error) {
 	}
 	// container 是本家维度，直接下发。
 	msg.Container = encodeContainerInfo(ev.Container)
+	// 模型音频输出（chat 非流式投影而来）没有本协议槽位：丢弃并报出。
+	if ev.Audio != nil {
+		e.notes = append(e.notes, codec.AudioOutputDropNote())
+	}
 	if ev.Usage != nil {
 		msg.Usage = renderUsage(*ev.Usage)
 	}

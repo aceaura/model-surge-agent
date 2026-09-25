@@ -67,7 +67,10 @@ func mergeAdjacentRoles(r *Request) []string {
 	count := 0
 	for _, m := range r.Messages[1:] {
 		last := &merged[len(merged)-1]
-		if last.Role == m.Role {
+		// 带音频引用的消息不参与合并：合并只拼 Content，AudioID 挂不到
+		// 一起——被并进来那条的引用会静默消失，而它是客户端上一轮音频
+		// 在多轮上下文里的唯一凭证。宁可留着一次非交替，交给外族诊断报出。
+		if last.Role == m.Role && last.AudioID == "" && m.AudioID == "" {
 			// 先拷再拼：直接 append 可能写进原切片的富余容量，
 			// 而那块内存属于调用方传进来的消息。
 			joined := make([]Block, 0, len(last.Content)+len(m.Content)+1)
@@ -387,7 +390,9 @@ func pruneEmpty(r *Request) []string {
 	var kept []Message
 	dropped := false
 	for i, m := range r.Messages {
-		if isEmptyContent(m.Content) {
+		// 音频引用本身就是内容：chat 官方允许 assistant 历史消息只带
+		// {audio:{id}} 而无正文，按空消息丢掉等于撕掉上一轮的音频凭证。
+		if m.AudioID == "" && isEmptyContent(m.Content) {
 			notes = append(notes, fmt.Sprintf("dropped empty %s message[%d]", m.Role, i))
 			dropped = true
 			continue

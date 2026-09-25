@@ -188,7 +188,16 @@ func appendMessage(out *ir.Request, m wireMessage) error {
 				Input: tc.Function.Arguments,
 			}})
 		}
-		out.Messages = append(out.Messages, ir.Message{Role: ir.RoleAssistant, Content: blocks})
+		msg := ir.Message{Role: ir.RoleAssistant, Content: blocks}
+		// assistant 历史的音频引用（{audio:{id}}）：多轮音频上下文里唯一
+		// 允许回传的形态。显式 null 与缺省同义，都不算引用。
+		if len(m.Audio) > 0 && string(m.Audio) != "null" {
+			var a audioRef
+			if json.Unmarshal(m.Audio, &a) == nil {
+				msg.AudioID = a.ID
+			}
+		}
+		out.Messages = append(out.Messages, msg)
 		return nil
 
 	case roleUser, "":

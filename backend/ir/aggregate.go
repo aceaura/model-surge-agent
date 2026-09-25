@@ -104,6 +104,11 @@ func (a *Aggregator) Add(ev Event) {
 		a.resp.Model = ev.Model
 		a.mergeServiceTier(ev.ServiceTier)
 		a.mergeContainer(ev.Container)
+		if ev.Audio != nil {
+			// 完整音频只随非流式响应投影出的首帧到达（ResponseEvents），
+			// 真流式的上游给不出这一维。
+			a.resp.Audio = ev.Audio
+		}
 		if ev.Created != 0 {
 			a.resp.Created = ev.Created
 		}

@@ -70,6 +70,9 @@ type streamEncoder struct {
 	// droppedContainer 容器回显（anthropic 专属维度）被丢标记：本协议响应
 	// 没有 container 槽位。首帧或收尾帧任一带到即置位，Notes() 报一次。
 	droppedContainer bool
+	// droppedAudio 完整音频输出（chat 非流式响应投影而来）被丢标记：
+	// SSE delta 没有官方音频槽位，本体、转写与回放 id 一起消失。
+	droppedAudio bool
 	// droppedUploads 被跳过的容器文件引用块（container_upload）数：本协议
 	// 没有 file_id 槽位，整块跳过，Notes() 收尾时报出。
 	droppedUploads int
@@ -102,6 +105,9 @@ func (e *streamEncoder) Notes() []string {
 	if e.droppedContainer {
 		notes = append(notes, codec.ContainerDropNote())
 	}
+	if e.droppedAudio {
+		notes = append(notes, codec.AudioOutputDropNote())
+	}
 	if e.droppedUploads > 0 {
 		notes = append(notes, codec.ContainerUploadDropNote(e.droppedUploads))
 	}
@@ -133,6 +139,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		}
 		if ev.Container != nil {
 			e.droppedContainer = true
+		}
+		if ev.Audio != nil {
+			e.droppedAudio = true
 		}
 		// 上游给过创建时间就原值逐帧回写（覆盖构造时的本地钟）；没给才用本地钟。
 		if ev.Created != 0 {
@@ -425,6 +434,18 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 		return nil, nil
 	}
 	msg := wireMessage{Role: roleAssistant}
+	// 模型音频输出是本协议非流式响应的原生维度：四键照原样写回，
+	// 客户端靠 id 在下一轮回传、靠 data 播放、靠 transcript 展示。
+	if resp.Audio != nil {
+		raw, err := json.Marshal(audioOutput{
+			ID: resp.Audio.ID, Data: resp.Audio.Data,
+			ExpiresAt: resp.Audio.ExpiresAt, Transcript: resp.Audio.Transcript,
+		})
+		if err != nil {
+			return nil, err
+		}
+		msg.Audio = raw
+	}
 	var (
 		text  []ir.Block
 		calls []wireToolCall

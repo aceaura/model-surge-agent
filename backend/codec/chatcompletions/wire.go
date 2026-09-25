@@ -80,10 +80,14 @@ type wireMessage struct {
 	// Content 可以是字符串、parts 数组或 null。
 	Content json.RawMessage `json:"content,omitempty"`
 	// ReasoningContent 是各家推理模型放思维链的位置，非 OpenAI 官方字段但已成事实标准。
-	ReasoningContent string         `json:"reasoning_content,omitempty"`
-	ToolCalls        []wireToolCall `json:"tool_calls,omitempty"`
-	ToolCallID       string         `json:"tool_call_id,omitempty"`
-	Name             string         `json:"name,omitempty"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
+	// Audio 的请求与响应形状不同：assistant 历史只允许 {id} 引用，完整
+	// 响应则必须带 id/data/expires_at/transcript 四键，因此留 RawMessage
+	// 延迟到各方向按专用 DTO（audioRef / audioOutput）解码。
+	Audio      json.RawMessage `json:"audio,omitempty"`
+	ToolCalls  []wireToolCall  `json:"tool_calls,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+	Name       string          `json:"name,omitempty"`
 	// Annotations 是助手消息正文的来源标注（web 搜索引用）。
 	// 偏移量相对于整条消息 content 的拼接文本。
 	Annotations []annotation `json:"annotations,omitempty"`
@@ -142,6 +146,21 @@ func (u *wireImageURL) UnmarshalJSON(b []byte) error {
 type wireInputAudio struct {
 	Data   string `json:"data"`
 	Format string `json:"format"`
+}
+
+// audioRef 是请求侧 assistant 历史消息的音频引用形态：官方只接受 {id}，
+// 完整音频数据不在多轮上下文里重复回传。
+type audioRef struct {
+	ID string `json:"id"`
+}
+
+// audioOutput 是响应侧 message.audio 的完整形态。四键都不加 omitempty：
+// 官方要求完整音频响应必须带齐 id/data/expires_at/transcript，空值也要写出来。
+type audioOutput struct {
+	ID         string `json:"id"`
+	Data       string `json:"data"`
+	ExpiresAt  int64  `json:"expires_at"`
+	Transcript string `json:"transcript"`
 }
 
 // wireFile 的 FileData 是 data URI。FileID 指向上游文件服务里已存的文件，

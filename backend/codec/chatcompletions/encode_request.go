@@ -212,7 +212,9 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 	// 而 IR 把工具结果放在 user 消息里，所以先发它们。
 	out = append(out, toolMsgs...)
 
-	if len(plain) == 0 && len(calls) == 0 && thinking.Len() == 0 {
+	// 音频引用单独算内容：只带 {audio:{id}} 而无正文的 assistant 历史消息
+	// 是官方合法形态，按空消息跳过等于撕掉上一轮的音频凭证。
+	if len(plain) == 0 && len(calls) == 0 && thinking.Len() == 0 && m.AudioID == "" {
 		return out, nil
 	}
 	msg := wireMessage{Role: string(m.Role), ToolCalls: calls, ReasoningContent: thinking.String()}
@@ -220,6 +222,14 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 	// （跨协议转换的罕见形态）也不写，写出去是非法的消息形状。
 	if m.Role == ir.RoleAssistant {
 		msg.Annotations = encodeAnnotations(citeText.String(), cites)
+		if m.AudioID != "" {
+			// 请求侧只回 {id} 引用形态：完整音频数据不重复回传。
+			ref, err := json.Marshal(audioRef{ID: m.AudioID})
+			if err != nil {
+				return nil, err
+			}
+			msg.Audio = ref
+		}
 	}
 	if len(plain) > 0 {
 		content, err := encodeContent(plain)
