@@ -65,6 +65,10 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 			InputExamples:       t.InputExamples,
 			AllowedCallers:      t.AllowedCallers,
 		}
+		if t.CacheControl != nil {
+			tool.CacheCtl = t.CacheControl.Type
+			tool.CacheTTL = t.CacheControl.TTL
+		}
 		// custom 是函数工具的显式写法，与省略同义，不当服务端工具记。
 		if t.Type != "" && t.Type != "custom" {
 			tool.ServerType = t.Type
@@ -217,6 +221,7 @@ func decodeBlock(b wireBlock) (ir.Block, bool, error) {
 	out := ir.Block{}
 	if b.CacheControl != nil {
 		out.CacheCtl = b.CacheControl.Type
+		out.CacheTTL = b.CacheControl.TTL
 	}
 
 	switch b.Type {

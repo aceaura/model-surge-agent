@@ -91,6 +91,9 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 			InputExamples:       t.InputExamples,
 			AllowedCallers:      t.AllowedCallers,
 		}
+		if t.CacheCtl != "" {
+			tool.CacheControl = &wireCacheControl{Type: t.CacheCtl, TTL: t.CacheTTL}
+		}
 		if t.ServerType != "" {
 			// 服务端工具的 type 原样写回，不带 input_schema：参数形状由
 			// 上游那一版工具自己定义，我方给出的任何 schema 都可能与它冲突。
@@ -227,7 +230,7 @@ func encodeBlocks(blocks []ir.Block) (json.RawMessage, error) {
 func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 	out := wireBlock{}
 	if b.CacheCtl != "" {
-		out.CacheControl = &wireCacheControl{Type: b.CacheCtl}
+		out.CacheControl = &wireCacheControl{Type: b.CacheCtl, TTL: b.CacheTTL}
 	}
 
 	switch b.Type {

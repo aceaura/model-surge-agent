@@ -101,8 +101,13 @@ type Block struct {
 	// ——跨块累加会在块被重排或降级时全部错位。
 	Citations []Citation `json:"citations,omitempty"`
 	// CacheCtl 是 Anthropic 的 cache_control 类型（通常 "ephemeral"）。
-	// 其他协议无此概念，编码时丢弃。
+	// 其他协议无此概念，编码时丢弃并由诊断报出。
 	CacheCtl string `json:"cache_ctl,omitempty"`
+	// CacheTTL 缓存断点的存活档位（"5m"/"1h"，空=官方默认 5m）。仅
+	// Anthropic 方向保留；与 CacheCtl 并列而非合并进字符串，是因为
+	// type 与 ttl 是 cache_control 对象里两个独立键。丢了 ttl 会让 1h
+	// 断点静默降级成 5m——计费与命中率都变。
+	CacheTTL string `json:"cache_ttl,omitempty"`
 }
 
 // Container 代码执行容器的标识与技能声明（仅 Anthropic 一族）。
@@ -369,6 +374,11 @@ type Tool struct {
 	InputExamples []json.RawMessage `json:"input_examples,omitempty"`
 	// AllowedCallers 允许的程序化调用方（direct / code_execution_*）。
 	AllowedCallers []string `json:"allowed_callers,omitempty"`
+	// CacheCtl/CacheTTL 工具定义上的缓存断点（anthropic
+	// tools[].cache_control，含 ttl 档位）。其余协议的工具定义没有这一维，
+	// 跨族丢弃由诊断报出（报数不报值）。
+	CacheCtl string `json:"cache_ctl,omitempty"`
+	CacheTTL string `json:"cache_ttl,omitempty"`
 }
 
 // ServerParams 服务端托管工具（web_search 一族）的声明参数。同族往返以

@@ -164,6 +164,9 @@ type wireTool struct {
 	InputSchema json.RawMessage `json:"input_schema,omitempty"`
 	// Strict 保证工具名与入参的 schema 校验（官方 Tool.strict）。
 	Strict *bool `json:"strict,omitempty"`
+	// CacheControl 工具定义上的缓存断点（官方 Tool.cache_control，
+	// 含 ttl 档位）。丢了会让工具定义前缀每次重算重计费。
+	CacheControl *wireCacheControl `json:"cache_control,omitempty"`
 	// DeferLoading 不进初始 system prompt，由 tool search 按需加载。
 	DeferLoading bool `json:"defer_loading,omitempty"`
 	// EagerInputStreaming 细粒度流式入参开关（null=按 beta 头默认）。

@@ -467,6 +467,7 @@ func shapeSystem(req *ir.Request, caps Capabilities, c *noteCollector) {
 	}
 	parts := make([]string, 0, len(req.System))
 	cacheCtl := ""
+	cacheTTL := ""
 	for _, b := range req.System {
 		switch {
 		case b.Type == ir.BlockText:
@@ -481,6 +482,7 @@ func shapeSystem(req *ir.Request, caps Capabilities, c *noteCollector) {
 		}
 		if b.CacheCtl != "" {
 			cacheCtl = b.CacheCtl
+			cacheTTL = b.CacheTTL
 		}
 	}
 	if len(parts) == 0 {
@@ -494,6 +496,7 @@ func shapeSystem(req *ir.Request, caps Capabilities, c *noteCollector) {
 		Type:     ir.BlockText,
 		Text:     strings.Join(parts, "\n\n"),
 		CacheCtl: cacheCtl,
+		CacheTTL: cacheTTL,
 	}}
 }
 
@@ -519,8 +522,15 @@ func budgetCache(req *ir.Request, caps Capabilities, c *noteCollector) {
 }
 
 // collectCacheMarks 按出现顺序收集所有带断点的块，返回可写指针。
+// 顺序与 anthropic 请求体的序列化顺序一致（tools → system → messages）：
+// 预算裁剪从最靠前的开始丢，靠后的断点覆盖更长的前缀，命中时省得更多。
 func collectCacheMarks(req *ir.Request) []*string {
 	var out []*string
+	for i := range req.Tools {
+		if req.Tools[i].CacheCtl != "" {
+			out = append(out, &req.Tools[i].CacheCtl)
+		}
+	}
 	walk := func(blocks []ir.Block) {
 		for i := range blocks {
 			if blocks[i].CacheCtl != "" {

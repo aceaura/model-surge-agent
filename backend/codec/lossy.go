@@ -100,6 +100,21 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 				"dropped tool modifiers on %d tool(s): the target protocol has no defer-loading, eager-streaming, input-example or caller-restriction fields, tools behave with the upstream defaults", n)
 		}
 	}
+	if !caps.CacheControl {
+		// tools[].cache_control 也是缓存断点：块级断点由
+		// describeBlocksLossy 报，这里数工具定义上的，报数不报值。
+		// 断点蒸发后缓存命中率与计费都变，客户端却看不到任何迹象。
+		n := 0
+		for _, t := range req.Tools {
+			if t.CacheCtl != "" {
+				n++
+			}
+		}
+		if n > 0 {
+			notes["tool cache breakpoints"] = fmt.Sprintf(
+				"dropped cache breakpoint on %d tool definition(s): the target protocol has no prompt-caching breakpoint parameter, cached prefixes may be reprocessed and billed", n)
+		}
+	}
 	if !caps.ToolResultError && hasFailedToolResult(req) {
 		rewrote("tool_result.is_error",
 			fmt.Sprintf("prefixed the content with %q", toolErrorPrefix))
