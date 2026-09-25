@@ -73,6 +73,20 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 		rewrote("tool_result.is_error",
 			fmt.Sprintf("prefixed the content with %q", toolErrorPrefix))
 	}
+	// 畸形工具参数与协议无关：任何出站都会发生处置（对象槽位挪进
+	// RawArgsKey，字符串槽位原样透出但工具侧多半也解析不了），
+	// 一律报告，只是措辞按槽位形态分开——两种后果不同，读者要改的
+	// 地方也不同。
+	if bad := CountMalformedToolArgs(req); bad > 0 {
+		if caps.ToolInputObject {
+			notes["tool arguments"] = fmt.Sprintf(
+				"rewrapped %d tool call argument(s): malformed or non-object JSON moved to %s, the tool will not receive its parameters",
+				bad, ir.RawArgsKey)
+		} else {
+			notes["tool arguments"] = fmt.Sprintf(
+				"passed through %d malformed tool call argument(s) verbatim: the tool will fail to parse them", bad)
+		}
+	}
 	if req.TopK != nil && !caps.TopK {
 		note("top_k", "no top_k parameter")
 	}
@@ -329,6 +343,59 @@ func DescribeResponseToolSignatureLoss(resp *ir.Response, name string, toolSigSu
 		}
 	}
 	return DedupeNotes(notes)
+}
+
+// DescribeResponseToolArgsLoss 推导响应编码会对畸形工具参数做什么。
+//
+// 参数不是合法 JSON 对象（max_tokens 截断是最常见来源）时两条路径都不允许
+// 静默清空成 {}——那会让工具不带参数执行，是一次真实副作用。对象槽位协议
+// （anthropic 的 input）把原文挪进 ir.RawArgsKey 键位；字符串槽位协议
+// （chat / responses 的 arguments）原样透传。两者都出说明，措辞不同：
+// 读者要改的地方不同，一个看键位，一个看原文。
+//
+// 与各编码器的编码分支用同一判定（ir.NormalizeToolInput），扫描结果即实编结果。
+func DescribeResponseToolArgsLoss(resp *ir.Response, objectSlot bool) []string {
+	if resp == nil {
+		return nil
+	}
+	bad := 0
+	for _, b := range resp.Content {
+		if b.Type == ir.BlockToolUse && b.ToolUse != nil {
+			if _, ok := ir.NormalizeToolInput([]byte(b.ToolUse.Input)); !ok {
+				bad++
+			}
+		}
+	}
+	if bad == 0 {
+		return nil
+	}
+	if objectSlot {
+		return []string{ir.RewrapNote(bad)}
+	}
+	return []string{ir.RawArgsPassNote(bad)}
+}
+
+// CountMalformedToolArgs 统计请求消息里参数不是合法 JSON 对象的工具调用数。
+// 判据与 ir.NormalizeToolInput 同源：非法 JSON（多为截断）与合法非对象都算。
+func CountMalformedToolArgs(req *ir.Request) int {
+	if req == nil {
+		return 0
+	}
+	bad := 0
+	count := func(blocks []ir.Block) {
+		for _, b := range blocks {
+			if b.Type == ir.BlockToolUse && b.ToolUse != nil {
+				if _, ok := ir.NormalizeToolInput([]byte(b.ToolUse.Input)); !ok {
+					bad++
+				}
+			}
+		}
+	}
+	count(req.System)
+	for _, m := range req.Messages {
+		count(m.Content)
+	}
+	return bad
 }
 
 func signatureOf(use *ir.ToolUse) string {

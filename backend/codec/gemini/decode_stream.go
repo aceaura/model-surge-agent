@@ -242,10 +242,11 @@ func (d *streamDecoder) emitCall(call *wireFunctionCall, signature string) ([]ir
 
 	index := d.nextIndex
 	d.nextIndex++
+	// 参数原样进 IR：残缺/非对象也不清空——{} 会让这次调用看起来是
+	// 一次合法的无参调用，截断被无声吞掉。IR 槽位是字符串形态装得下
+	// 原文，聚合器的 IncompleteTools 会把残缺值判出来，出站编码时
+	// 再按目标协议的槽位形态处置（对象槽位挪 ir.RawArgsKey）。
 	args := string(call.Args)
-	if !json.Valid([]byte(args)) {
-		args = "{}"
-	}
 	use := &ir.ToolUse{ID: d.callID(call), Name: call.Name}
 	if signature != "" {
 		use.Signature = signature

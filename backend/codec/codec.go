@@ -95,6 +95,12 @@ type Capabilities struct {
 	// is_error、gemini 的 error 键）。为假时失败态改写成内容前缀——
 	// 丢掉它会让模型把失败当成功，那是跨轮语义被改坏且完全不可见。
 	ToolResultError bool
+	// ToolInputObject 为真表示本协议的工具调用参数槽是 JSON 对象形态
+	// （anthropic 的 tool_use.input、gemini 的 functionCall.args）。
+	// 畸形参数在对象槽位会被挪进 ir.RawArgsKey 键位保真，在字符串槽位
+	// （chat 的 arguments、responses 的 arguments）原样透传。两者诊断
+	// 措辞不同，读者要改的地方也不同。
+	ToolInputObject bool
 	// ServerTools 为真表示本协议表达得了「由上游自己执行的工具」。
 	// 只有 anthropic 是这样。为假时这类声明整条丢弃并出说明，而不是
 	// 降级成函数工具：降级后上游会等一个永远不来的工具结果。

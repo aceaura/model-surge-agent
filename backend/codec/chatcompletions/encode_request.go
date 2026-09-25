@@ -151,12 +151,11 @@ func encodeMessage(m ir.Message) ([]wireMessage, error) {
 			if b.ToolUse == nil {
 				return nil, fmt.Errorf("tool_use block without payload")
 			}
+			// arguments 是 JSON 字符串槽位：原文照转义嵌入，请求体不会因此
+			// 非法。残缺参数不清空——{} 会让工具不带参数执行，是一次真实
+			// 副作用；原文透传让工具侧的解析失败暴露出来，损耗由
+			// DescribeLossy 报出。
 			args := b.ToolUse.Input
-			// arguments 必须是合法 JSON 的字符串形式；流被掐断时可能残缺，
-			// 补成空对象比发语法错误的请求体更好。
-			if !json.Valid([]byte(args)) {
-				args = "{}"
-			}
 			calls = append(calls, wireToolCall{
 				ID:       b.ToolUse.ID,
 				Type:     "function",

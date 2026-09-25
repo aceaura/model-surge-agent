@@ -23,6 +23,13 @@ type streamEncoder struct {
 	// 客户端（含官方 SDK）只从 input_json_delta 拼参数，一个 delta 都不发
 	// 等于参数是空串——拼出来不是合法 JSON，关块时要补一个 "{}"。
 	toolPending map[int]bool
+	// toolArgs 累积各 tool_use 块已下发的入参增量。input_json_delta 一旦
+	// 发出就不可改写，畸形参数（多为 max_tokens 截断）只能原样透传，
+	// 关块时校验累积值并计数，由 Notes 报出——否则客户端会把一次
+	// 参数损坏的调用当正常完成存进历史。
+	toolArgs map[int][]byte
+	// badToolArgs 是关块时判定畸形的工具调用数，Notes() 报出。
+	badToolArgs int
 	// blockOrder 让 Finish 按开启顺序闭合，避免 map 遍历顺序不定
 	// 导致同样的输入产出不同的帧序。
 	blockOrder []int
@@ -32,7 +39,13 @@ type streamEncoder struct {
 }
 
 // Notes 实现 codec.StreamNotes。
-func (e *streamEncoder) Notes() []string { return codec.DedupeNotes(e.notes) }
+func (e *streamEncoder) Notes() []string {
+	notes := e.notes
+	if e.badToolArgs > 0 {
+		notes = append(notes, ir.RawArgsPassNote(e.badToolArgs))
+	}
+	return codec.DedupeNotes(notes)
+}
 
 // HeartbeatFrame 实现 codec.StreamHeartbeat：本协议有自己的 ping 事件类型。
 //
@@ -54,7 +67,8 @@ func (e *streamEncoder) HeartbeatFrame() []byte {
 }
 
 func newStreamEncoder() *streamEncoder {
-	return &streamEncoder{openBlocks: map[int]bool{}, toolPending: map[int]bool{}}
+	return &streamEncoder{openBlocks: map[int]bool{}, toolPending: map[int]bool{},
+		toolArgs: map[int][]byte{}}
 }
 
 func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
@@ -84,6 +98,7 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			if block.Type == blockToolUse {
 				block.Input = json.RawMessage(`{}`)
 				e.toolPending[ev.Index] = true
+				e.toolArgs[ev.Index] = nil
 			}
 		}
 		e.open(ev.Index)
@@ -108,6 +123,7 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		}
 		return e.encodeDelta(ev, &streamDelta{Type: deltaSignature, Signature: ev.Text})
 	case ir.EvToolInput:
+		e.toolArgs[ev.Index] = append(e.toolArgs[ev.Index], ev.Text...)
 		out, err := e.encodeDelta(ev, &streamDelta{Type: deltaInputJSON, PartialJSON: ev.Text})
 		// encodeDelta 可能刚自动开启这个块（置位 pending），所以清标记
 		// 必须放在它之后：见过真实增量的块不再是零增量。
@@ -300,6 +316,7 @@ func (e *streamEncoder) closeAll() [][]byte {
 // （sub2api 同款：clients assemble tool input exclusively from deltas）。
 func (e *streamEncoder) closeFrames(index int) [][]byte {
 	var out [][]byte
+	e.finishToolArgs(index)
 	if e.toolPending[index] {
 		delete(e.toolPending, index)
 		if frame, err := marshalFrame(evContentBlockDelta, streamEvent{
@@ -318,6 +335,20 @@ func (e *streamEncoder) closeFrames(index int) [][]byte {
 		return out
 	}
 	return append(out, frame)
+}
+
+// finishToolArgs 在关块时校验累积的入参。增量已发出、改写不了，
+// 畸形的只能计数报出（RawArgsPassNote），让客户端知道这次调用的参数
+// 不能安全执行，而不是看起来以空对象正常完成。
+func (e *streamEncoder) finishToolArgs(index int) {
+	raw, ok := e.toolArgs[index]
+	if !ok {
+		return
+	}
+	delete(e.toolArgs, index)
+	if _, valid := ir.NormalizeToolInput(raw); !valid {
+		e.badToolArgs++
+	}
 }
 
 // Finish 补齐流：闭合未关的块，补 message_delta 与 message_stop。

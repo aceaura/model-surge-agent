@@ -221,9 +221,12 @@ func (d *streamDecoder) decodeToolCalls(calls []wireToolCall) ([]ir.Event, error
 					}
 					slot = byID
 				}
-			} else if slot != nil && slot.announced && tc.ID != slot.id {
-				// 已宣告的槽位收到另一个非空 id：上游复用了 index 表示新调用，
-				// 并进原槽位会把两次调用的入参串成一份非法 JSON。
+			} else if slot != nil && slot.id != "" && tc.ID != slot.id {
+				// 槽位带着另一个非空 id 回来：上游把 index 复用给了下一次
+				// 调用（部分兼容端会这样发，new-api 也按此形态处理）。
+				// 并进原槽位会把两次调用的入参串成一份非法 JSON，且新调用
+				// 的 id 被吞掉。原槽位若已宣告，其块由 Finish 统一闭合；
+				// 若还没宣告（name 未到），它永远成不了块，半截身份直接放弃。
 				slot = nil
 			}
 		}
@@ -337,11 +340,9 @@ func (d *streamDecoder) announcePending() []ir.Event {
 		if slot.name == "" {
 			slot.name = unknownToolName
 		}
-		// 残缺入参发出去会让整条历史带上语法错误的 JSON。
-		if !json.Valid([]byte(slot.pending.String())) {
-			slot.pending.Reset()
-			slot.pending.WriteString("{}")
-		}
+		// 残缺入参原样进 IR，不清空：{} 会把一次截断的调用伪装成合法的
+		// 无参调用，聚合器的 IncompleteTools 就再也判不出来。IR 槽位是
+		// 字符串形态，装得下原文。
 		out = append(out, d.announce(slot)...)
 	}
 	return out

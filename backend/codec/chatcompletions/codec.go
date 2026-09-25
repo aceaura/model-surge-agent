@@ -53,6 +53,8 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	if images, files := codec.CountResponseMedia(resp); images > 0 || files > 0 {
 		notes = append(notes, codec.MediaOutputDropNote(images, files))
 	}
+	// 畸形工具参数：arguments 是字符串槽位，原文透传，报出不可安全执行。
+	notes = append(notes, codec.DescribeResponseToolArgsLoss(resp, false)...)
 	return body, codec.DedupeNotes(notes), nil
 }
 

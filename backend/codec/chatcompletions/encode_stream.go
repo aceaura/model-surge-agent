@@ -35,6 +35,13 @@ type streamEncoder struct {
 	// 客户端只从 delta 拼参数，零增量（无参工具是常态）会拼出 ""，
 	// json.loads 直接崩，关块时要补一个 "{}"。
 	toolPending map[int]bool
+	// toolArgs 累积各工具调用已下发的 arguments 增量。增量一旦发出就
+	// 不可改写，畸形参数（多为 max_tokens 截断）只能原样透传，关块时
+	// 校验累积值并计数，由 Notes 报出——否则客户端会把一次参数损坏的
+	// 调用当正常完成存进历史。
+	toolArgs map[int][]byte
+	// badToolArgs 是关块时判定畸形的工具调用数，Notes() 报出。
+	badToolArgs int
 	stopReason  ir.StopReason
 	// serviceTier 是上游回的执行档位，一旦收到就挂在此后的每个 chunk 上。
 	// 不回填已发出的帧——发出去的改不了。
@@ -64,6 +71,9 @@ func (e *streamEncoder) Notes() []string {
 	if e.droppedImages > 0 || e.droppedFiles > 0 {
 		notes = append(notes, codec.MediaOutputDropNote(e.droppedImages, e.droppedFiles))
 	}
+	if e.badToolArgs > 0 {
+		notes = append(notes, ir.RawArgsPassNote(e.badToolArgs))
+	}
 	return codec.DedupeNotes(notes)
 }
 
@@ -73,6 +83,7 @@ func newStreamEncoder() *streamEncoder {
 		toolIndex:      map[int]int{},
 		sentToolHeader: map[int]bool{},
 		toolPending:    map[int]bool{},
+		toolArgs:       map[int][]byte{},
 		created:        time.Now().Unix(),
 	}
 }
@@ -128,6 +139,7 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		}
 		e.sentToolHeader[ev.Index] = true
 		e.toolPending[ev.Index] = true
+		e.toolArgs[ev.Index] = nil
 		return e.chunk(wireMessage{ToolCalls: []wireToolCall{call}}, "")
 
 	case ir.EvTextDelta:
@@ -151,6 +163,7 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 
 	case ir.EvToolInput:
 		n := e.toolSlot(ev.Index)
+		e.toolArgs[ev.Index] = append(e.toolArgs[ev.Index], ev.Text...)
 		call := wireToolCall{Index: &n, Function: wireFunctionCall{Arguments: ev.Text}}
 		if !e.sentToolHeader[ev.Index] {
 			// 上游漏发块开启帧时补上 type，否则客户端不知道这是函数调用。
@@ -164,6 +177,7 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 	case ir.EvBlockStop:
 		// 本协议无块边界概念，块闭合本身无需表达；但零增量的工具调用
 		// 要在此补一个 "{}" 增量，依据见 toolPending 的注释。
+		e.finishToolArgs(ev.Index)
 		if e.toolPending[ev.Index] {
 			delete(e.toolPending, ev.Index)
 			n := e.toolSlot(ev.Index)
@@ -206,6 +220,11 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 // usage 单独成帧是本协议 stream_options.include_usage 的约定形态：
 // 那一帧的 choices 为空数组。
 func (e *streamEncoder) finish() ([][]byte, error) {
+	// 关块帧没来就断流的工具调用在这里兜底校验：参数已发出，畸形的
+	// 只能计数报出。错误收尾也要报——错误之前下发的参数同样不可执行。
+	for idx := range e.toolArgs {
+		e.finishToolArgs(idx)
+	}
 	// 错误帧已自带 [DONE]，这里再发一套会让客户端读到两个终止。
 	if e.stopped || e.errored {
 		return nil, nil
@@ -273,6 +292,20 @@ func (e *streamEncoder) toolSlot(blockIndex int) int {
 	return n
 }
 
+// finishToolArgs 在关块（或断流兜底）时校验累积的 arguments。增量已发出、
+// 改写不了，畸形的只能计数报出（RawArgsPassNote），让客户端知道这次调用的
+// 参数不能安全执行，而不是看起来以空对象正常完成。
+func (e *streamEncoder) finishToolArgs(index int) {
+	raw, ok := e.toolArgs[index]
+	if !ok {
+		return
+	}
+	delete(e.toolArgs, index)
+	if _, valid := ir.NormalizeToolInput(raw); !valid {
+		e.badToolArgs++
+	}
+}
+
 func (e *streamEncoder) chunk(delta wireMessage, finish string) ([][]byte, error) {
 	frame, err := e.marshal(wireResponse{
 		ID: e.messageID(), Object: chunkObject, Created: e.created, Model: e.model,
@@ -320,10 +353,10 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			if b.ToolUse == nil {
 				continue
 			}
+			// arguments 是字符串槽位：畸形原文照转义嵌入，响应体不会因此
+			// 非法。不清空成 {}——那会让客户端把参数损坏的调用当无参调用
+			// 存进历史，损耗由 EncodeResponseLossy 报出。
 			args := b.ToolUse.Input
-			if !json.Valid([]byte(args)) {
-				args = "{}"
-			}
 			n := len(calls)
 			calls = append(calls, wireToolCall{
 				Index: &n, ID: b.ToolUse.ID, Type: "function",

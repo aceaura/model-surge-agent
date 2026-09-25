@@ -31,13 +31,15 @@ func (outboundCodec) Name() string { return Name }
 // 得先创建再引用，不是请求体里的逐块标记，无法从 IR 的 cache_control 直译。
 func (outboundCodec) Caps() codec.Capabilities {
 	return codec.Capabilities{
-		Thinking:      true,
-		ThinkingSig:   true,
-		ToolCallSig:   true,
-		Tools:         true,
-		Images:        true,
-		TopK:          true,
-		StopSequences: true,
+		Thinking:    true,
+		ThinkingSig: true,
+		ToolCallSig: true,
+		Tools:       true,
+		// functionCall.args 是 JSON 对象槽位。
+		ToolInputObject: true,
+		Images:          true,
+		TopK:            true,
+		StopSequences:   true,
 		// 官方限定至多 5 个 stopSequences，超出即 INVALID_ARGUMENT。
 		// 不截断会让同一个请求「只有 Gemini 坏了」，换上游即成功。
 		MaxStopSequences: 5,

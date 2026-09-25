@@ -47,6 +47,8 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	// 工具调用那一位本协议没有：gemini 把它挂在 functionCall 上，
 	// 本协议的 tool_use 里没有对应字段，所以一律丢弃并说明。
 	notes = append(notes, codec.DescribeResponseToolSignatureLoss(resp, Name, false)...)
+	// 畸形工具参数：input 是对象槽位，原文挪进 ir.RawArgsKey，报出挪键。
+	notes = append(notes, codec.DescribeResponseToolArgsLoss(resp, true)...)
 	// 本协议的响应信封没有执行档位的位置。上游报了就得说一声——
 	// 这一维决定计费，无声丢掉会让客户端按点的档位对账。
 	if resp != nil && resp.ServiceTier != "" {
@@ -69,13 +71,15 @@ func (outboundCodec) Name() string { return Name }
 
 func (outboundCodec) Caps() codec.Capabilities {
 	return codec.Capabilities{
-		Thinking:      true,
-		ThinkingSig:   true,
-		Tools:         true,
-		Images:        true,
-		CacheControl:  true,
-		TopK:          true,
-		StopSequences: true,
+		Thinking:    true,
+		ThinkingSig: true,
+		Tools:       true,
+		// tool_use.input 是 JSON 对象槽位。
+		ToolInputObject: true,
+		Images:          true,
+		CacheControl:    true,
+		TopK:            true,
+		StopSequences:   true,
 		// 官方限定至多 4 个 cache_control 断点，超出即 400。
 		CacheBreakpoints: 4,
 		// 开启 thinking 时 temperature / top_p 必须缺席。

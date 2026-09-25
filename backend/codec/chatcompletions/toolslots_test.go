@@ -1,7 +1,6 @@
 package chatcompletions
 
 import (
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -117,11 +116,12 @@ func TestPendingIsClearedAfterAnnounce(t *testing.T) {
 	}
 }
 
-// 判据 20：流结束时残缺入参兜成空对象。
+// 判据 20：流结束时残缺入参原样保留。
 //
-// 这一格与 Builder 改造直接相关：兜底要 Reset 之后再写 `{}`，只写不清会拼成
-// 残缺入参加 `{}`，仍然是非法 JSON。
-func TestTruncatedPendingFallsBackToEmptyObject(t *testing.T) {
+// 清空成 {} 会把一次截断的调用伪装成合法的无参调用——工具真会不带参数
+// 执行，那是一次真实副作用。原文留在 IR 里，聚合器的 IncompleteTools
+// 据此把这次响应判成不能当成功。
+func TestTruncatedPendingKeepsRaw(t *testing.T) {
 	d := newStreamDecoder()
 	// 只给残缺入参，name 始终不来：走 announcePending 那条路。
 	if _, err := feedDelta(t, d, `{"index":0,"id":"call_1","function":{"arguments":"{\"a\":"}}`); err != nil {
@@ -137,11 +137,11 @@ func TestTruncatedPendingFallsBackToEmptyObject(t *testing.T) {
 		t.Fatalf("want 一个工具调用块，got %+v", resp.Content)
 	}
 	input := resp.Content[0].ToolUse.Input
-	if input != "{}" {
-		t.Errorf("残缺入参兜底 = %q，want %q", input, "{}")
+	if input != `{"a":` {
+		t.Errorf("残缺入参 = %q，want 原文 %q", input, `{"a":`)
 	}
-	if !json.Valid([]byte(input)) {
-		t.Errorf("兜底之后入参仍不是合法 JSON：%q", input)
+	if incomplete := agg.IncompleteTools(); len(incomplete) != 1 {
+		t.Errorf("残缺入参没被 IncompleteTools 判出：%v", incomplete)
 	}
 }
 

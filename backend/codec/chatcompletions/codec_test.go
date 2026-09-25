@@ -379,8 +379,10 @@ func TestSlotWithoutNameIsAnnouncedAtClose(t *testing.T) {
 	if calls[0].Name != unknownToolName {
 		t.Errorf("name = %q, want the placeholder", calls[0].Name)
 	}
-	if calls[0].Input != "{}" {
-		t.Errorf("input = %q, truncated arguments must normalize to an empty object", calls[0].Input)
+	// 残缺入参原样保留：清空成 {} 会把截断伪装成一次合法的无参调用，
+	// 聚合器的 IncompleteTools 就再也判不出来。
+	if calls[0].Input != `{"a":` {
+		t.Errorf("input = %q, truncated arguments must be preserved verbatim", calls[0].Input)
 	}
 }
 

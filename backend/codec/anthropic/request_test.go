@@ -225,8 +225,9 @@ func TestEncodeDerivesBudgetFromEffort(t *testing.T) {
 }
 
 // 流被掐断时工具入参可能是残缺 JSON。发出去必须是合法对象，
-// 否则整个请求会被上游按语法错误拒掉。
-func TestEncodeRepairsTruncatedToolInput(t *testing.T) {
+// 否则整个请求会被上游按语法错误拒掉；但也不能清空成 {}——那会让工具
+// 不带参数执行。原文挪进 ir.RawArgsKey 键位：请求体合法，原文保真。
+func TestEncodeRewrapsTruncatedToolInput(t *testing.T) {
 	wire, err := EncodeRequest(&ir.Request{
 		Model: "claude-opus-5",
 		Messages: []ir.Message{{Role: ir.RoleAssistant, Content: []ir.Block{{
@@ -237,8 +238,14 @@ func TestEncodeRepairsTruncatedToolInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeRequest: %v", err)
 	}
-	if !strings.Contains(string(wire), `"input":{}`) {
-		t.Fatalf("truncated input must become an empty object: %s", wire)
+	if !strings.Contains(string(wire), `"input":{"_modelsurge_raw_args":`) {
+		t.Fatalf("truncated input must be rewrapped into %s: %s", ir.RawArgsKey, wire)
+	}
+	if !strings.Contains(string(wire), `\"pattern\":\"x`) {
+		t.Fatalf("原文片段丢了: %s", wire)
+	}
+	if strings.Contains(string(wire), `"input":{}`) {
+		t.Fatalf("残缺入参被清空成空对象，工具会不带参数执行: %s", wire)
 	}
 }
 

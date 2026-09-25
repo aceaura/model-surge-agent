@@ -189,17 +189,15 @@ func encodeMessage(m ir.Message, names map[string]string) ([]wireContent, error)
 			if b.ToolUse == nil {
 				return nil, fmt.Errorf("tool_use block without payload")
 			}
-			args := b.ToolUse.Input
-			// args 必须是合法 JSON 对象；流被掐断时可能残缺，
-			// 补成空对象比发语法错误的请求体更好。
-			if !json.Valid([]byte(args)) {
-				args = "{}"
-			}
+			// args 是 RawMessage 对象槽位：残缺/非对象参数直接放进去会
+			// 让整个请求体 marshal 失败或违反对象约束，静默换成 {} 则让
+			// 工具不带参数执行（真实副作用）。原文挪进 ir.RawArgsKey 保真。
+			args, _ := ir.NormalizeToolInput([]byte(b.ToolUse.Input))
 			// 回指靠 name，但 id 是本协议的可选字段：上游原生的 id 带上，
 			// 能让它原样穿过一轮，省掉下一轮解码时的合成。
 			part := wirePart{FunctionCall: &wireFunctionCall{
 				Name: b.ToolUse.Name,
-				Args: json.RawMessage(args),
+				Args: args,
 				ID:   outboundToolID(b.ToolUse.ID),
 			}}
 			// 签名写回 part 自身：本协议就是这样表达工具调用的推理凭据。

@@ -181,13 +181,10 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 		out.Type = blockToolUse
 		out.ID = b.ToolUse.ID
 		out.Name = b.ToolUse.Name
-		// 入参必须是合法 JSON 对象；流被中断时可能残缺，补成空对象
-		// 比发一个语法错误的请求体更好。
-		if json.Valid([]byte(b.ToolUse.Input)) {
-			out.Input = json.RawMessage(b.ToolUse.Input)
-		} else {
-			out.Input = json.RawMessage(`{}`)
-		}
+		// input 是 RawMessage 对象槽位：残缺/非对象参数直接放进去会炸成
+		// 语法错误的请求体，静默换成 {} 则让工具不带参数执行（真实副作用，
+		// 比 400 更糟）。规整把原文挪进 ir.RawArgsKey 键位保真。
+		out.Input, _ = ir.NormalizeToolInput([]byte(b.ToolUse.Input))
 	case ir.BlockToolResult:
 		if b.ToolResult == nil {
 			return out, false, fmt.Errorf("tool_result block without payload")

@@ -45,6 +45,9 @@ type streamEncoder struct {
 	// 一起推后。计数在 Notes() 收尾时报出。
 	droppedImages int
 	droppedFiles  int
+	// badToolArgs 是关块时判定畸形的函数调用入参数（增量已发出、改写
+	// 不了，只能计数），Notes() 报出。
+	badToolArgs int
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
 }
@@ -54,6 +57,9 @@ func (e *streamEncoder) Notes() []string {
 	notes := e.notes
 	if e.droppedImages > 0 || e.droppedFiles > 0 {
 		notes = append(notes, codec.MediaOutputDropNote(e.droppedImages, e.droppedFiles))
+	}
+	if e.badToolArgs > 0 {
+		notes = append(notes, ir.RawArgsPassNote(e.badToolArgs))
 	}
 	return codec.DedupeNotes(notes)
 }
@@ -283,6 +289,14 @@ func (e *streamEncoder) closeBlockAs(index int, status string) ([][]byte, error)
 		return nil, nil
 	}
 	item.closed = true
+	// 关块时校验累积的入参：增量已发出、改写不了，畸形的（多为
+	// max_tokens 截断）只能计数报出，让客户端知道这次调用的参数不能
+	// 安全执行，而不是看起来以空对象正常完成。
+	if item.kind == ir.BlockToolUse {
+		if _, valid := ir.NormalizeToolInput([]byte(item.args)); !valid {
+			e.badToolArgs++
+		}
+	}
 
 	var out [][]byte
 	// part 级终止帧，官方顺序是 *.done -> content_part.done -> output_item.done。
@@ -580,10 +594,10 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			if b.ToolUse == nil {
 				continue
 			}
+			// arguments 是字符串槽位：畸形原文照转义嵌入，响应体不会因此
+			// 非法。不清空成 {}——那会让客户端把参数损坏的调用当无参调用
+			// 存进历史，损耗由 EncodeResponseLossy 报出。
 			args := b.ToolUse.Input
-			if !json.Valid([]byte(args)) {
-				args = "{}"
-			}
 			out.Output = append(out.Output, wireRespItem{
 				Type: itemFunctionCall, Status: "completed",
 				CallID: b.ToolUse.ID, Name: b.ToolUse.Name, Arguments: args,
