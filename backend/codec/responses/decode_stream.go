@@ -211,6 +211,7 @@ func (d *streamDecoder) start(ev wireStreamEvent) []ir.Event {
 		out.MessageID = ev.Response.ID
 		out.Model = ev.Response.Model
 		out.ServiceTier = ev.Response.ServiceTier
+		out.Created = ev.Response.CreatedAt
 		d.serviceTier = ev.Response.ServiceTier
 	}
 	return []ir.Event{out}
@@ -542,6 +543,7 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 		StopReason:  stopReasonFor(&w),
 		Content:     []ir.Block{},
 		ServiceTier: w.ServiceTier,
+		Created:     w.CreatedAt,
 	}
 	if w.Usage != nil {
 		out.Usage = convertUsage(*w.Usage)

@@ -239,12 +239,15 @@ type wireInputAudio struct {
 
 // wireResponse 是 response 对象，出现在非流式响应与流式的 response.* 帧里。
 type wireResponse struct {
-	ID     string         `json:"id,omitempty"`
-	Object string         `json:"object,omitempty"`
-	Model  string         `json:"model,omitempty"`
-	Status string         `json:"status,omitempty"`
-	Output []wireRespItem `json:"output,omitempty"`
-	Usage  *wireUsage     `json:"usage,omitempty"`
+	ID     string `json:"id,omitempty"`
+	Object string `json:"object,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Status string `json:"status,omitempty"`
+	// CreatedAt 是上游回显的创建时间（Unix 秒）。零值=上游没给，
+	// 出站才回退本地钟（口径同 ir.Response.Created）。
+	CreatedAt int64          `json:"created_at,omitempty"`
+	Output    []wireRespItem `json:"output,omitempty"`
+	Usage     *wireUsage     `json:"usage,omitempty"`
 	// IncompleteDetails 的 reason 是本协议表达「因长度截断」的位置。
 	IncompleteDetails *wireIncomplete `json:"incomplete_details,omitempty"`
 	Error             *wireError      `json:"error,omitempty"`

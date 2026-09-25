@@ -149,7 +149,7 @@ func (d *streamDecoder) ensureStarted(chunk wireResponse) []ir.Event {
 	d.started = true
 	d.messageID = chunk.ID
 	return []ir.Event{{Type: ir.EvMessageStart, MessageID: chunk.ID, Model: chunk.Model,
-		ServiceTier: chunk.ServiceTier}}
+		ServiceTier: chunk.ServiceTier, Created: chunk.Created}}
 }
 
 func (d *streamDecoder) decodeDelta(delta wireMessage) ([]ir.Event, error) {
@@ -407,7 +407,7 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 		return nil, nil, convertError(0, &env.Error)
 	}
 	out := &ir.Response{ID: w.ID, Model: w.Model, Content: []ir.Block{},
-		ServiceTier: w.ServiceTier}
+		ServiceTier: w.ServiceTier, Created: w.Created}
 	if w.Usage != nil {
 		out.Usage = convertUsage(*w.Usage)
 	}

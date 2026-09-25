@@ -53,5 +53,10 @@ type Event struct {
 	Usage        *Usage `json:"usage,omitempty"`
 	MessageID    string `json:"message_id,omitempty"`
 	Model        string `json:"model,omitempty"`
-	Err          *Error `json:"error,omitempty"`
+	// Created 是上游回显的创建时间（chat created / responses created_at，
+	// Unix 秒），只在 EvMessageStart 上有意义。零值=上游没给，出站才回退
+	// 本地钟——否则同族往返会把上游的真实创建时间换成代理本地钟，
+	// 客户端按 created 做幂等/排序会拿到假数据。
+	Created int64  `json:"created,omitempty"`
+	Err     *Error `json:"error,omitempty"`
 }

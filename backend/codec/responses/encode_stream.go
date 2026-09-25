@@ -3,6 +3,7 @@ package responses
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/aceaura/model-surge-agent/backend/codec"
 	"github.com/aceaura/model-surge-agent/backend/ir"
@@ -21,6 +22,9 @@ type streamEncoder struct {
 	// errored 表示流已用 error 帧收尾。此后不再发 completed/incomplete，
 	// 也丢弃迟到的增量：那个终止帧会带上残缺内容并标成 completed。
 	errored bool
+	// created 是写进每个 response 对象的 created_at。构造时取本地钟，
+	// 上游在 EvMessageStart 给过真实创建时间就原值覆盖（口径同 ir）。
+	created int64
 
 	// items 是已开启的条目，按 IR 块索引定位。
 	items map[int]*openItem
@@ -69,7 +73,7 @@ type openItem struct {
 }
 
 func newStreamEncoder() *streamEncoder {
-	return &streamEncoder{items: map[int]*openItem{}}
+	return &streamEncoder{items: map[int]*openItem{}, created: time.Now().Unix()}
 }
 
 func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
@@ -83,6 +87,10 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		// 档位要在 snapshot 之前收下：created 帧里的 response 对象就该带它。
 		if ev.ServiceTier != "" {
 			e.serviceTier = ev.ServiceTier
+		}
+		// 上游给过创建时间就原值回写（覆盖构造时的本地钟）；没给才用本地钟。
+		if ev.Created != 0 {
+			e.created = ev.Created
 		}
 		// Anthropic 上游在这一帧给 input_tokens，而本协议只在终止帧报用量，
 		// 不在这里收下就永远丢了。
@@ -417,6 +425,7 @@ func (e *streamEncoder) snapshot(status string) *wireResponse {
 		Object:      "response",
 		Model:       e.model,
 		Status:      status,
+		CreatedAt:   e.created,
 		ServiceTier: e.serviceTier,
 	}
 	for _, index := range e.order {
@@ -509,11 +518,17 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 	}
 	status, incomplete := renderStatus(resp.StopReason)
 	u := renderUsage(resp.Usage)
+	// 上游给过创建时间就原值回写；没给才回退本地钟（同 chat 侧口径）。
+	created := resp.Created
+	if created == 0 {
+		created = time.Now().Unix()
+	}
 	out := wireResponse{
 		ID:                resp.ID,
 		Object:            "response",
 		Model:             resp.Model,
 		Status:            status,
+		CreatedAt:         created,
 		IncompleteDetails: incomplete,
 		Usage:             &u,
 		ServiceTier:       resp.ServiceTier,

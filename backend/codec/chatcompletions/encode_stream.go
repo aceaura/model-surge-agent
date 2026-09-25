@@ -35,7 +35,7 @@ type streamEncoder struct {
 	// 客户端只从 delta 拼参数，零增量（无参工具是常态）会拼出 ""，
 	// json.loads 直接崩，关块时要补一个 "{}"。
 	toolPending map[int]bool
-	stopReason     ir.StopReason
+	stopReason  ir.StopReason
 	// serviceTier 是上游回的执行档位，一旦收到就挂在此后的每个 chunk 上。
 	// 不回填已发出的帧——发出去的改不了。
 	serviceTier string
@@ -87,6 +87,10 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		e.model = ev.Model
 		if ev.ServiceTier != "" {
 			e.serviceTier = ev.ServiceTier
+		}
+		// 上游给过创建时间就原值逐帧回写（覆盖构造时的本地钟）；没给才用本地钟。
+		if ev.Created != 0 {
+			e.created = ev.Created
 		}
 		// Anthropic 上游在这一帧给 input_tokens，而本协议只有末尾一帧 usage，
 		// 不在这里收下就永远丢了。
@@ -342,10 +346,16 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 	msg.ToolCalls = calls
 
 	u := renderUsage(resp.Usage)
+	// 上游给过创建时间就原值回写；没给才回退本地钟——同族往返不能把上游的
+	// 真实 created 换成代理本地时间（客户端按它做幂等/排序）。
+	created := resp.Created
+	if created == 0 {
+		created = time.Now().Unix()
+	}
 	out := wireResponse{
 		ID:      resp.ID,
 		Object:  "chat.completion",
-		Created: time.Now().Unix(),
+		Created: created,
 		Model:   resp.Model,
 		Choices: []wireChoice{{
 			Index: 0, Message: &msg, FinishReason: renderFinishReason(resp.StopReason),

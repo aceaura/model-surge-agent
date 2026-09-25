@@ -103,6 +103,9 @@ func (a *Aggregator) Add(ev Event) {
 		a.resp.ID = ev.MessageID
 		a.resp.Model = ev.Model
 		a.mergeServiceTier(ev.ServiceTier)
+		if ev.Created != 0 {
+			a.resp.Created = ev.Created
+		}
 		if ev.Usage != nil {
 			a.mergeUsage(*ev.Usage)
 		}
