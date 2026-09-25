@@ -76,6 +76,10 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	// DescribeLossy 报出。
 	out.Background = w.Background
 	out.Truncation = w.Truncation
+	out.MaxToolCalls = w.MaxToolCalls
+	if w.StreamOptions != nil {
+		out.IncludeObfuscation = w.StreamOptions.IncludeObfuscation
+	}
 	out.ClientMetadata = w.Metadata
 	out.ServiceTier = w.ServiceTier
 	out.ParallelToolCalls = w.ParallelToolCalls
@@ -517,10 +521,11 @@ func decodeTextFormat(w *wireTextFormat) *ir.ResponseFormat {
 		return &ir.ResponseFormat{Kind: ir.ResponseFormatJSON}
 	case "json_schema":
 		return &ir.ResponseFormat{
-			Kind:   ir.ResponseFormatSchema,
-			Name:   w.Name,
-			Schema: string(w.Schema),
-			Strict: w.Strict,
+			Kind:        ir.ResponseFormatSchema,
+			Name:        w.Name,
+			Description: w.Description,
+			Schema:      string(w.Schema),
+			Strict:      w.Strict,
 		}
 	default:
 		return nil

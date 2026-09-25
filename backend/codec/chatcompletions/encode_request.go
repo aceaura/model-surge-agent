@@ -24,6 +24,11 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 		Stream:        true,
 		StreamOptions: &wireStreamOptions{IncludeUsage: true},
 	}
+	// 混淆开关只在客户端显式表态时写：显式 false 是「关掉上游默认的混淆
+	// 保护」，与没提不是一回事，替客户端造键就是替它表态。
+	if req.IncludeObfuscation != nil {
+		w.StreamOptions.IncludeObfuscation = req.IncludeObfuscation
+	}
 	if req.MaxTokens > 0 {
 		n := req.MaxTokens
 		w.MaxTokens = &n
@@ -418,9 +423,10 @@ func encodeResponseFormat(rf *ir.ResponseFormat) *wireResponseFormat {
 		return &wireResponseFormat{
 			Type: "json_schema",
 			JSONSchema: &wireJSONSchema{
-				Name:   rf.Name,
-				Schema: json.RawMessage(rf.Schema),
-				Strict: rf.Strict,
+				Name:        rf.Name,
+				Description: rf.Description,
+				Schema:      json.RawMessage(rf.Schema),
+				Strict:      rf.Strict,
 			},
 		}
 	}

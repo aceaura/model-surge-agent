@@ -686,6 +686,12 @@ func describeParamsLossy(req *ir.Request, name string, caps Capabilities, note, 
 				note("response_format", "no structured output parameter, the response may not be JSON")
 			}
 		}
+		// json_schema.description 只有 OpenAI 两系有槽位：anthropic 的
+		// output_config.format 与 gemini 的 responseSchema 都没有这一键，
+		// 跨族时 schema 的自然语言说明到不了模型面前。
+		if rf.Description != "" && name != ProtocolChatCompletions && name != ProtocolResponses {
+			note("response_format.description", "the target protocol's structured-output slot has no description key, the schema's natural-language hint will not reach the model")
+		}
 	}
 	if req.Verbosity != "" && !caps.Verbosity {
 		note("verbosity", "no verbosity parameter")
@@ -707,6 +713,16 @@ func describeParamsLossy(req *ir.Request, name string, caps Capabilities, note, 
 	}
 	if req.Truncation != "" && !caps.Truncation {
 		note("truncation", "no upstream-side truncation parameter")
+	}
+	if req.MaxToolCalls != nil && !caps.MaxToolCalls {
+		// 工具调用次数上限是 responses 一族专属：其他三族没有计数闸门，
+		// 客户端要的安全上限在上游侧不再生效。
+		note("max_tool_calls", "no tool-call budget, the model may make more tool calls than the client allowed")
+	}
+	if req.IncludeObfuscation != nil && !caps.StreamObfuscation {
+		// 流式混淆开关是 OpenAI 两系专属：其余两族的流式帧没有混淆机制，
+		// 客户端关保护的显式表态无从传达。
+		note("stream_options.include_obfuscation", "no stream-obfuscation switch")
 	}
 	if len(req.ClientMetadata) > 0 && !caps.ClientMetadata {
 		if name == ProtocolAnthropic {

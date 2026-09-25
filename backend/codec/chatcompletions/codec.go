@@ -99,12 +99,15 @@ func (outboundCodec) Caps() codec.Capabilities {
 		StopSequences: true,
 		// 官方 stop 数组至多 4 项，超出即 400。
 		MaxStopSequences: 4,
-		// 本协议是这批调参字段的来源协议，除三个 responses 专有项
-		// （verbosity / include / truncation）外全部承载。
+		// 本协议是这批调参字段的来源协议，除四个 responses 专有项
+		// （verbosity / include / truncation / max_tool_calls）外全部承载。
 		Penalties:  true,
 		Seed:       true,
 		Candidates: true,
 		LogProbs:   true,
+		// stream_options.include_obfuscation 是本协议的流混淆开关
+		//（官方为防流量分析在 SSE 帧间插入噪声帧）。
+		StreamObfuscation: true,
 		// 官方 metadata：至多 16 对客户端键值，随响应回显。
 		ClientMetadata: true,
 		// image_url.detail 决定识别精度与计费档位。

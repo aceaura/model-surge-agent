@@ -589,6 +589,15 @@ type Request struct {
 	Background *bool `json:"background,omitempty"`
 	// Truncation 是上游侧的历史截断策略（responses 的 truncation）。
 	Truncation string `json:"truncation,omitempty"`
+	// MaxToolCalls 单轮响应允许的工具调用总上限（responses 一族的
+	// max_tool_calls）。三态指针：nil = 客户端没提。其余三族没有计数
+	// 闸门，客户端要的安全上限跨族不再生效，由诊断报出。
+	MaxToolCalls *int `json:"max_tool_calls,omitempty"`
+	// IncludeObfuscation 流式混淆开关（OpenAI 两系的 stream_options.
+	// include_obfuscation）。三态指针：显式 false 是「关掉上游默认开着的
+	// 混淆保护」，与没提不是一回事，两态布尔会把显式 false 吞回缺省。
+	// anthropic 与 gemini 的流式帧没有混淆机制，跨族由诊断报出。
+	IncludeObfuscation *bool `json:"include_obfuscation,omitempty"`
 	// ClientMetadata 是客户端自定义元数据。与 Metadata 分开：后者只承载
 	// user_id 且被翻译成各协议的用户标识字段，混在一起会让 user_id
 	// 既作为用户标识、又作为一条普通元数据发出去两次。
@@ -637,6 +646,11 @@ type ResponseFormat struct {
 	// Name 与 Schema 仅在 Kind 为 ResponseFormatSchema 时有意义。
 	Name   string `json:"name,omitempty"`
 	Schema string `json:"schema,omitempty"`
+	// Description schema 的自然语言说明（OpenAI 两系的 json_schema.
+	// description，chat 嵌套在 response_format.json_schema 下、responses
+	// 平铺在 text.format 下，同键同义）。anthropic 的 output_config.format
+	// 与 gemini 的 responseSchema 都没有这一键，跨族丢弃由诊断报出。
+	Description string `json:"description,omitempty"`
 	// Strict 要求上游严格遵循 schema。三态指针：各家默认值不同，
 	// 客户端没表态时不替它选。
 	Strict *bool `json:"strict,omitempty"`
@@ -748,6 +762,9 @@ func (r *Request) Clone() *Request {
 		}
 	}
 	out.Include = append([]string(nil), r.Include...)
+	out.IncludeUsage = cloneBool(r.IncludeUsage)
+	out.MaxToolCalls = cloneInt(r.MaxToolCalls)
+	out.IncludeObfuscation = cloneBool(r.IncludeObfuscation)
 	if r.ResponseFormat != nil {
 		rf := *r.ResponseFormat
 		rf.Strict = cloneBool(r.ResponseFormat.Strict)

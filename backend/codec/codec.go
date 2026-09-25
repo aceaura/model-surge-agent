@@ -158,6 +158,14 @@ type Capabilities struct {
 	Background     bool
 	Truncation     bool
 	ClientMetadata bool
+	// MaxToolCalls 为真表示本协议有「单轮工具调用总上限」槽位（responses
+	// 的 max_tool_calls）。其余三族没有计数闸门：客户端要的安全上限跨族
+	// 不再生效，模型可能调更多轮工具，报出而不是静默。
+	MaxToolCalls bool
+	// StreamObfuscation 为真表示本协议的流式帧有混淆机制及其开关
+	// （OpenAI 两系的 stream_options.include_obfuscation）。anthropic 与
+	// gemini 的流没有混淆概念，显式表态（尤其显式关）跨族无从传达。
+	StreamObfuscation bool
 
 	// Citations 为真表示正文的来源标注有槽位。anthropic 是 text.citations，
 	// chat_completions 是 message.annotations，responses 是

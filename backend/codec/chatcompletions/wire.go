@@ -65,15 +65,22 @@ type wireResponseFormat struct {
 }
 
 type wireJSONSchema struct {
-	Name   string          `json:"name,omitempty"`
-	Schema json.RawMessage `json:"schema,omitempty"`
-	Strict *bool           `json:"strict,omitempty"`
+	Name string `json:"name,omitempty"`
+	// Description schema 的自然语言说明（与 responses 的 text.format.
+	// description 同键同义，位置嵌套在 json_schema 下）。
+	Description string          `json:"description,omitempty"`
+	Schema      json.RawMessage `json:"schema,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
 }
 
 // wireStreamOptions 的 include_usage 决定上游是否发 usage 帧。
 // 出站一律置 true：用量要上报给调度层，缺了冷却与配额判断就失真。
 type wireStreamOptions struct {
 	IncludeUsage bool `json:"include_usage"`
+	// IncludeObfuscation 流式混淆开关。三态指针：显式 false 是「关掉上游
+	// 默认开着的混淆保护」，与没提语义不同，两态布尔会把显式 false 吞回
+	// 缺省。
+	IncludeObfuscation *bool `json:"include_obfuscation,omitempty"`
 }
 
 // wireMessage 同时用于请求消息、非流式响应的 message 与流式的 delta。

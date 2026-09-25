@@ -31,6 +31,8 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	if w.StreamOptions != nil {
 		inc := w.StreamOptions.IncludeUsage
 		out.IncludeUsage = &inc
+		// 混淆开关三态透传：没提保持 nil，出站不替客户端造键。
+		out.IncludeObfuscation = w.StreamOptions.IncludeObfuscation
 	}
 	// max_completion_tokens 是新写法，同时出现时以它为准。
 	if w.MaxCompletionTokens != nil {
@@ -423,6 +425,7 @@ func decodeResponseFormat(w *wireResponseFormat) *ir.ResponseFormat {
 		out := &ir.ResponseFormat{Kind: ir.ResponseFormatSchema}
 		if w.JSONSchema != nil {
 			out.Name = w.JSONSchema.Name
+			out.Description = w.JSONSchema.Description
 			out.Schema = string(w.JSONSchema.Schema)
 			out.Strict = w.JSONSchema.Strict
 		}

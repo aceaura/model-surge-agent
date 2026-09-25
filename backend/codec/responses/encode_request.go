@@ -68,6 +68,12 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	// 官方 background 与二者都不相容，写回去是保证 400 的矛盾请求。
 	// 丢弃由 DescribeLossy 报出（见 wireRequest.Background 注释）。
 	w.Truncation = req.Truncation
+	w.MaxToolCalls = req.MaxToolCalls
+	// 混淆开关只在客户端显式表态时写：显式 false 是「关掉上游默认的混淆
+	// 保护」，与没提不是一回事，替客户端造键就是替它表态。
+	if req.IncludeObfuscation != nil {
+		w.StreamOptions = &wireStreamOptions{IncludeObfuscation: req.IncludeObfuscation}
+	}
 	w.Metadata = req.ClientMetadata
 	w.ServiceTier = req.ServiceTier
 	w.ParallelToolCalls = req.ParallelToolCalls
@@ -405,10 +411,11 @@ func encodeText(rf *ir.ResponseFormat, verbosity string) *wireText {
 	case rf == nil:
 	case rf.Kind == ir.ResponseFormatSchema && rf.Schema != "":
 		out.Format = &wireTextFormat{
-			Type:   "json_schema",
-			Name:   rf.Name,
-			Schema: json.RawMessage(rf.Schema),
-			Strict: rf.Strict,
+			Type:        "json_schema",
+			Name:        rf.Name,
+			Description: rf.Description,
+			Schema:      json.RawMessage(rf.Schema),
+			Strict:      rf.Strict,
 		}
 	default:
 		// schema 形态缺 schema 原文时降级成 json_object：客户端要的最低限度

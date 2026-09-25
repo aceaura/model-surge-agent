@@ -183,6 +183,11 @@ func TestUnsupportedParamsAreReportedLossy(t *testing.T) {
 		{"include", func(r *ir.Request) { r.Include = []string{"x"} }},
 		{"truncation", func(r *ir.Request) { r.Truncation = "auto" }},
 		{"metadata", func(r *ir.Request) { r.ClientMetadata = map[string]string{"k": "v"} }},
+		{"max_tool_calls", func(r *ir.Request) { n := 3; r.MaxToolCalls = &n }},
+		{"stream_options.include_obfuscation", func(r *ir.Request) {
+			v := true
+			r.IncludeObfuscation = &v
+		}},
 	}
 	for _, c := range cases {
 		for _, out := range outboundNames() {
@@ -245,6 +250,10 @@ func supportsField(t *testing.T, proto, field string) bool {
 		return caps.Truncation
 	case "metadata":
 		return caps.ClientMetadata
+	case "max_tool_calls":
+		return caps.MaxToolCalls
+	case "stream_options.include_obfuscation":
+		return caps.StreamObfuscation
 	default:
 		t.Fatalf("未知字段 %s——新增调参字段必须在这里给出能力位映射", field)
 		return false

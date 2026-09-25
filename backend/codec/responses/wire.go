@@ -34,12 +34,16 @@ type wireRequest struct {
 	// Background 后台运行模式。只进不出：解码收进 IR 供诊断报出，出站
 	// 永不写键——本服务对上游一律 stream:true + store:false，与官方
 	// background 的前置条件相反，写回去是保证被上游 400 的矛盾请求。
-	Background        *bool             `json:"background,omitempty"`
-	Truncation        string            `json:"truncation,omitempty"`
-	Metadata          map[string]string `json:"metadata,omitempty"`
-	ServiceTier       string            `json:"service_tier,omitempty"`
-	ParallelToolCalls *bool             `json:"parallel_tool_calls,omitempty"`
-	TopLogProbs       *int              `json:"top_logprobs,omitempty"`
+	Background *bool  `json:"background,omitempty"`
+	Truncation string `json:"truncation,omitempty"`
+	// MaxToolCalls 单轮响应允许的工具调用总上限。
+	MaxToolCalls *int `json:"max_tool_calls,omitempty"`
+	// StreamOptions 流式选项；本族目前只有 include_obfuscation。
+	StreamOptions     *wireStreamOptions `json:"stream_options,omitempty"`
+	Metadata          map[string]string  `json:"metadata,omitempty"`
+	ServiceTier       string             `json:"service_tier,omitempty"`
+	ParallelToolCalls *bool              `json:"parallel_tool_calls,omitempty"`
+	TopLogProbs       *int               `json:"top_logprobs,omitempty"`
 
 	// 以下四个字段把对话状态托管在上游那一侧，本服务表达不了：请求会被
 	// 分发到任意一个目标账号，那里没有这条 id 指向的历史。收下再忽略等于
@@ -64,10 +68,19 @@ type wireText struct {
 // wireTextFormat 的 type 取 text / json_object / json_schema。
 // 与 Chat Completions 不同：schema 三项平铺在这一层，不再嵌一个 json_schema 对象。
 type wireTextFormat struct {
-	Type   string          `json:"type"`
-	Name   string          `json:"name,omitempty"`
-	Schema json.RawMessage `json:"schema,omitempty"`
-	Strict *bool           `json:"strict,omitempty"`
+	Type string `json:"type"`
+	Name string `json:"name,omitempty"`
+	// Description schema 的自然语言说明（与 chat 的 json_schema.description
+	// 同键同义，位置平铺）。
+	Description string          `json:"description,omitempty"`
+	Schema      json.RawMessage `json:"schema,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
+}
+
+// wireStreamOptions Responses 的流式选项。IncludeObfuscation 三态指针：
+// 显式 false 是「关掉上游默认开着的混淆保护」，与没提语义不同。
+type wireStreamOptions struct {
+	IncludeObfuscation *bool `json:"include_obfuscation,omitempty"`
 }
 
 type wireTool struct {
