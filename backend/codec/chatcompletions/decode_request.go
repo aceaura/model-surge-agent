@@ -76,6 +76,28 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 		return nil, badRequest(fmt.Sprintf("tool_choice: %v", err))
 	}
 	out.ToolChoice = choice
+	// 废弃形态折进现代槽位：functions 条目就是扁平的 {name,description,
+	// parameters}；function_call 的 none/auto/{"name":...} 与 tool_choice
+	// 同值集。现代键已给时现代键胜出（官方语义 tools 取代 functions）。
+	for _, f := range w.Functions {
+		var fd struct {
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			Parameters  json.RawMessage `json:"parameters"`
+		}
+		if json.Unmarshal(f, &fd) == nil && fd.Name != "" {
+			out.Tools = append(out.Tools, ir.Tool{
+				Name: fd.Name, Description: fd.Description, Schema: string(fd.Parameters),
+			})
+		}
+	}
+	if out.ToolChoice == nil && len(w.FunctionCall) > 0 {
+		fc, err := decodeToolChoice(w.FunctionCall)
+		if err != nil {
+			return nil, badRequest(fmt.Sprintf("function_call: %v", err))
+		}
+		out.ToolChoice = fc
+	}
 
 	out.PresencePenalty = w.PresencePenalty
 	out.FrequencyPenalty = w.FrequencyPenalty
@@ -443,6 +465,16 @@ func decodeToolChoice(raw json.RawMessage) (*ir.ToolChoice, error) {
 		return nil, fmt.Errorf("must be a string or a function object: %w", err)
 	}
 	if obj.Function.Name == "" {
+		// 废弃 function_call 的指名形态是扁平 {"name":"x"}（无 type、无
+		// function 包装）：同值集折进现代槽位时从这一支命中。带 type 而无
+		// function.name 的仍按畸形拒绝——那是现代键写坏了，不是废弃形态。
+		var flat struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(raw, &flat) == nil && flat.Type == "" && flat.Name != "" {
+			return &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: flat.Name}, nil
+		}
 		return nil, fmt.Errorf("function.name is required")
 	}
 	return &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: obj.Function.Name}, nil

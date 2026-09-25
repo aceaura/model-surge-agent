@@ -505,6 +505,9 @@ var requiredIndexFields = map[string][]string{
 	evCustomToolInputDone:       {"output_index"},
 	evReasoningSummaryText:      {"output_index", "summary_index"},
 	evReasoningSummaryTextDone:  {"output_index", "summary_index"},
+	// part.added 由本仓编码器合成（见 openBlock 的思考块分支）：summary_index
+	// 恒 0，omitempty 会吞掉零值键，靠这张表补写。
+	evReasoningSummaryPartAdded: {"output_index", "summary_index"},
 	evReasoningSummaryPartDone:  {"output_index", "summary_index"},
 	evReasoningTextDelta:        {"output_index"},
 	evReasoningTextDone:         {"output_index"},

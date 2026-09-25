@@ -36,6 +36,7 @@ func TestRenderStopReasonCoversEveryIRValue(t *testing.T) {
 	for _, s := range []ir.StopReason{
 		ir.StopEndTurn, ir.StopMaxTokens, ir.StopStopSequence,
 		ir.StopToolUse, ir.StopContentFilter, ir.StopContextWindow,
+		ir.StopMaxMessages,
 	} {
 		if got := renderStopReason(s); got == "" {
 			t.Errorf("renderStopReason(%q) returned empty", s)

@@ -22,6 +22,10 @@ type wireRequest struct {
 	// effort 子字段暂不解码（IR 没有 anthropic 输出级 effort 的对应维度，
 	// 那是 #28 思考现代化的事）。
 	OutputConfig *wireOutputConfig `json:"output_config,omitempty"`
+	// OutputFormat beta 的请求级结构化输出旧槽位（官方 BetaJSONOutputFormatParam）：
+	// 与 output_config.format 同形同判据，是同一诉求的废弃写法。只入不出——
+	// 编码恒写新槽 output_config.format，不产出旧键。
+	OutputFormat *wireJSONOutputFormat `json:"output_format,omitempty"`
 	// CacheControl 顶层缓存便捷糖：自动给最后一个可缓存块打断点。
 	// 不展开成块级，原样进出（理由见 ir.Request.TopCacheCtl）。
 	CacheControl *wireCacheControl `json:"cache_control,omitempty"`
@@ -393,6 +397,9 @@ const (
 	deltaSignature = "signature_delta"
 	// deltaCitations 每帧只带一条引用（上游的形状如此），多条时逐帧发送。
 	deltaCitations = "citations_delta"
+	// deltaCompaction 服务端上下文压缩回执（官方 compaction_delta）：
+	// encrypted_content 要求下一轮逐字回传，IR 没有槽位，解码分账计数。
+	deltaCompaction = "compaction_delta"
 )
 
 type wireError struct {

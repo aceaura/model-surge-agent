@@ -19,7 +19,12 @@ type wireRequest struct {
 	// ToolChoice 可以是字符串枚举或指定函数的对象。
 	ToolChoice      json.RawMessage `json:"tool_choice,omitempty"`
 	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
-	User            string          `json:"user,omitempty"`
+	// Functions / FunctionCall 官方废弃多年的请求级形态（Deprecated in
+	// favor of tools/tool_choice）。老客户端还在用：解码折进现代槽位
+	//（声明与指名不丢），编码不产出废弃键。
+	Functions    []json.RawMessage `json:"functions,omitempty"`
+	FunctionCall json.RawMessage   `json:"function_call,omitempty"`
+	User         string            `json:"user,omitempty"`
 	// Metadata 客户端自定义键值（官方至多 16 对，随响应回显）。解码进
 	// ir.Request.ClientMetadata，同族回写原样发。
 	Metadata map[string]string `json:"metadata,omitempty"`

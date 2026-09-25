@@ -678,10 +678,11 @@ func convertFinishReason(s string) ir.StopReason {
 // 归到 stop：客户端从 stop 也能正确判断回合结束。
 func renderFinishReason(s ir.StopReason) string {
 	switch s {
-	case ir.StopMaxTokens, ir.StopContextWindow:
-		// context_window 是输入占满窗口挤断输出，本协议没有对应值。
-		// 取 length 而非 stop：两者都表示输出不完整，客户端至少不会把
-		// 半截结果当成最终答案（stop 会）。真正的语义无法保留。
+	case ir.StopMaxTokens, ir.StopContextWindow, ir.StopMaxMessages:
+		// context_window 是输入占满窗口挤断输出，max_messages 是消息数
+		// 上限，本协议都没有对应值。取 length 而非 stop：都表示输出不
+		// 完整，客户端至少不会把半截结果当成最终答案（stop 会）。
+		// 真正的语义无法保留。
 		return "length"
 	case ir.StopToolUse:
 		return "tool_calls"

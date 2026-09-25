@@ -18,6 +18,10 @@ type streamDecoder struct {
 	// droppedUnknown 不认识的事件型/delta 型计数：静默丢弃会让官方新增的
 	// 事件型（或代理上游乱发的类型）完全不可见，经 Notes() 报出。
 	droppedUnknown int
+	// droppedCompaction 服务端压缩回执帧计数：官方类型、语义清楚，但
+	// encrypted_content 要求下一轮逐字回传而 IR 没有槽位。与 droppedUnknown
+	// 分账——混进去会把「认识但装不下」误报成「不认识」。
+	droppedCompaction int
 }
 
 func newStreamDecoder() *streamDecoder { return &streamDecoder{} }
@@ -30,6 +34,11 @@ func (d *streamDecoder) Notes() []string {
 		notes = append(notes, fmt.Sprintf(
 			"ignored %d stream event(s) or delta(s) of a type this decoder does not know: the wire carried types outside the documented set, their payload was dropped because no mapping exists", d.droppedUnknown))
 		d.droppedUnknown = 0
+	}
+	if d.droppedCompaction > 0 {
+		notes = append(notes, fmt.Sprintf(
+			"dropped %d compaction delta(s): the upstream's server-side context compaction receipt must be round-tripped verbatim on the next turn, but no protocol slot carries it through the relay", d.droppedCompaction))
+		d.droppedCompaction = 0
 	}
 	return codec.DedupeNotes(notes)
 }
@@ -154,6 +163,12 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 				return nil, nil
 			}
 			return []ir.Event{{Type: ir.EvCitation, Index: ev.Index, Citations: cs}}, nil
+		case deltaCompaction:
+			// 服务端压缩回执：encrypted_content 官方要求下一轮逐字回传，
+			// IR 没有槽位。这是「认识但装不下」，与「连语义都不认识的型」
+			// 分账计数，两条注记各报各的。
+			d.droppedCompaction++
+			return nil, nil
 		default:
 			// 未知 delta 类型：跳过而非报错，上游新增字段不该让整个流失败。
 			// 但计数经 Notes() 报出——静默丢弃会让新 delta 型完全不可见。
@@ -370,6 +385,11 @@ func renderStopReason(s ir.StopReason) string {
 		// 同族原值带回：外族上游给不出这一档，只有 anthropic 入站的
 		// 往返会走到这里。
 		return "model_context_window_exceeded"
+	case ir.StopMaxMessages:
+		// responses 的消息数上限档，本协议无对应值。取 max_tokens 而非
+		// end_turn：两者都表示输出不完整，客户端至少不会把半截结果当成
+		// 最终答案（end_turn 会），只是上限的维度不同。
+		return "max_tokens"
 	default:
 		return ""
 	}

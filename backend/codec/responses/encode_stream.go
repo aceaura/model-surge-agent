@@ -444,6 +444,23 @@ func (e *streamEncoder) openBlock(index int, kind ir.BlockType, block *ir.Block)
 		return nil, err
 	}
 	if kind != ir.BlockText && kind != ir.BlockRefusal {
+		if kind == ir.BlockThinking {
+			// summary part 生命周期帧必须齐全：Codex 类严格客户端只在见到
+			// reasoning_summary_part.added 之后才渲染后续 summary delta，缺
+			// 这帧整条思考摘要在客户端不可见（sub2api 与 cc-switch 的
+			// responses 桥都显式合成这一帧）。summary_index 恒 0：IR 的
+			// 一个 thinking 块只建模一段 summary。
+			part, err := e.frame(evReasoningSummaryPartAdded, wireStreamEvent{
+				Type:        evReasoningSummaryPartAdded,
+				OutputIndex: item.outputIndex,
+				ItemID:      item.itemID,
+				Part:        &wirePart{Type: partSummaryText},
+			})
+			if err != nil {
+				return nil, err
+			}
+			return append(out, part...), nil
+		}
 		return out, nil
 	}
 	// 拒绝有独立的 part 类型与独立的 delta/done 事件名：走 output_text

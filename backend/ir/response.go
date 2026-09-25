@@ -13,6 +13,11 @@ const (
 	// 客户端补救动作相反——这个要压缩输入，max_tokens 要抬输出配额。
 	// 外族协议没有对应取值，出站按各协议的「输出不完整」档投影。
 	StopContextWindow StopReason = "context_window_exceeded"
+	// StopMaxMessages 消息数上限截断（responses incomplete_details.reason
+	// 的 "max_messages"）。与 max_tokens 的输出长度上限是两回事：客户端照
+	// max_tokens 的提示加大输出预算重试，仍会被同一上限拦住。只有
+	// responses 一族有此档，外族出站归「输出不完整」档。
+	StopMaxMessages StopReason = "max_messages"
 )
 
 // Usage 是一次调用的 token 用量。

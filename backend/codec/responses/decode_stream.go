@@ -67,6 +67,10 @@ type streamDecoder struct {
 	// droppedLogprobs 携带 logprobs 的 output_text part 数：逐 token 概率
 	// 没有 IR 槽位，计数经 Notes() 报出。
 	droppedLogprobs int
+	// mergedSummary 携带 summary_index>0 的 reasoning 帧数：IR 的一个
+	// thinking 块承载全部段落，多段 part 并入同一块，正文不丢但 part
+	// 边界与 summary_index 寻址变形，计数经 Notes() 报出。
+	mergedSummary int
 }
 
 // slot 把「两级序号构成的键」绑到分配给它的 IR 块索引。
@@ -106,6 +110,11 @@ func (d *streamDecoder) Notes() []string {
 	if d.droppedLogprobs > 0 {
 		notes = append(notes, codec.LogProbsDropNote(d.droppedLogprobs))
 		d.droppedLogprobs = 0
+	}
+	if d.mergedSummary > 0 {
+		notes = append(notes, fmt.Sprintf(
+			"merged %d reasoning summary frame(s) with summary_index>0 into the first summary part: the text is preserved, but the part boundaries and summary_index addressing of a multi-part reasoning item are not", d.mergedSummary))
+		d.mergedSummary = 0
 	}
 	return codec.DedupeNotes(notes)
 }
@@ -240,6 +249,10 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 	case evReasoningSummaryText, evReasoningTextDelta:
 		// 推理摘要按 summary_index 分段，各段是同一块的续写：
 		// IR 的一个 thinking 块承载全部段落，段间不需要边界。
+		// summary_index>0 的段并进了第一段：正文保留但 part 边界变形，计数报出。
+		if kind == evReasoningSummaryText && ev.SummaryIndex > 0 {
+			d.mergedSummary++
+		}
 		idx, opened := d.slot(reasoningKey(ev.OutputIndex), ir.BlockThinking)
 		out := append(d.start(ev), opened...)
 		d.accText(idx, ev.Delta)
@@ -283,6 +296,9 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 	case evReasoningSummaryTextDone, evReasoningTextDone:
 		// 不在这里关块：encrypted_content 要到 output_item.done 才给，
 		// 提前关会丢签名（判据同 donesignature_test）。
+		if kind == evReasoningSummaryTextDone && ev.SummaryIndex > 0 {
+			d.mergedSummary++
+		}
 		return d.backfill(reasoningKey(ev.OutputIndex), ir.BlockThinking,
 			ev.Text, ir.EvThinkingDelta), nil
 
@@ -290,6 +306,9 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		// 有的网关只发这一帧推理终态。
 		if ev.Part == nil {
 			return nil, nil
+		}
+		if ev.SummaryIndex > 0 {
+			d.mergedSummary++
 		}
 		return d.backfill(reasoningKey(ev.OutputIndex), ir.BlockThinking,
 			ev.Part.Text, ir.EvThinkingDelta), nil
@@ -990,6 +1009,10 @@ func stopReasonFor(r *wireResponse) ir.StopReason {
 		switch r.IncompleteDetails.Reason {
 		case "max_output_tokens":
 			return ir.StopMaxTokens
+		case "max_messages":
+			// 消息数上限是独立一档：照 max_tokens 的提示加大输出预算重试
+			// 仍会被同一上限拦住，客户端的补救动作是裁剪对话历史。
+			return ir.StopMaxMessages
 		default:
 			// 上游已明说这次没完成，未识别的原因按安全侧兜底。
 			// 落到下面的分支会被判成正常结束，客户端就不知道内容是残的。
@@ -1058,6 +1081,10 @@ func renderStatus(s ir.StopReason) (status string, incomplete *wireIncomplete) {
 		// 归 max_output_tokens：两者同为「输出不完整」，status=incomplete
 		// 至少让客户端不会把半截结果当终稿。真正的语义无法保留。
 		return "incomplete", &wireIncomplete{Reason: "max_output_tokens"}
+	case ir.StopMaxMessages:
+		// 本族原值回写：max_messages 与 max_output_tokens 是两回事，
+		// 塌档会把「裁剪对话历史」的补救指引换成「加大输出预算」。
+		return "incomplete", &wireIncomplete{Reason: "max_messages"}
 	case ir.StopContentFilter:
 		return "incomplete", &wireIncomplete{Reason: "content_filter"}
 	case ir.StopEndTurn, ir.StopToolUse, ir.StopStopSequence, "":
