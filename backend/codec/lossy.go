@@ -84,6 +84,22 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 				"dropped strict flag on %d tool(s): the target protocol has no schema-strictness switch, tool call arguments are not guaranteed to validate against the schema", n)
 		}
 	}
+	if name != ProtocolAnthropic {
+		// anthropic 工具定义的 2026 修饰四维（defer_loading /
+		// eager_input_streaming / input_examples / allowed_callers）其余协议
+		// 一个都没有。四维任一出现即计数该工具；报数不报值。
+		n := 0
+		for _, t := range req.Tools {
+			if t.DeferLoading || t.EagerInputStreaming != nil ||
+				len(t.InputExamples) > 0 || len(t.AllowedCallers) > 0 {
+				n++
+			}
+		}
+		if n > 0 {
+			notes["tool modifiers"] = fmt.Sprintf(
+				"dropped tool modifiers on %d tool(s): the target protocol has no defer-loading, eager-streaming, input-example or caller-restriction fields, tools behave with the upstream defaults", n)
+		}
+	}
 	if !caps.ToolResultError && hasFailedToolResult(req) {
 		rewrote("tool_result.is_error",
 			fmt.Sprintf("prefixed the content with %q", toolErrorPrefix))

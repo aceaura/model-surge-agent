@@ -52,6 +52,11 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 			Description: t.Description,
 			Schema:      string(t.InputSchema),
 			Strict:      t.Strict,
+			// 2026 修饰四维原样进 IR（服务端工具上也照收——出站按目标能力取舍）。
+			DeferLoading:        t.DeferLoading,
+			EagerInputStreaming: t.EagerInputStreaming,
+			InputExamples:       t.InputExamples,
+			AllowedCallers:      t.AllowedCallers,
 		}
 		// custom 是函数工具的显式写法，与省略同义，不当服务端工具记。
 		if t.Type != "" && t.Type != "custom" {

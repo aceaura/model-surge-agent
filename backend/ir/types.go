@@ -252,6 +252,16 @@ type Tool struct {
 	// false 是「明确不要严格校验」，与没给语义不同。gemini 的工具定义
 	// 没有这一维。
 	Strict *bool `json:"strict,omitempty"`
+	// 以下四维是 anthropic 工具定义的 2026 修饰槽位，其余协议的工具定义
+	// 一个都没有（跨族丢+报）：
+	// DeferLoading 工具不进初始 system prompt，由 tool search 按需加载。
+	DeferLoading bool `json:"defer_loading,omitempty"`
+	// EagerInputStreaming 细粒度流式入参（null=按 beta 头默认，三态指针）。
+	EagerInputStreaming *bool `json:"eager_input_streaming,omitempty"`
+	// InputExamples 入参示例（不透明对象数组，原文透传）。
+	InputExamples []json.RawMessage `json:"input_examples,omitempty"`
+	// AllowedCallers 允许的程序化调用方（direct / code_execution_*）。
+	AllowedCallers []string `json:"allowed_callers,omitempty"`
 }
 
 type ToolChoiceMode string
@@ -413,6 +423,9 @@ func (r *Request) Clone() *Request {
 		out.Tools = make([]Tool, len(r.Tools))
 		for i, tl := range r.Tools {
 			tl.Strict = cloneBool(tl.Strict)
+			tl.EagerInputStreaming = cloneBool(tl.EagerInputStreaming)
+			tl.InputExamples = append([]json.RawMessage(nil), tl.InputExamples...)
+			tl.AllowedCallers = append([]string(nil), tl.AllowedCallers...)
 			out.Tools[i] = tl
 		}
 	}
