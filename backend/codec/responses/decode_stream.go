@@ -40,6 +40,11 @@ type streamDecoder struct {
 	// closed 是已闭合块的槽位键。part 级 done 帧可能在块闭合后才到
 	// （迟到的终态帧），那时回补会把内容追加到已定稿的条目上。
 	closed map[string]struct{}
+	// sawError 记录流里已经交出过错误。上游的真实序列是
+	// error → response.failed（sub2api 夹具可证），错误详情只在裸 error
+	// 帧里；failed 帧再补一份空壳错误会让客户端看到两次报错。
+	// 反过来，见过错误后即使上游继续发 completed 也不能伪装成正常结束。
+	sawError bool
 }
 
 // slot 把「两级序号构成的键」绑到分配给它的 IR 块索引。
@@ -194,7 +199,17 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		return d.complete(ev), nil
 
 	case evError:
-		return []ir.Event{{Type: ir.EvError, Err: streamError(ev)}}, nil
+		// 错误是终止性的：收流，后续帧不再产生正常收尾（否则 completed
+		// 会把已经报错的流伪装成 StopEndTurn 正常结束）。
+		// 但不检查 d.done：错误详情可能迟于收尾帧到达（上游实现不一），
+		// 那时仍要把错误交出去。重复的错误帧用 sawError 去重。
+		d.done = true
+		if d.sawError {
+			return nil, nil
+		}
+		d.sawError = true
+		return []ir.Event{{Type: ir.EvError,
+			Err: streamError(ev, "upstream stream error")}}, nil
 
 	default:
 		return nil, nil
@@ -349,11 +364,14 @@ func (d *streamDecoder) complete(ev wireStreamEvent) []ir.Event {
 	if delta.StopReason == "" {
 		delta.StopReason = ir.StopEndTurn
 	}
-	// failed 帧带错误：先把错误交出去，再收束流。
-	if ev.Type == evFailed && ev.Response != nil && ev.Response.Error != nil {
+	// failed 帧恒交错误再收束流：错误详情可能已在裸 error 帧交出去
+	// （sawError 去重），但 failed 不带任何错误体时也不能让流伪装成
+	// 正常结束——至少给一个兜底错误。
+	if ev.Type == evFailed && !d.sawError {
+		d.sawError = true
 		out = append(out, ir.Event{
 			Type: ir.EvError,
-			Err:  convertError(0, ev.Response.Error),
+			Err:  streamError(ev, "upstream response failed"),
 		})
 	}
 	return append(out, delta, ir.Event{Type: ir.EvMessageStop})
@@ -608,8 +626,24 @@ func convertError(status int, e *wireError) *ir.Error {
 	return out
 }
 
-func streamError(ev wireStreamEvent) *ir.Error {
-	return convertError(0, &wireError{Code: ev.Code, Message: ev.Message, Param: ev.Param})
+// streamError 提取错误帧的错误体，三层回落：官方裸 error 帧的顶层
+// error 对象 → failed 帧的 response.error → 部分网关平铺到帧顶层的
+// code/message/param 三键。三层都空时用 fallbackMsg 兜底，
+// 不让客户端拿到一个无消息的错误。
+func streamError(ev wireStreamEvent, fallbackMsg string) *ir.Error {
+	var b wireError
+	switch {
+	case ev.Error != nil:
+		b = *ev.Error
+	case ev.Response != nil && ev.Response.Error != nil:
+		b = *ev.Response.Error
+	default:
+		b = wireError{Code: ev.Code, Message: ev.Message, Param: ev.Param}
+	}
+	if b.Message == "" {
+		b.Message = fallbackMsg
+	}
+	return convertError(0, &b)
 }
 
 func convertUsage(u wireUsage) ir.Usage {

@@ -312,7 +312,13 @@ type wireStreamEvent struct {
 	// SummaryIndex 是推理摘要分段的序号。
 	SummaryIndex int           `json:"summary_index,omitempty"`
 	Response     *wireResponse `json:"response,omitempty"`
-	// Code / Message 出现在 error 帧上（顶层而非嵌在 response 里）。
+	// Error 是裸 error 事件携带的错误体。官方 wire 把它放在顶层
+	// （{"type":"error","error":{...}}），不是 response.error 下；
+	// 只读平铺三键会把上游给的 type/code/message 全部静默丢掉，
+	// 客户端只看到一个空错误。Response.Error 仍作回落：response.failed
+	// 走那条路径，平铺三键再作第三层（cc-switch / sub2api 同做多层回落）。
+	Error *wireError `json:"error,omitempty"`
+	// Code / Message 出现在部分网关平铺到帧顶层的错误帧上。
 	Code    string `json:"code,omitempty"`
 	Message string `json:"message,omitempty"`
 	Param   string `json:"param,omitempty"`
