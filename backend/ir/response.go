@@ -1,5 +1,7 @@
 package ir
 
+import "encoding/json"
+
 type StopReason string
 
 const (
@@ -18,6 +20,12 @@ const (
 	// max_tokens 的提示加大输出预算重试，仍会被同一上限拦住。只有
 	// responses 一族有此档，外族出站归「输出不完整」档。
 	StopMaxMessages StopReason = "max_messages"
+	// StopSteered 用户中途转向（steer）导致的安全边界截断（responses
+	// incomplete_details.reason 的 "steered"）。与 max_tokens 分开：那是输出
+	// 配额耗尽、要加大预算重试；steered 是用户在安全边界处打断了生成、通常
+	// 已有自动后继，加大预算毫无意义。塌成 max_tokens 会让客户端误判补救
+	// 动作。只有 responses 一族有此档，外族出站归「输出不完整」的最近档。
+	StopSteered StopReason = "steered"
 )
 
 // Usage 是一次调用的 token 用量。
@@ -66,6 +74,10 @@ type Usage struct {
 	// 请求侧的同名偏好字段在 Request 上；这里只是回执，不参与调度，
 	// 也仅同族出站写得回去。
 	InferenceGeo string `json:"inference_geo,omitempty"`
+	// Iterations Anthropic beta usage.iterations：按迭代阶段（message/
+	// compaction/advisor）细分的用量。判别式值域仍在演进，不建模成具体
+	// 结构，原文透传——同族往返逐字带回，跨族无槽位（由 UsageDropDims 报出）。
+	Iterations json.RawMessage `json:"iterations,omitempty"`
 }
 
 // MergeUsage 把一帧 usage 并入累加器。
@@ -110,6 +122,10 @@ func MergeUsage(into *Usage, u Usage) {
 	}
 	if u.InferenceGeo != "" {
 		into.InferenceGeo = u.InferenceGeo
+	}
+	// iterations 细分同属「只在收尾帧出现一次」的回执维度，非零后到覆盖。
+	if len(u.Iterations) > 0 {
+		into.Iterations = u.Iterations
 	}
 	if u.CacheReadTokens > into.CacheReadTokens {
 		into.CacheReadTokens = u.CacheReadTokens
@@ -169,4 +185,20 @@ type Response struct {
 	// 秒）。零值=上游没给，出站才回退本地钟——否则同族往返会把上游的真实
 	// 创建时间换成代理本地钟，客户端按 created 做幂等/排序会拿到假数据。
 	Created int64 `json:"created,omitempty"`
+	// CompletedAt 上游回显的生成完成时间（responses completed_at，Unix 秒，
+	// 官方 nullable）。与 Created 配对：客户端拿 completed_at-created_at 量
+	// 上游实际生成时延。仅 responses 一族有槽位，同族往返原值带回；零值=
+	// 上游没给，出站不伪造（omitempty 不写，绝不拿本地钟兜底），跨族不投影。
+	CompletedAt int64 `json:"completed_at,omitempty"`
+	// ResponsesPromptCacheDiagnostics responses 响应侧的提示缓存诊断回执
+	//（官方 response.prompt_cache_diagnostics：cache_miss/cache_hit/
+	// comparison_response_not_found/unavailable 四形态联合）。客户端据此调优
+	// 缓存前缀。判别式联合值域在演进，原文透传不建模；仅 responses 一族有
+	// 槽位，跨族不投影。
+	ResponsesPromptCacheDiagnostics json.RawMessage `json:"responses_prompt_cache_diagnostics,omitempty"`
+	// ResponsesModeration responses 响应侧的审核结果回执（官方 response.
+	// moderation，nullable）。开了 moderated completions 的客户端靠它门控
+	// 输入/输出审核结果。chat 族对同名字段是「丢弃+注记」，responses 这里
+	// 同族原样带回复原保真；跨族无槽位不投影。
+	ResponsesModeration json.RawMessage `json:"responses_moderation,omitempty"`
 }

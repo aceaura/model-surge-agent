@@ -40,7 +40,7 @@ func TestUsageRidesOnTheMessageDelta(t *testing.T) {
 		if e.Type != EvMessageDelta {
 			continue
 		}
-		if e.Usage == nil || *e.Usage != u {
+		if e.Usage == nil || !reflect.DeepEqual(*e.Usage, u) {
 			t.Fatalf("delta usage = %#v", e.Usage)
 		}
 		return
@@ -193,7 +193,7 @@ func TestProjectionRoundTripsThroughTheAggregator(t *testing.T) {
 		if got.ID != want.ID || got.Model != want.Model {
 			t.Errorf("%s: identity = %q/%q", want.ID, got.ID, got.Model)
 		}
-		if got.Usage != want.Usage {
+		if !reflect.DeepEqual(got.Usage, want.Usage) {
 			t.Errorf("%s: usage = %#v", want.ID, got.Usage)
 		}
 		if got.StopReason != want.StopReason {

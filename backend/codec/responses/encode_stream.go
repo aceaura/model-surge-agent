@@ -25,6 +25,13 @@ type streamEncoder struct {
 	// created 是写进每个 response 对象的 created_at。构造时取本地钟，
 	// 上游在 EvMessageStart 给过真实创建时间就原值覆盖（口径同 ir）。
 	created int64
+	// completedAt / cacheDiag / moderation 是 responses 响应侧回执，随
+	// snapshot 写进终止帧的 response 对象。completedAt 与 created 不同：
+	// 构造时不取本地钟，上游没给（0）就 omitempty 不写——伪造一个本地完成
+	// 时间是编造。缓存诊断与审核回执原文透传，仅本族有槽位。
+	completedAt int64
+	cacheDiag   json.RawMessage
+	moderation  json.RawMessage
 
 	// items 是已开启的条目，按 IR 块索引定位。
 	items map[int]*openItem
@@ -190,6 +197,16 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		// 上游给过创建时间就原值回写（覆盖构造时的本地钟）；没给才用本地钟。
 		if ev.Created != 0 {
 			e.created = ev.Created
+		}
+		// 响应侧回执：整份响应投影时随首帧抵达（真流式则随 EvMessageDelta）。
+		if ev.CompletedAt != 0 {
+			e.completedAt = ev.CompletedAt
+		}
+		if len(ev.PromptCacheDiagnostics) > 0 {
+			e.cacheDiag = ev.PromptCacheDiagnostics
+		}
+		if len(ev.Moderation) > 0 {
+			e.moderation = ev.Moderation
 		}
 		// Anthropic 上游在这一帧给 input_tokens，而本协议只在终止帧报用量，
 		// 不在这里收下就永远丢了。
@@ -382,6 +399,17 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		e.mapTier(ev.ServiceTier)
 		if ev.Container != nil {
 			e.droppedContainer = true
+		}
+		// 响应侧回执真流式时随终止帧抵达（response.completed 的 response
+		// 对象带 completed_at/缓存诊断/审核结果）。
+		if ev.CompletedAt != 0 {
+			e.completedAt = ev.CompletedAt
+		}
+		if len(ev.PromptCacheDiagnostics) > 0 {
+			e.cacheDiag = ev.PromptCacheDiagnostics
+		}
+		if len(ev.Moderation) > 0 {
+			e.moderation = ev.Moderation
 		}
 		if ev.Usage != nil {
 			ir.MergeUsage(&e.usage, *ev.Usage)
@@ -690,6 +718,11 @@ func (e *streamEncoder) snapshot(status string) *wireResponse {
 		Status:      status,
 		CreatedAt:   e.created,
 		ServiceTier: e.serviceTier,
+		// 响应侧回执随终止帧的 response 对象写出。completedAt 为零（上游没给）
+		// 时 omitempty 不写，绝不拿本地钟伪造完成时间。
+		CompletedAt:            e.completedAt,
+		PromptCacheDiagnostics: e.cacheDiag,
+		Moderation:             e.moderation,
 	}
 	for _, index := range e.order {
 		if item := e.items[index]; item != nil {
@@ -820,6 +853,12 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 		CreatedAt:         created,
 		IncompleteDetails: incomplete,
 		Usage:             &u,
+		// completed_at 不回退本地钟：它是「上游何时生成完」的回执，代理无从
+		// 得知；上游没给（0）就 omitempty 不写，伪造一个本地完成时间是编造。
+		// 缓存诊断与审核回执原文透传，仅本族有槽位。
+		CompletedAt:            resp.CompletedAt,
+		PromptCacheDiagnostics: resp.ResponsesPromptCacheDiagnostics,
+		Moderation:             resp.ResponsesModeration,
 	}
 	// 实际执行档位回显：跨族按回显值集翻译，装不下的（anthropic 的
 	// batch）丢弃，由 DescribeResponseTierLoss 报出。
@@ -864,7 +903,18 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 				continue
 			}
 			item := wireRespItem{Type: itemReasoning, Status: "completed", ID: b.Thinking.ItemID}
-			if b.Thinking.Text != "" {
+			if b.Thinking.ContentChannel {
+				// 正文来自 content 通道（reasoning_text）：原样写回 content
+				// 数组。summary 官方 required 但这条本就为空，发空数组占位；
+				// 绝不能把 content 原文塞进 summary——那会改掉它的语义
+				//（summary 是摘要、content 是加密推理原文），同族往返不再逐字。
+				content, err := json.Marshal([]wirePart{{Type: partReasoningText, Text: b.Thinking.Text}})
+				if err != nil {
+					return nil, err
+				}
+				item.Content = content
+				item.summaryPlaceholder = true
+			} else if b.Thinking.Text != "" {
 				item.Summary = []wireSummary{{Type: partSummaryText, Text: b.Thinking.Text}}
 			}
 			if b.Thinking.SignatureFrom == Name {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -439,7 +440,7 @@ func TestUpstreamStreamsAgreeOnSemantics(t *testing.T) {
 		want := ir.Usage{InputTokens: 90, OutputTokens: 45, CacheReadTokens: 30}
 		got := resp.Usage
 		got.ReasoningTokens = 0
-		if got != want {
+		if !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: usage = %+v, want %+v", name, got, want)
 		}
 
@@ -503,7 +504,7 @@ func TestStreamMatrixPreservesFourSemantics(t *testing.T) {
 				want := ir.Usage{InputTokens: 90, OutputTokens: 45, CacheReadTokens: 30}
 				got := resp.Usage
 				got.ReasoningTokens = 0
-				if got != want {
+				if !reflect.DeepEqual(got, want) {
 					t.Errorf("usage = %+v, want %+v\n%s", got, want, rendered)
 				}
 				// 守恒：无论走哪一格，客户端可见的输入总量都得是 120。
@@ -1445,7 +1446,7 @@ func TestUsageConservationAcrossMatrix(t *testing.T) {
 				resp := aggregate(t, client, rendered)
 
 				want := ir.Usage{InputTokens: 70, OutputTokens: 20, CacheReadTokens: 30}
-				if resp.Usage != want {
+				if !reflect.DeepEqual(resp.Usage, want) {
 					t.Errorf("usage = %+v, want %+v\n%s", resp.Usage, want, rendered)
 				}
 				if total := resp.Usage.InputTokens + resp.Usage.CacheReadTokens; total != 100 {

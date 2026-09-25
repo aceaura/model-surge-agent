@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -108,7 +109,7 @@ data: {"type":"error","error":{"type":"api_error","message":"upstream exploded"}
 				t.Fatal("一条上报都没有")
 			}
 			last := reports[len(reports)-1]
-			if rec.Usage != last.Usage {
+			if !reflect.DeepEqual(rec.Usage, last.Usage) {
 				t.Errorf("流水 usage = %+v，上报 usage = %+v：两边对不上账",
 					rec.Usage, last.Usage)
 			}

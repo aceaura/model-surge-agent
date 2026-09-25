@@ -1,5 +1,7 @@
 package ir
 
+import "encoding/json"
+
 // 事件词汇取 Anthropic streaming 为超集：四协议中只有它显式表达
 // 块生命周期、增量类型与独立的 usage 帧。Chat Completions 的 choices[].delta
 // 与 Gemini 的 candidates[].parts 都是「同一块隐式续写」，能无损投影进块模型；
@@ -73,8 +75,17 @@ type Event struct {
 	// Unix 秒），只在 EvMessageStart 上有意义。零值=上游没给，出站才回退
 	// 本地钟——否则同族往返会把上游的真实创建时间换成代理本地钟，
 	// 客户端按 created 做幂等/排序会拿到假数据。
-	Created int64  `json:"created,omitempty"`
-	Err     *Error `json:"error,omitempty"`
+	Created int64 `json:"created,omitempty"`
+	// CompletedAt / PromptCacheDiagnostics / Moderation 是 responses 一族
+	// 的响应侧回执（完成时间、提示缓存诊断、审核结果），语义同 ir.Response
+	// 上的同名字段。两处都收：整份响应经 ResponseEvents 投影时随
+	// EvMessageStart 抵达，真流式时随终止帧的 EvMessageDelta 抵达——哪一帧
+	// 先到取决于路径，只认一处就会在另一条路径上丢。仅 responses 有槽位，
+	// 跨族出站不投影。
+	CompletedAt            int64           `json:"completed_at,omitempty"`
+	PromptCacheDiagnostics json.RawMessage `json:"prompt_cache_diagnostics,omitempty"`
+	Moderation             json.RawMessage `json:"moderation,omitempty"`
+	Err                    *Error          `json:"error,omitempty"`
 	// Citations 仅在 EvCitation 出现，携带本次新增的来源标注。
 	Citations []Citation `json:"citations,omitempty"`
 }

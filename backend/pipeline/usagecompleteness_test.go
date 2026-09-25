@@ -17,10 +17,14 @@ import (
 //
 // 15 = 五个 _tokens 维度 + 缓存写入 TTL 明细两位（5m/1h）+「明细已知」布尔标记
 // + 六维新增（服务端工具执行次数两位、音频两位、预测两位）+ inference_geo。
+// 16 = 上述再加 iterations（anthropic beta usage.iterations）。
 // 标记位不过进程边界（下游拿到零值分不清真零还是未知，但记账只认非零数），
 // inference_geo 也不过去：它是 anthropic 的回执（请求被调度到哪个地理分区），
-// 不是计费维度，只有同族回吐时才有意义。过边界的数字位是十二位。
-const irUsageFields = 15
+// 不是计费维度，只有同族回吐时才有意义。iterations 同理不过去：它是对同一批
+// token 按迭代阶段（message/compaction/advisor）的再细分，是不建模的原文回执而非
+// 独立计费位——搬进 relayclient.Usage 会与 input/output_tokens 重复计数，且
+// json.RawMessage 也塞不进那张全 int64 的扁平表。过边界的数字位仍是十三位。
+const irUsageFields = 16
 
 // 判据 1：usageOf 必须搬全 ir.Usage 的每一位。
 //

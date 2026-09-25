@@ -1209,9 +1209,9 @@ func UsageDetailDropNote(dims []string) string {
 // 流式编码器的 Notes() 与非流式 EncodeResponseLossy 共用同一判据，保证
 // 同一响应按 stream=true/false 请求报出的损耗一致。
 //
-// 细分维度的原生槽位：服务端托管工具执行次数与推理区域只有 anthropic 有；
-// 音频与预测加速 token 只有 chat 有。与 CacheWriteDetailsKnown 的门控不同，
-// 这六位不需要「明细已知」标记：非零值本身就是上游给过的证据。
+// 细分维度的原生槽位：服务端托管工具执行次数、推理区域与迭代用量细分只有
+// anthropic 有；音频与预测加速 token 只有 chat 有。与 CacheWriteDetailsKnown
+// 的门控不同，这几位不需要「明细已知」标记：非零值本身就是上游给过的证据。
 func UsageDropDims(u *ir.Usage, protoName string) []string {
 	if u == nil {
 		return nil
@@ -1226,6 +1226,9 @@ func UsageDropDims(u *ir.Usage, protoName string) []string {
 		}
 		if u.InferenceGeo != "" {
 			dims = append(dims, "inference geo")
+		}
+		if len(u.Iterations) > 0 {
+			dims = append(dims, "usage iterations breakdown")
 		}
 	}
 	if protoName != ProtocolChatCompletions {

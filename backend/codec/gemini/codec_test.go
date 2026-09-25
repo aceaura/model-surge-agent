@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -238,7 +239,7 @@ func TestStreamFoldsThoughtTokensIntoOutputAndInfersToolUse(t *testing.T) {
 	// promptTokenCount 120 含 cachedContentTokenCount 30，
 	// 而 IR 的 InputTokens 是不含缓存的新鲜输入，故为 90。
 	want := ir.Usage{InputTokens: 90, OutputTokens: 45, CacheReadTokens: 30, ReasoningTokens: 5}
-	if resp.Usage != want {
+	if !reflect.DeepEqual(resp.Usage, want) {
 		t.Errorf("usage = %+v, want %+v", resp.Usage, want)
 	}
 	// 本协议以工具调用收尾时仍报 STOP。照直翻成 end_turn 会让客户端

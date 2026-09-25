@@ -21,7 +21,7 @@ func TestMergeUsageCarriesNewDimensions(t *testing.T) {
 	want := Usage{WebSearchRequests: 9, WebFetchRequests: 2,
 		PromptAudioTokens: 3, CompletionAudioTokens: 4,
 		AcceptedPredictionTokens: 5, RejectedPredictionTokens: 6}
-	if into != want {
+	if !reflect.DeepEqual(into, want) {
 		t.Errorf("合并后 = %+v，want %+v", into, want)
 	}
 }

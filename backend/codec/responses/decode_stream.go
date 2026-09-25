@@ -527,6 +527,10 @@ func (d *streamDecoder) complete(ev wireStreamEvent) []ir.Event {
 	out := d.start(ev)
 	out = append(out, d.closeAll()...)
 
+	// 响应侧回执（completed_at / 缓存诊断 / 审核结果）只在终止帧的 response
+	// 对象里，收到后挂在 EvMessageDelta 上交给聚合器。
+	var completedAt int64
+	var cacheDiag, moderation json.RawMessage
 	if ev.Response != nil {
 		if ev.Response.Usage != nil {
 			u := convertUsage(*ev.Response.Usage)
@@ -536,6 +540,15 @@ func (d *streamDecoder) complete(ev wireStreamEvent) []ir.Event {
 		if ev.Response.ServiceTier != "" {
 			d.serviceTier = ev.Response.ServiceTier
 		}
+		// 响应侧回执随终止帧的 response 对象抵达。显式 null 等同没给
+		//（同非流式 DecodeResponseLossy 判据），不把 4 字节字面量当成回执。
+		completedAt = ev.Response.CompletedAt
+		if len(ev.Response.PromptCacheDiagnostics) > 0 && string(ev.Response.PromptCacheDiagnostics) != "null" {
+			cacheDiag = ev.Response.PromptCacheDiagnostics
+		}
+		if len(ev.Response.Moderation) > 0 && string(ev.Response.Moderation) != "null" {
+			moderation = ev.Response.Moderation
+		}
 	}
 	// 流里见过拒答就改判，除非收尾帧已经给出一个非正常结束的原因——
 	// 那是上游更明确的表态（比如同时被截断）。
@@ -543,7 +556,8 @@ func (d *streamDecoder) complete(ev wireStreamEvent) []ir.Event {
 		d.stopReason = ir.StopContentFilter
 	}
 	delta := ir.Event{Type: ir.EvMessageDelta, StopReason: d.stopReason, Usage: d.usage,
-		ServiceTier: d.serviceTier}
+		ServiceTier: d.serviceTier, CompletedAt: completedAt,
+		PromptCacheDiagnostics: cacheDiag, Moderation: moderation}
 	if delta.StopReason == "" {
 		delta.StopReason = ir.StopEndTurn
 	}
@@ -797,6 +811,14 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 		Content:     []ir.Block{},
 		ServiceTier: w.ServiceTier,
 		Created:     w.CreatedAt,
+		CompletedAt: w.CompletedAt,
+	}
+	// 显式 null 等同没给（同 Metadata 判据）：不把 4 字节字面量当成有回执。
+	if len(w.PromptCacheDiagnostics) > 0 && string(w.PromptCacheDiagnostics) != "null" {
+		out.ResponsesPromptCacheDiagnostics = w.PromptCacheDiagnostics
+	}
+	if len(w.Moderation) > 0 && string(w.Moderation) != "null" {
+		out.ResponsesModeration = w.Moderation
 	}
 	if w.Usage != nil {
 		out.Usage = convertUsage(*w.Usage)
@@ -835,16 +857,21 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 			}})
 		case itemReasoning:
 			text := joinSummary(item.Summary)
+			contentChannel := false
 			if text == "" {
 				// summary 为空时正文在 content 数组（reasoning_text）：
-				// 双路径兜底，不读整条思考正文静默丢掉。
+				// 双路径兜底，不读整条思考正文静默丢掉。走 content 通道的
+				// 要标记 ContentChannel——同族回写时发 reasoning_text 而非
+				// summary_text，否则一次往返就把加密推理正文挪进了摘要通道。
 				text = decodeReasoningContent(item.Content)
+				contentChannel = text != ""
 			}
 			out.Content = append(out.Content, ir.Block{Type: ir.BlockThinking, Thinking: &ir.Thinking{
-				Text:          text,
-				Signature:     item.EncryptedContent,
-				SignatureFrom: Name,
-				ItemID:        item.ID,
+				Text:           text,
+				Signature:      item.EncryptedContent,
+				SignatureFrom:  Name,
+				ItemID:         item.ID,
+				ContentChannel: contentChannel,
 			}})
 		default:
 			// 托管输出项与未来的新条目类型：没有映射，整项丢弃并计数，
@@ -1013,6 +1040,10 @@ func stopReasonFor(r *wireResponse) ir.StopReason {
 			// 消息数上限是独立一档：照 max_tokens 的提示加大输出预算重试
 			// 仍会被同一上限拦住，客户端的补救动作是裁剪对话历史。
 			return ir.StopMaxMessages
+		case "steered":
+			// 用户中途转向在安全边界处截断，独立一档：加大输出预算对它毫无
+			// 意义（通常已有自动后继），塌进 max_tokens 会让客户端误判补救动作。
+			return ir.StopSteered
 		default:
 			// 上游已明说这次没完成，未识别的原因按安全侧兜底。
 			// 落到下面的分支会被判成正常结束，客户端就不知道内容是残的。
@@ -1085,6 +1116,10 @@ func renderStatus(s ir.StopReason) (status string, incomplete *wireIncomplete) {
 		// 本族原值回写：max_messages 与 max_output_tokens 是两回事，
 		// 塌档会把「裁剪对话历史」的补救指引换成「加大输出预算」。
 		return "incomplete", &wireIncomplete{Reason: "max_messages"}
+	case ir.StopSteered:
+		// 本族原值回写：steered 是用户转向截断，与 max_output_tokens 的
+		// 配额耗尽成因不同，塌档会让客户端误判补救动作。
+		return "incomplete", &wireIncomplete{Reason: "steered"}
 	case ir.StopContentFilter:
 		return "incomplete", &wireIncomplete{Reason: "content_filter"}
 	case ir.StopEndTurn, ir.StopToolUse, ir.StopStopSequence, "":

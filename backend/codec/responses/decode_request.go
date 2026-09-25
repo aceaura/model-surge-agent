@@ -244,11 +244,14 @@ func appendItem(out *ir.Request, item wireItem) error {
 
 	case itemReasoning:
 		text := joinSummary(item.Summary)
+		contentChannel := false
 		if text == "" {
 			// summary 为空时正文可能在 content 数组（reasoning_text part，
 			// 官方 ResponseReasoningItem.Content）：不读等于把整条思考正文
-			// 静默丢掉，只剩 encrypted_content 签名。
+			// 静默丢掉，只剩 encrypted_content 签名。走 content 通道的要标记
+			// ContentChannel——同族回写时发 reasoning_text 而非 summary_text。
 			text = decodeReasoningContent(item.Content)
+			contentChannel = text != ""
 		}
 		if text == "" && item.EncryptedContent == "" {
 			return nil
@@ -259,9 +262,10 @@ func appendItem(out *ir.Request, item wireItem) error {
 				Text: text,
 				// 加密的推理内容当作签名透传：语义相同（只对同族协议有效，
 				// 别家无法解读），复用 SignatureFrom 就不必给 IR 加字段。
-				Signature:     item.EncryptedContent,
-				SignatureFrom: Name,
-				ItemID:        item.ID,
+				Signature:      item.EncryptedContent,
+				SignatureFrom:  Name,
+				ItemID:         item.ID,
+				ContentChannel: contentChannel,
 			},
 		}}, "")
 		return nil

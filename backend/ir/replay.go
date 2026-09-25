@@ -19,7 +19,12 @@ func ResponseEvents(resp *Response) []Event {
 		// 创建时间也要投影：整份响应路径的出站编码器同样从首帧取
 		// Created，漏掉它上游的真实创建时间会被代理本地钟顶替——
 		// 正是 created 保真要防的那件事。
-		Created: resp.Created}}
+		Created: resp.Created,
+		// responses 响应侧回执同理随首帧投影：聚合器从事件流重建 Response，
+		// 漏掉它们整份响应路径会把完成时间/缓存诊断/审核回执全丢。
+		CompletedAt:            resp.CompletedAt,
+		PromptCacheDiagnostics: resp.ResponsesPromptCacheDiagnostics,
+		Moderation:             resp.ResponsesModeration}}
 	for i, b := range resp.Content {
 		out = append(out, blockEvents(i, b)...)
 	}

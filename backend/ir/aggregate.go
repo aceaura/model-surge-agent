@@ -115,6 +115,17 @@ func (a *Aggregator) Add(ev Event) {
 		if ev.Created != 0 {
 			a.resp.Created = ev.Created
 		}
+		// responses 响应侧回执：整份响应投影时随首帧抵达（真流式则随
+		// EvMessageDelta，见下）。非零/非空才覆盖，缺这一维的帧不清零。
+		if ev.CompletedAt != 0 {
+			a.resp.CompletedAt = ev.CompletedAt
+		}
+		if len(ev.PromptCacheDiagnostics) > 0 {
+			a.resp.ResponsesPromptCacheDiagnostics = ev.PromptCacheDiagnostics
+		}
+		if len(ev.Moderation) > 0 {
+			a.resp.ResponsesModeration = ev.Moderation
+		}
 		if ev.Usage != nil {
 			a.mergeUsage(*ev.Usage)
 		}
@@ -223,6 +234,18 @@ func (a *Aggregator) Add(ev Event) {
 		}
 		// anthropic 的 container 回显也可能落在 message_delta 上。
 		a.mergeContainer(ev.Container)
+		// responses 响应侧回执真流式时随终止帧抵达（response.completed 的
+		// response 对象带 completed_at/缓存诊断/审核结果）。同首帧口径：
+		// 非零/非空才覆盖。
+		if ev.CompletedAt != 0 {
+			a.resp.CompletedAt = ev.CompletedAt
+		}
+		if len(ev.PromptCacheDiagnostics) > 0 {
+			a.resp.ResponsesPromptCacheDiagnostics = ev.PromptCacheDiagnostics
+		}
+		if len(ev.Moderation) > 0 {
+			a.resp.ResponsesModeration = ev.Moderation
+		}
 		if ev.Usage != nil {
 			a.mergeUsage(*ev.Usage)
 		}

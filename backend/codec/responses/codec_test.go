@@ -2,6 +2,7 @@ package responses
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -381,7 +382,7 @@ func TestUsageCacheSemanticsRoundTrip(t *testing.T) {
 	if wire.TotalTokens != 165 {
 		t.Errorf("total_tokens = %d, want 165", wire.TotalTokens)
 	}
-	if got := convertUsage(wire); got != want {
+	if got := convertUsage(wire); !reflect.DeepEqual(got, want) {
 		t.Errorf("round trip = %+v, want %+v", got, want)
 	}
 }

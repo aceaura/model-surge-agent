@@ -252,6 +252,10 @@ type wireUsage struct {
 	ServerToolUse *wireServerToolUsage `json:"server_tool_use,omitempty"`
 	// InferenceGeo 实际推理区域回显（官方 usage.inference_geo）。
 	InferenceGeo string `json:"inference_geo,omitempty"`
+	// Iterations beta usage.iterations：按迭代阶段（message/compaction/advisor）
+	// 细分的用量。判别式值域仍在演进，原文透传不建模；stable Usage 无此键，
+	// 仅 beta 往返带得回。
+	Iterations json.RawMessage `json:"iterations,omitempty"`
 }
 
 // wireServerToolUsage 内层两键与 cache_creation 同理不带 omitempty：
@@ -280,6 +284,10 @@ type wireMessageDeltaUsage struct {
 	CacheReadInputTokens     int64                `json:"cache_read_input_tokens,omitempty"`
 	CacheCreationInputTokens int64                `json:"cache_creation_input_tokens,omitempty"`
 	ServerToolUse            *wireServerToolUsage `json:"server_tool_use,omitempty"`
+	// Iterations 是上面「delta 帧不写完整 Usage 专属键」规矩的例外：官方
+	// beta MessageDeltaUsage 与完整 usage 同形，也带 iterations。原文透传，
+	// omitempty 保证非 beta 往返不会凭空写出。
+	Iterations json.RawMessage `json:"iterations,omitempty"`
 }
 
 // messageDeltaEvent message_delta 帧的编码专用载荷：字段名与 streamEvent

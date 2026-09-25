@@ -147,6 +147,35 @@ type wireItem struct {
 	Summary []wireSummary `json:"summary,omitempty"`
 	// EncryptedContent 是加密的推理内容，本服务无法解读，只在同族协议间透传。
 	EncryptedContent string `json:"encrypted_content,omitempty"`
+
+	// summaryPlaceholder 同 wireRespItem 的同名字段：标记一条走 content
+	// 通道的 reasoning 条目，靠 MarshalJSON 补出空的 "summary":[]。
+	// 不参与序列化（unexported）。
+	summaryPlaceholder bool
+}
+
+// MarshalJSON 只为走 content 通道的 reasoning 条目补出 "summary":[]。
+//
+// 其余条目一律原样返回 plain 序列化结果——wireItem 服务出站请求编码，
+// 上游的 prompt cache 按前缀逐字节比对，多写或重排一个键都会让缓存失效，
+// 所以这里绝不无谓地改动字节。
+func (i wireItem) MarshalJSON() ([]byte, error) {
+	type plain wireItem
+	data, err := json.Marshal(plain(i))
+	if err != nil {
+		return nil, err
+	}
+	if i.Type != itemReasoning || !i.summaryPlaceholder {
+		return data, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return nil, err
+	}
+	if _, ok := obj["summary"]; !ok {
+		obj["summary"] = json.RawMessage("[]")
+	}
+	return json.Marshal(obj)
 }
 
 type wireSummary struct {
@@ -184,6 +213,12 @@ type wireRespItem struct {
 	// reasoning
 	Summary          []wireSummary `json:"summary,omitempty"`
 	EncryptedContent string        `json:"encrypted_content,omitempty"`
+
+	// summaryPlaceholder 标记这是一条走 content 通道的 reasoning 条目：
+	// 正文在 Content（reasoning_text），summary 官方 required 但本就为空。
+	// Summary 是带 omitempty 的切片，空数组会被丢掉，故靠这个不导出的标记
+	// 在 MarshalJSON 里补出 "summary":[]。不参与序列化（unexported）。
+	summaryPlaceholder bool
 }
 
 // MarshalJSON 在 function_call / custom_tool_call 条目上补出必填键。
@@ -208,7 +243,11 @@ func (i wireRespItem) MarshalJSON() ([]byte, error) {
 		required = map[string]string{
 			"call_id": i.CallID, "name": i.Name, "input": i.Input,
 		}
-	default:
+	}
+	// content 通道的 reasoning 条目：summary 官方 required 但内容为空数组，
+	// omitempty 会把它丢掉，这里显式补 "summary":[]（正文走 content 通道）。
+	needEmptySummary := i.Type == itemReasoning && i.summaryPlaceholder
+	if len(required) == 0 && !needEmptySummary {
 		return data, nil
 	}
 	var obj map[string]json.RawMessage
@@ -224,6 +263,11 @@ func (i wireRespItem) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 		obj[key] = enc
+	}
+	if needEmptySummary {
+		if _, ok := obj["summary"]; !ok {
+			obj["summary"] = json.RawMessage("[]")
+		}
 	}
 	return json.Marshal(obj)
 }
@@ -319,6 +363,15 @@ type wireResponse struct {
 	// ServiceTier 是上游实际执行的档位，随 response.created 与
 	// response.completed 两帧各出现一次。
 	ServiceTier string `json:"service_tier,omitempty"`
+	// CompletedAt 生成完成时间（官方 response.completed_at，nullable）。原文
+	// 透传，同族往返原值带回；上游没给（0）则 omitempty 不写，绝不拿本地钟
+	// 伪造一个完成时间。
+	CompletedAt int64 `json:"completed_at,omitempty"`
+	// PromptCacheDiagnostics 提示缓存诊断联合（官方 response.
+	// prompt_cache_diagnostics）。原文透传，同族往返逐字带回。
+	PromptCacheDiagnostics json.RawMessage `json:"prompt_cache_diagnostics,omitempty"`
+	// Moderation 审核结果回执（官方 response.moderation，nullable）。原文透传。
+	Moderation json.RawMessage `json:"moderation,omitempty"`
 }
 
 type wireIncomplete struct {

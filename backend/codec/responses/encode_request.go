@@ -253,7 +253,18 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 				continue
 			}
 			item := wireItem{Type: itemReasoning, ID: b.Thinking.ItemID}
-			if b.Thinking.Text != "" {
+			if b.Thinking.ContentChannel {
+				// 正文来自 content 通道（reasoning_text）：原样写回 content
+				// 数组。summary 官方 required 但这条本就为空，发空数组占位；
+				// 绝不能把 content 原文塞进 summary——那会改掉它的语义
+				//（summary 是摘要、content 是加密推理原文），同族往返不再逐字。
+				content, err := json.Marshal([]wirePart{{Type: partReasoningText, Text: b.Thinking.Text}})
+				if err != nil {
+					return nil, err
+				}
+				item.Content = content
+				item.summaryPlaceholder = true
+			} else if b.Thinking.Text != "" {
 				item.Summary = []wireSummary{{Type: partSummaryText, Text: b.Thinking.Text}}
 			}
 			// 加密的推理内容只在同族协议间有效，别家的签名发过来会被拒。

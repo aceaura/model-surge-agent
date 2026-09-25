@@ -569,6 +569,9 @@ func renderUsage(u ir.Usage) wireUsage {
 		}
 	}
 	out.InferenceGeo = u.InferenceGeo
+	// beta 迭代用量细分原文回写：同族往返逐字带回，异族来源给不出非空值，
+	// omitempty 自然不写。
+	out.Iterations = u.Iterations
 	return out
 }
 
@@ -590,6 +593,9 @@ func renderDeltaUsage(u ir.Usage) wireMessageDeltaUsage {
 			WebFetchRequests:  u.WebFetchRequests,
 		}
 	}
+	// iterations 是「delta 帧不写完整 Usage 专属键」的例外：官方 beta
+	// MessageDeltaUsage 与完整 usage 同形也带它，原文回写。
+	out.Iterations = u.Iterations
 	return out
 }
 

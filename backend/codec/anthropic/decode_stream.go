@@ -311,6 +311,9 @@ func convertUsage(u wireUsage) ir.Usage {
 		out.WebFetchRequests = u.ServerToolUse.WebFetchRequests
 	}
 	out.InferenceGeo = u.InferenceGeo
+	// beta 迭代用量细分原文透传：message_start / message_delta / 非流式响应
+	// 三处都经这里解码，判别式值域在演进不建模。
+	out.Iterations = u.Iterations
 	return out
 }
 
@@ -385,10 +388,10 @@ func renderStopReason(s ir.StopReason) string {
 		// 同族原值带回：外族上游给不出这一档，只有 anthropic 入站的
 		// 往返会走到这里。
 		return "model_context_window_exceeded"
-	case ir.StopMaxMessages:
-		// responses 的消息数上限档，本协议无对应值。取 max_tokens 而非
-		// end_turn：两者都表示输出不完整，客户端至少不会把半截结果当成
-		// 最终答案（end_turn 会），只是上限的维度不同。
+	case ir.StopMaxMessages, ir.StopSteered:
+		// responses 的消息数上限档与用户转向截断档，本协议都无对应值。取
+		// max_tokens 而非 end_turn：两者都表示输出不完整，客户端至少不会把
+		// 半截结果当成最终答案（end_turn 会），只是上限/成因的维度不同。
 		return "max_tokens"
 	default:
 		return ""

@@ -34,6 +34,13 @@ func TestRenderFinishReasonCoversEveryIRValue(t *testing.T) {
 		// 本协议没有单独取值，stop 是最接近的表达。
 		ir.StopStopSequence: "stop",
 		"":                  "stop",
+		// 输出不完整的三档都归 length：本协议没有对应取值，但 length
+		// 至少让客户端知道结果被截断，不会当成正常说完（stop 会）。
+		// context_window=输入挤断输出，max_messages=消息数上限，
+		// steered=用户在安全边界处转向打断（R110 新增独立档）。
+		ir.StopContextWindow: "length",
+		ir.StopMaxMessages:   "length",
+		ir.StopSteered:       "length",
 		// 认不出的 IR 取值不说成正常结束。
 		"some_future_reason": "content_filter",
 	}
