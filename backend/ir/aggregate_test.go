@@ -81,6 +81,30 @@ func TestStopReasonUntouchedWithoutToolUse(t *testing.T) {
 	}
 }
 
+// 截断类终止原因（max_tokens / context_window_exceeded）遇到完整工具调用同样
+// 改判为 tool_use——这是 Response() 注释里写明的有意取舍，不是漏判：能进到
+// 这里说明调用块本身完整（入参被截断的那种由 IncompleteTools 单独判出），
+// 模型是「发完一个可执行的调用、随后补正文时撞上 token 上限」，客户端仍须
+// 执行它；报截断会让整轮被当未完成而丢弃连带的合法调用。
+//
+// 这条把该取舍钉成显式契约：矩阵测试只在 reason==tool_use 时才带工具块
+// （crossmatrix_test.go 的 withTool），从不组合「max_tokens + 工具调用」，
+// 故此处的交互此前无覆盖。改动 Response() 的改判范围前必须先有实测证据。
+func TestTruncationWithCompleteToolUseForcesToolUse(t *testing.T) {
+	for _, reason := range []StopReason{StopMaxTokens, StopContextWindow} {
+		a := &Aggregator{}
+		a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{
+			Type: BlockToolUse, ToolUse: &ToolUse{ID: "tu_1", Name: "read"},
+		}})
+		a.Add(Event{Type: EvToolInput, Index: 0, Text: `{"path":"a.go"}`})
+		a.Add(Event{Type: EvMessageDelta, StopReason: reason})
+
+		if got := a.Response().StopReason; got != StopToolUse {
+			t.Errorf("%s + 完整工具调用：stop_reason = %q, want %q", reason, got, StopToolUse)
+		}
+	}
+}
+
 func TestAggregateThinkingWithSignature(t *testing.T) {
 	a := &Aggregator{}
 	a.Add(Event{Type: EvBlockStart, Index: 0, Block: &Block{Type: BlockThinking}})

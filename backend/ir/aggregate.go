@@ -445,6 +445,15 @@ func (a *Aggregator) Response() *Response {
 	// 内容里确有工具调用，终止原因就必须表达为工具调用：客户端靠它决定
 	// 要不要执行工具，判成 end_turn 会让整个工具回合悄悄断在这里。
 	// content_filter 不改判——被拦截的工具调用不该被执行。
+	//
+	// 截断类（max_tokens / context_window_exceeded）同样改判为 tool_use，这是
+	// 有意为之，不是漏判：能进到这里的工具调用块本身是完整的（入参被截断的
+	// 那种由 IncompleteTools() 单独判出、另行处理），模型是「发完一个可执行
+	// 的调用、随后在补正文时撞上 token 上限」。此时客户端仍须执行那个调用，
+	// 报截断会让它把整轮当未完成而丢弃连带的合法调用。代价是丢掉了「正文被
+	// 截断」这一信号——两害相权，宁可少报截断也不让工具回合断掉。
+	// （gemini 的流式解码器把同款改判收窄到 end_turn，是它另一处的取舍；
+	// 这里服务的是所有协议的非流式重建，取「调用必须可执行」这一侧。）
 	if hasToolUse && out.StopReason != StopContentFilter {
 		out.StopReason = StopToolUse
 	}

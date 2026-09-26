@@ -221,7 +221,16 @@ func joinBlockText(blocks []Block) string {
 	for _, b := range blocks {
 		if b.Type == BlockText {
 			sb.WriteString(b.Text)
+			continue
 		}
+		// 非文本子块（图片/文档/音频）降级为纯文本时无处安放。留一个占位而
+		// 不是静默蒸发：读这段降级文本的模型（以及排查的人）能看出这里本来
+		// 还有个附件，而不是以为工具结果就只有那点文字。占位格式与 codec
+		// 侧 DowngradeMedia 的「[X attachment omitted]」约定同族。
+		if sb.Len() > 0 {
+			sb.WriteString(" ")
+		}
+		sb.WriteString("[" + string(b.Type) + " omitted]")
 	}
 	return sb.String()
 }

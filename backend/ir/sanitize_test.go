@@ -114,6 +114,61 @@ func TestSanitizeDemotesOrphanToolResult(t *testing.T) {
 	}
 }
 
+// orphan tool_result 的内容里带非文本子块（图片/文档/音频）时，降级为纯文本
+// 无处安放它们——但必须留下占位，否则整段附件静默蒸发，读降级文本的模型
+// 与排查的人都看不出这里本来还有个附件。钉住 joinBlockText 的占位行为。
+func TestSanitizeDemotedToolResultKeepsNonTextPlaceholder(t *testing.T) {
+	r := &Request{Messages: []Message{
+		userText("hi"),
+		{Role: RoleUser, Content: []Block{{
+			Type: BlockToolResult,
+			ToolResult: &ToolResult{ToolUseID: "ghost", Content: []Block{
+				{Type: BlockText, Text: "chart:"},
+				{Type: BlockImage, Media: &Media{MediaType: "image/png", Data: "AAAA"}},
+			}},
+		}}},
+	}}
+	notes := Sanitize(r)
+	if len(notes) == 0 {
+		t.Fatal("expected a diagnostic for the orphan")
+	}
+	var found bool
+	for _, m := range r.Messages {
+		for _, b := range m.Content {
+			if b.Type == BlockText && strings.Contains(b.Text, "[tool result for ghost]") {
+				found = true
+				if !strings.Contains(b.Text, "chart:") {
+					t.Errorf("降级文本丢了原有文字：%q", b.Text)
+				}
+				if !strings.Contains(b.Text, "[image omitted]") {
+					t.Errorf("非文本子块没留占位：%q", b.Text)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Errorf("orphan 没被降级为文本：%#v", r.Messages)
+	}
+}
+
+// 纯文本内容的 tool_result 降级后不该冒出任何占位：没有非文本子块可丢。
+func TestSanitizeDemotedTextOnlyToolResultHasNoPlaceholder(t *testing.T) {
+	r := &Request{Messages: []Message{
+		userText("hi"),
+		userResults("ghost"),
+	}}
+	Sanitize(r)
+	for _, m := range r.Messages {
+		for _, b := range m.Content {
+			if b.Type == BlockText && strings.Contains(b.Text, "[tool result for ghost]") {
+				if strings.Contains(b.Text, "omitted]") {
+					t.Errorf("纯文本降级文本误加占位：%q", b.Text)
+				}
+			}
+		}
+	}
+}
+
 func TestSanitizeReordersDisplacedToolResult(t *testing.T) {
 	// 客户端在调用与结果之间插了一条自己的通知消息。相邻判定会把这个
 	// 正常配对误判成孤儿，所以配对必须走全局 id 索引。
