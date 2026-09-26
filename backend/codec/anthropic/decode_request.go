@@ -36,12 +36,22 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	out.System = system
 
 	for i, m := range w.Messages {
+		// 角色白名单：anthropic 的 message 只有 user/assistant（system 是顶层
+		// 独立字段，已在上面单独解）。此前任意字符串都被 ir.Role(m.Role) 原样
+		// 收进 IR：转到 gemini 时 roleFor 把非 assistant 一律映射成 user，语义被
+		// 悄悄改写却既不报错也无注记。与 chat/responses 解码器同口径，畸形角色
+		// 直接 400，而不是静默兜底成某个默认角色。
+		role := ir.Role(m.Role)
+		if role != ir.RoleUser && role != ir.RoleAssistant {
+			return nil, ir.NewError(ir.ErrInvalidRequest, 400, "invalid_request_error",
+				fmt.Sprintf("messages[%d]: unknown role %q", i, m.Role))
+		}
 		content, err := decodeContent(m.Content)
 		if err != nil {
 			return nil, wrapField(fmt.Sprintf("messages[%d].content", i), err)
 		}
 		out.Messages = append(out.Messages, ir.Message{
-			Role:    ir.Role(m.Role),
+			Role:    role,
 			Content: content,
 		})
 	}

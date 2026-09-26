@@ -310,6 +310,11 @@ func TestDecodeRequestRejectsBadInput(t *testing.T) {
 		// 未知块型不在此列：它归不透明块同族透传（见 opaque_test.go），
 		// 跨族拒收发生在出站编码而非入站解码。
 		"content elem not a block": `{"model":"m","messages":[{"role":"user","content":[42]}]}`,
+		// 角色白名单（轮次6 F2）：anthropic 的 message 只有 user/assistant，
+		// system 是顶层独立字段。此前任意角色串都被静默收进 IR。
+		"unknown role":           `{"model":"m","messages":[{"role":"banana","content":"hi"}]}`,
+		"system role in message": `{"model":"m","messages":[{"role":"system","content":"hi"}]}`,
+		"empty role":             `{"model":"m","messages":[{"role":"","content":"hi"}]}`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -317,6 +322,45 @@ func TestDecodeRequestRejectsBadInput(t *testing.T) {
 				t.Fatal("want an error")
 			}
 		})
+	}
+}
+
+// 畸形角色必须是 400 *ir.Error（轮次6 F2），而不是被 ir.Role(m.Role) 静默收进
+// IR。静默收下的后果：转到 gemini 时 roleFor 把非 assistant 一律映射成 user，
+// 一轮对话的语义被改写却既不报错也无注记——正是「畸形请求→400」纪律要堵的洞，
+// 也与 chat/responses 解码器同口径。
+func TestDecodeRequestRejectsUnknownRole(t *testing.T) {
+	for _, role := range []string{"banana", "system", "tool", "developer", ""} {
+		t.Run(role, func(t *testing.T) {
+			body := `{"model":"m","messages":[{"role":"` + role + `","content":"hi"}]}`
+			_, err := DecodeRequest([]byte(body))
+			if err == nil {
+				t.Fatalf("role %q should be rejected", role)
+			}
+			ire, ok := err.(*ir.Error)
+			if !ok {
+				t.Fatalf("err = %T (%v), want *ir.Error", err, err)
+			}
+			if ire.StatusCode != 400 {
+				t.Errorf("status = %d, want 400", ire.StatusCode)
+			}
+			if !strings.Contains(err.Error(), "unknown role") {
+				t.Errorf("message = %q, want the unknown-role rejection", err.Error())
+			}
+		})
+	}
+}
+
+// 反向护栏：user/assistant 照常解码，角色白名单不得误伤正当请求。
+func TestDecodeRequestAcceptsValidRoles(t *testing.T) {
+	body := `{"model":"m","messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"hello"}]}`
+	req, err := DecodeRequest([]byte(body))
+	if err != nil {
+		t.Fatalf("valid roles should decode: %v", err)
+	}
+	if len(req.Messages) != 2 ||
+		req.Messages[0].Role != ir.RoleUser || req.Messages[1].Role != ir.RoleAssistant {
+		t.Fatalf("roles = %+v, want [user assistant]", req.Messages)
 	}
 }
 
