@@ -264,6 +264,14 @@ type Media struct {
 	// 都收这一种载体）。本服务不代取文件内容，只在同族往返时原样带回；
 	// 投给不认它的目标协议会丢，由有损诊断报告。
 	FileID string `json:"file_id,omitempty"`
+	// Context 文档块的用途说明（Anthropic document.context）：客户端告诉模型
+	// 这份附件是什么、该怎么用。其余三族的附件槽位没有对应字段，跨族必丢，
+	// 入 IR 只为同族往返保真与跨族损耗可见。属客户端提示词，不进日志与注记。
+	Context string `json:"context,omitempty"`
+	// CitationsEnabled 文档块的引用开关（Anthropic document.citations.enabled）。
+	// 用指针而不是 bool：「键缺失」与「显式 false」语义不同——后者是客户端主动
+	// 关掉文档引用，压成 false 会把主动关闭与没表态混为一谈，同族往返也不再逐字。
+	CitationsEnabled *bool `json:"citations_enabled,omitempty"`
 }
 
 // HasPayload 是否有可投递的媒体载荷。

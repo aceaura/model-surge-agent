@@ -281,6 +281,19 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 		} else {
 			out.Source.Type = "base64"
 		}
+		if container == blockDocument {
+			// document 专属的两个配置键同族回写：context 是给模型的用途说明，
+			// citations 是 {"enabled":bool} 配置对象（不是引用数组）。跨族投影来
+			// 的附件没有这两维，字段为零值时 omitempty 自然不带出。
+			out.Context = b.Media.Context
+			if b.Media.CitationsEnabled != nil {
+				raw, err := json.Marshal(citationsConfig{Enabled: *b.Media.CitationsEnabled})
+				if err != nil {
+					return out, false, err
+				}
+				out.Citations = raw
+			}
+		}
 	case ir.BlockToolUse:
 		if b.ToolUse == nil {
 			return out, false, fmt.Errorf("tool_use block without payload")

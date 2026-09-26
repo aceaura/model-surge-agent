@@ -251,6 +251,12 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 		if n := countRequestContainerUploads(req); n > 0 {
 			notes["container upload blocks"] = ContainerUploadDropNote(n)
 		}
+		// 历史里 document 块的两项配置（context 用途旁注与 citations.enabled
+		// 引用开关）：外族附件槽位只装文件本身，两项配置跨族必丢。
+		// anthropic 一律不报：同族原样往返，报了就是谎报。
+		if ctx, cites := countRequestDocConfig(req); ctx > 0 || cites > 0 {
+			notes["document config"] = DocumentConfigDropNote(ctx, cites)
+		}
 	}
 
 	// assistant 历史里的音频引用（chat 多轮音频上下文的 {audio:{id}}）：
@@ -1016,6 +1022,65 @@ func CountResponseMedia(resp *ir.Response) (images, files int) {
 	return images, files
 }
 
+// DocConfigOf 报告一个附件是否带 Anthropic 的文档配置，两个返回值各为 0 或 1，
+// 便于调用方按块累加。请求侧诊断与响应扫描共用，避免两处各写一遍判空。
+func DocConfigOf(m *ir.Media) (ctx, cites int) {
+	if m == nil {
+		return 0, 0
+	}
+	if m.Context != "" {
+		ctx = 1
+	}
+	if m.CitationsEnabled != nil {
+		cites = 1
+	}
+	return ctx, cites
+}
+
+// DocumentConfigDropNote 文档块配置丢失注记。Anthropic 的 document 块除附件本体
+// 外还带两项配置：context（客户端给模型的用途旁注）与 citations.enabled（文档引用
+// 开关）。外族的附件槽位只装文件本身，两项配置跨族必丢，且此前完全静默——
+// 客户端明明开了文档引用，回来一条都没有，却看不到任何迹象。ctx / cites 分别是
+// 带这两项配置的文档数，只渲染非零的那部分。配置内容属客户端提示词，不进注记。
+//
+// 与 ServerToolDropNote 同款纪律：措辞方向中立（请求侧受众是上游模型、响应侧
+// 受众是客户端，故用「接收端」），且不断言「协议没有槽位」——说的是本仓的转换
+// 没有对应字段，那才是可核实的事实。
+func DocumentConfigDropNote(ctx, cites int) string {
+	var subject, effect string
+	switch {
+	case ctx > 0 && cites > 0:
+		subject = fmt.Sprintf("the usage context on %d document(s) and the citation switch on %d document(s)", ctx, cites)
+		effect = "the guidance never reaches the receiving side and no document citation will come back"
+	case ctx > 0:
+		subject = fmt.Sprintf("the usage context on %d document(s)", ctx)
+		effect = "the guidance never reaches the receiving side, which gets the file alone"
+	default:
+		subject = fmt.Sprintf("the citation switch on %d document(s)", cites)
+		effect = "no document citation will come back"
+	}
+	return "dropped " + subject +
+		": this protocol's conversion has no field for per-document configuration, so " + effect
+}
+
+// CountResponseDocConfig 数出响应里模型产出附件所带的文档配置（context /
+// citations.enabled）文档数。与 CountResponseMedia 同一路数：跨族编码器把配置
+// 抹掉之前先数出来，抹掉才不是静默的。
+func CountResponseDocConfig(resp *ir.Response) (ctx, cites int) {
+	if resp == nil {
+		return 0, 0
+	}
+	for _, b := range resp.Content {
+		switch b.Type {
+		case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
+			c, s := DocConfigOf(b.Media)
+			ctx += c
+			cites += s
+		}
+	}
+	return ctx, cites
+}
+
 // CountResponseServerTools 数出响应里的托管工具块：调用与结果分开计数，
 // 与 ServerToolDropNote 的两个入参一一对应。
 func CountResponseServerTools(resp *ir.Response) (calls, results int) {
@@ -1135,6 +1200,38 @@ func countRequestContainerUploads(req *ir.Request) int {
 		count(m.Content)
 	}
 	return n
+}
+
+// countRequestDocConfig 数出请求历史里带 Anthropic 文档配置（context /
+// citations.enabled）的附件文档数。顶层附件与 tool_result 内嵌附件都算——
+// 漏掉内嵌那层会让「工具返回了带引用开关的 PDF」这类丢失完全不可见。
+func countRequestDocConfig(req *ir.Request) (ctx, cites int) {
+	var media func(b ir.Block)
+	media = func(b ir.Block) {
+		switch b.Type {
+		case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
+			c, s := DocConfigOf(b.Media)
+			ctx += c
+			cites += s
+		case ir.BlockToolResult:
+			if b.ToolResult == nil {
+				return
+			}
+			for _, c := range b.ToolResult.Content {
+				media(c)
+			}
+		}
+	}
+	count := func(blocks []ir.Block) {
+		for _, b := range blocks {
+			media(b)
+		}
+	}
+	count(req.System)
+	for _, m := range req.Messages {
+		count(m.Content)
+	}
+	return ctx, cites
 }
 
 // countRequestCustomTools 数出请求历史里的 custom 工具调用与结果块。

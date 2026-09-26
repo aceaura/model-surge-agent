@@ -84,6 +84,9 @@ type wireMessage struct {
 type wireBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
+	// Context document 块的用途说明（官方 DocumentBlockParam.context）。与 text
+	// 块的正文不是一回事：它是客户端给模型的旁注，不进 IR 的 Text，只落 Media.Context。
+	Context string `json:"context,omitempty"`
 	// Citations text 块的来源标注（托管搜索与文档引用都会下发）。用 RawMessage
 	// 而不是 []citationIn：Anthropic 在 document / search_result 块上复用同一个
 	// 键名承载 {"enabled":bool} 配置对象。声明成数组时那种块会让整条 content 的

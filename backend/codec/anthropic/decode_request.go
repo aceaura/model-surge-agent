@@ -288,10 +288,30 @@ func decodeBlock(b wireBlock, raw json.RawMessage) (ir.Block, bool, error) {
 		if b.Source == nil {
 			return out, false, fmt.Errorf("%s block needs a source", b.Type)
 		}
+		// document 的 source.type=content（官方 union 第四种形态，正文是字符串或
+		// text/image 块数组）归不透明块，不投进 Media：Media 只有 base64 / URL
+		// 两种载体，装不下块数组。此前它落进下面被当 base64 处理——Data 取空、
+		// MIME 兜底成 application/pdf，重新编码后写出一个连 data 键都没有的
+		// base64 PDF source（官方 Base64PDFSourceParam.data 是 Required），正文
+		// 全丢、形状还非法，上游直接 400。归不透明块后同族原样带回无损，跨族由
+		// 编码器报错（见 encodeBlock 的 BlockOpaque），两者都比伪造诚实。
+		if b.Type == blockDocument && b.Source.Type == "content" {
+			out.Type = ir.BlockOpaque
+			out.Opaque = &ir.Opaque{WireType: b.Type, Body: raw, From: Name}
+			return out, true, nil
+		}
 		media := &ir.Media{
 			MediaType: b.Source.MediaType,
 			Data:      b.Source.Data,
 			URL:       b.Source.URL,
+		}
+		if b.Type == blockDocument {
+			// document 块的两项配置（用途旁注 context 与引用开关 citations.enabled）
+			// 落进 Media：同族逐字往返，跨族由有损诊断报出（见 DocumentConfigDropNote）。
+			// citations 键在 document 块上承载 {"enabled":bool} 配置对象而非引用数组，
+			// 故走 decodeCitationsConfig 而非 decodeCitations。
+			media.Context = b.Context
+			media.CitationsEnabled = decodeCitationsConfig(b.Citations)
 		}
 		// 两个容器同形，块类型按 media type 判定而非容器名：
 		// document 容器里也可能装别的类型。

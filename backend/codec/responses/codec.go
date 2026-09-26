@@ -50,6 +50,12 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	if images, files := codec.CountResponseMedia(resp); images > 0 || files > 0 {
 		notes = append(notes, codec.MediaOutputDropNote(images, files))
 	}
+	// 文档块的两项配置（context 用途旁注与 citations.enabled 引用开关）是独立
+	// 于附件本体的一维：本体已整块丢弃，配置同样无处落脚，单报一条不与本体注记
+	// 重复计数——本体说的是文件没了，配置说的是引用开关/用途旁注没了。
+	if ctx, cites := codec.CountResponseDocConfig(resp); ctx > 0 || cites > 0 {
+		notes = append(notes, codec.DocumentConfigDropNote(ctx, cites))
+	}
 	// 托管工具块没有本族输出条目形态，编码器整块跳过：丢了要报出来。
 	if calls, results := codec.CountResponseServerTools(resp); calls > 0 || results > 0 {
 		notes = append(notes, codec.ServerToolDropNote(calls, results))
