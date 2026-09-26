@@ -310,6 +310,14 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 				// encrypted_content / thoughtSignature 等于伪造凭据，客户端下一轮回传必被拒。
 				if name != ProtocolAnthropic {
 					note("redacted_thinking", "encrypted reasoning payload cannot be re-encoded")
+				} else if b.Thinking.RedactedData == "" {
+					// 同族但密文为空：编码器无从伪造（空 data 会被上游拒收），整块
+					// 跳过（见 anthropic/encode_request.go 的 BlockThinking 分支，其
+					// 注释声称「由有损诊断报出」——这一条就是那处诊断）。判据与编码器
+					// 同口径（RedactedData==""），跳过才不是静默的：畸形历史里一个没有
+					// data 的 redacted_thinking 此前会凭空消失，既无说明也不 400，与
+					// 下面非涂抹空壳思考块（text 与签名皆空）的处置不对称。
+					note("redacted_thinking", "a redacted reasoning block with no ciphertext would encode to a data-less shell that the upstream rejects")
 				}
 				continue
 			}
