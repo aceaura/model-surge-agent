@@ -258,13 +258,14 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 		if b.Media == nil {
 			return out, false, fmt.Errorf("%s block without payload", b.Type)
 		}
-		if b.Type == ir.BlockImage && !b.Media.HasPayload() {
-			// 空壳图片整块跳过：官方 image source 只有 base64（media_type
-			// 与 data 都是 Required）与 url 两种，两者皆空编出来是
-			// {"type":"image","source":{"type":"base64"}}——连必填键都没有的
-			// 形状，上游 400 拒整轮。常见来源是 Responses 客户端只给了
-			// file_id，而本族没有「引用上游文件服务里的图片」这一维。
-			// 损耗由有损诊断报出。
+		if !b.Media.HasPayload() {
+			// 空壳媒体整块跳过（不止图片）：官方 source 只有 base64（media_type
+			// 与 data 都是 Required）与 url 两种，两者皆空编出来是缺必填键的形状
+			// ——图片是 {"type":"image","source":{"type":"base64"}}，文档是
+			// {"type":"document","source":{"type":"base64","media_type":"application/pdf"}}
+			// （文件名嗅出的 media_type 在，data 因 omitempty 蒸发）——上游 400 拒
+			// 整轮。常见来源是 Responses 客户端只给了 file_id，而本族没有「引用上游
+			// 文件服务里的附件」这一维。损耗由有损诊断报出。
 			return out, false, nil
 		}
 		media := codec.SniffMediaType(b.Media)

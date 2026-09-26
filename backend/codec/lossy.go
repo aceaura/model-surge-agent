@@ -339,6 +339,15 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 			}
 			if b.Type == ir.BlockImage {
 				describeImageLossy(b.Media, caps, note)
+			} else if b.Media != nil && !b.Media.HasPayload() {
+				// 非图片媒体（document/file/audio）三载体全空：出站编码器不会
+				// 把它当媒体发出去（anthropic 整块跳过、gemini 降级为文本），
+				// 因为照编是缺必填键/data:"" 的形状，上游 400 拒整轮。图片的
+				// 三维细则由 describeImageLossy 报，其余媒体在这里报「无可投递
+				// 载荷」。跳过/降级优先于「类型不支持」的降级说明，故 continue。
+				note(string(b.Type)+" blocks",
+					"the part carries no payload the target protocol can express (no base64, no URL, no usable file reference); it is not sent as media")
+				continue
 			}
 			if !caps.AcceptsMedia(SniffMediaType(b.Media)) {
 				note(string(b.Type)+" blocks", "unsupported media type, downgraded to text")

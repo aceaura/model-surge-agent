@@ -164,6 +164,14 @@ func encodeMessage(m ir.Message, names map[string]string) ([]wireContent, error)
 			if b.Media == nil {
 				return nil, fmt.Errorf("%s block without payload", b.Type)
 			}
+			// 三载体全空（如 Responses 客户端只给 file_id 的 input_file）：本协议
+			// 没有「引用上游文件服务」这一维，照编下去是 data:"" 的空 inlineData，
+			// 上游拒收整轮。降级为文本让模型知道这里本有个文件，与下面 MIME 不在
+			// 白名单时的处置一致；损耗由有损诊断报出。
+			if !b.Media.HasPayload() {
+				parts = append(parts, wirePart{Text: codec.DowngradeMedia(b).Text})
+				continue
+			}
 			media := codec.SniffMediaType(b.Media)
 			// 本协议对 mimeType 有白名单且它是必填项：类型不在白名单里
 			// 或压根嗅不出，发出去都会被上游拒收，只能降级为文本。
