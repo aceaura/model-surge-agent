@@ -69,6 +69,11 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	if n := codec.CountResponseContainerUploads(resp); n > 0 {
 		notes = append(notes, codec.ContainerUploadDropNote(n))
 	}
+	// 涂抹思考块（redacted_thinking）的密文只有 anthropic 同族槽位能逐字承载：
+	// 编码器整块跳过，丢了要报出来。
+	if n := codec.CountResponseRedacted(resp); n > 0 {
+		notes = append(notes, codec.RedactedDropNote(n))
+	}
 	// 模型音频输出是 chat 非流式专属维度：本协议响应没有完整音频槽位。
 	if resp != nil && resp.Audio != nil {
 		notes = append(notes, codec.AudioOutputDropNote())

@@ -299,9 +299,12 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 		switch {
 		case b.Type == ir.BlockThinking && b.Thinking != nil:
 			if b.Thinking.Redacted {
-				// 与 Thinking 能力位无关：载荷是不可解读的密文，
-				// 任何出站协议都表达不了，包括同族的 Anthropic。
-				note("redacted_thinking", "encrypted reasoning payload cannot be re-encoded")
+				// 同族（anthropic↔anthropic）逐字往返：redacted_thinking 的密文原样
+				// 回吐，不算损耗。跨族没有密文槽位，整块丢弃并报一条——塞进别家的
+				// encrypted_content / thoughtSignature 等于伪造凭据，客户端下一轮回传必被拒。
+				if name != ProtocolAnthropic {
+					note("redacted_thinking", "encrypted reasoning payload cannot be re-encoded")
+				}
 				continue
 			}
 			if !caps.Thinking {
@@ -941,6 +944,14 @@ func ContainerUploadDropNote(n int) string {
 		"dropped %d container upload block(s): this protocol has no container file-reference slot, so the receiving side cannot see files uploaded to or produced by the code-execution container", n)
 }
 
+// RedactedDropNote 是涂抹思考块（redacted_thinking）丢失的说明：密文只有
+// anthropic 同族槽位能逐字承载，跨族转换带不过去，客户端下一轮无从原样回传，
+// Anthropic 的扩展思考续话校验会因此断链。密文属会话内容，不进说明。
+func RedactedDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped %d redacted_thinking block(s): the encrypted reasoning payload has no slot in this protocol, so the receiving side cannot replay it verbatim and Anthropic extended-thinking continuity breaks across the conversion", n)
+}
+
 // MediaOutputDropNote 是模型产出附件丢失的说明：图片与非图片附件分开计数，
 // 合成一个数字会让排障时分不清丢的是哪一类——两者在源协议里是不同块型，
 // 处置路径也不同。
@@ -1008,6 +1019,22 @@ func CountResponseContainerUploads(resp *ir.Response) int {
 	n := 0
 	for _, b := range resp.Content {
 		if b.Type == ir.BlockContainerUpload {
+			n++
+		}
+	}
+	return n
+}
+
+// CountResponseRedacted 数出响应里的涂抹思考块（redacted_thinking）。它的密文
+// 只有 anthropic 同族槽位能逐字承载，跨族编码器整块跳过——跳过之前先数出来，
+// 才不是静默的。与 CountResponseContainerUploads 同一路数。
+func CountResponseRedacted(resp *ir.Response) int {
+	if resp == nil {
+		return 0
+	}
+	n := 0
+	for _, b := range resp.Content {
+		if b.Type == ir.BlockThinking && b.Thinking != nil && b.Thinking.Redacted {
 			n++
 		}
 	}

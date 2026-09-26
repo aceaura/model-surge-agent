@@ -87,6 +87,9 @@ type streamEncoder struct {
 	// droppedCacheDetails 缓存写入 TTL 明细（anthropic 专属维度）被丢标记：
 	// 本协议 usage 没有 5m/1h 细分槽位，写入总量仍完整保留。
 	droppedCacheDetails bool
+	// droppedRedacted 被跳过的涂抹推理块（redacted_thinking）数：加密载荷是
+	// anthropic 同族专属，本协议没有承载槽位，整块跳过，Notes() 收尾时报出。
+	droppedRedacted int
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
 	// suppressUsageFrame 为真表示客户端明确说了不要那一帧单独的 usage
@@ -124,6 +127,9 @@ func (e *streamEncoder) Notes() []string {
 	}
 	if e.droppedCacheDetails {
 		notes = append(notes, codec.CacheCreationDetailsDropNote())
+	}
+	if e.droppedRedacted > 0 {
+		notes = append(notes, codec.RedactedDropNote(e.droppedRedacted))
 	}
 	// usage 细分维度与 TTL 明细同口径门控：客户端没 opt-in 时 usage 帧
 	// 压根没发，细分也就无所谓「没能交付」。
@@ -227,6 +233,14 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			// kind 已记进 blockKind，skipDelta 据此挡住该索引的任何后续增量，
 			// 不让 file_id 或空正文被编成凭空的文本/工具调用。
 			e.droppedUploads++
+			return nil, nil
+		case ir.BlockThinking:
+			// 涂抹推理块（redacted_thinking）的加密载荷是 anthropic 同族专属，
+			// 本协议没有承载槽位：整块跳过但计数，Notes() 报出。普通推理块的
+			// 正文经 EvThinkingDelta 走 reasoning_content，与异族处置相同，不计数。
+			if ev.Block != nil && ev.Block.Thinking != nil && ev.Block.Thinking.Redacted {
+				e.droppedRedacted++
+			}
 			return nil, nil
 		}
 		if kind != ir.BlockToolUse {

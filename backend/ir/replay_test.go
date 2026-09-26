@@ -96,10 +96,15 @@ func TestThinkingBlockSplitsTextAndSignature(t *testing.T) {
 func TestRedactedFlagSurvivesOnTheSkeleton(t *testing.T) {
 	got := ResponseEvents(&Response{Content: []Block{{
 		Type:     BlockThinking,
-		Thinking: &Thinking{Redacted: true},
+		Thinking: &Thinking{Redacted: true, RedactedData: "opaque"},
 	}}})
-	if b := got[1].Block; b == nil || b.Thinking == nil || !b.Thinking.Redacted {
+	b := got[1].Block
+	if b == nil || b.Thinking == nil || !b.Thinking.Redacted {
 		t.Fatalf("block_start = %#v", got[1].Block)
+	}
+	// D2：密文载荷随骨架带出，同族编码器才拿得到原文逐字回吐。
+	if b.Thinking.RedactedData != "opaque" {
+		t.Errorf("redacted payload must survive on the skeleton, got %#v", b.Thinking)
 	}
 }
 

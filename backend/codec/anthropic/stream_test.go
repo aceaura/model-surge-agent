@@ -236,8 +236,14 @@ func TestDecodeResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeResponse: %v", err)
 	}
-	if len(resp.Content) != 1 || resp.Content[0].Text != "done" {
-		t.Errorf("redacted_thinking must be dropped: %+v", resp.Content)
+	// D2：同族响应里的涂抹块原样保留，密文不丢——它是这段被涂抹推理唯一的
+	// 无损归宿，下一轮同族回传还要靠它。
+	if len(resp.Content) != 2 || resp.Content[0].Text != "done" {
+		t.Fatalf("want text + redacted_thinking preserved, got %+v", resp.Content)
+	}
+	rt := resp.Content[1]
+	if rt.Type != ir.BlockThinking || rt.Thinking == nil || !rt.Thinking.Redacted || rt.Thinking.RedactedData != "opaque" {
+		t.Errorf("redacted_thinking must round-trip with its ciphertext intact: %+v", rt)
 	}
 	if resp.StopReason != ir.StopEndTurn || resp.Usage.OutputTokens != 5 {
 		t.Errorf("resp = %+v", resp)

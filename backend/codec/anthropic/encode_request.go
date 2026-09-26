@@ -306,9 +306,21 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 		out.Content = content
 		out.IsError = b.ToolResult.IsError
 	case ir.BlockThinking:
-		// Redacted 块的载荷在解码期就已舍弃，编出一个空 thinking 块会被上游拒收。
-		if b.Thinking == nil || b.Thinking.Redacted {
+		if b.Thinking == nil {
 			return out, false, nil
+		}
+		if b.Thinking.Redacted {
+			// 同族往返：涂抹块逐字回传（redacted_thinking + data 原文）。Anthropic
+			// 的续话校验要求上一轮的涂抹块原样带回，丢掉它多轮对话会断链。这个
+			// encodeBlock 同时服务出站请求、非流式响应与流式响应三条 anthropic 编码
+			// 路径，改一处三处都保真。载荷为空时无从伪造（空 data 会被上游拒收），
+			// 仍跳过——由有损诊断报出。
+			if b.Thinking.RedactedData == "" {
+				return out, false, nil
+			}
+			out.Type = blockRedactedThinking
+			out.Data = b.Thinking.RedactedData
+			return out, true, nil
 		}
 		out.Type = blockThinking
 		out.Thinking = b.Thinking.Text

@@ -142,8 +142,10 @@ func TestSameProtocolStillNormalizes(t *testing.T) {
 	if !strings.Contains(string(got["messages"]), `"content":[{"type":"text","text":"hi"}]`) {
 		t.Errorf("string content must be normalized to a block array, got %s", got["messages"])
 	}
-	if strings.Contains(string(wire), "opaque") {
-		t.Errorf("redacted_thinking must be dropped, not passed through: %s", wire)
+	// D2：同族（anthropic→anthropic）涂抹块的密文原样往返——这是它唯一的
+	// 无损归宿，丢了下一轮就再也还原不出这段被涂抹的推理。
+	if !strings.Contains(string(wire), `{"type":"redacted_thinking","data":"opaque"}`) {
+		t.Errorf("same-family redacted_thinking must round-trip verbatim, got %s", got["messages"])
 	}
 	if !strings.Contains(string(wire), `"max_tokens":4096`) {
 		t.Errorf("max_tokens must be filled in, got %s", wire)

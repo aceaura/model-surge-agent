@@ -103,12 +103,13 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 				return nil, ir.NewError(ir.ErrUpstream, 0, "",
 					fmt.Sprintf("undecodable content block: %v", err))
 			}
-			if !ok || isRedactedThinking(b) {
-				// redacted_thinking：整块丢弃，后续该 index 的 delta 也就无处落地，
-				// 聚合器会按 delta 类型补块，内容照样保留为普通推理文本。
-				// 请求侧留标记是为了报有损，响应侧没有下游要看它。
+			if !ok {
 				return nil, nil
 			}
+			// redacted_thinking 不再丢弃：同族（anthropic 客户端）要逐字收到它，
+			// 才能在下一轮原样回传，Anthropic 的续话校验才不会断链。跨族客户端
+			// 表达不了，由各自的出站编码器跳过并报有损。涂抹块没有 delta，密文随
+			// 块开始全量下发（与 web_search_tool_result.content 同一处置）。
 			block = b
 			// 块开启时的 input 通常是占位空对象，真正入参由后续 input_json_delta
 			// 累积；留着占位符会被当成前缀拼进入参，产出非法 JSON。
@@ -245,17 +246,11 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 			return nil, ir.NewError(ir.ErrUpstream, 0, "",
 				fmt.Sprintf("undecodable response block: %v", err))
 		}
-		if ok && !isRedactedThinking(block) {
+		if ok {
 			out.Content = append(out.Content, block)
 		}
 	}
 	return out, nil
-}
-
-// isRedactedThinking 认出解码期留下的加密推理标记。
-// 请求侧留着它是为了报有损，响应侧一律丢：客户端拿到一个空推理块没有用处。
-func isRedactedThinking(b ir.Block) bool {
-	return b.Type == ir.BlockThinking && b.Thinking != nil && b.Thinking.Redacted
 }
 
 // DecodeError 把上游错误响应归一成 ir.Error。

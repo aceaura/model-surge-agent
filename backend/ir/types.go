@@ -321,9 +321,16 @@ type Thinking struct {
 	Signature     string `json:"signature,omitempty"`
 	SignatureFrom string `json:"signature_from,omitempty"`
 	// Redacted 标记载荷是不可解读的加密推理（Anthropic 的 redacted_thinking）。
-	// 这类块出站时一律丢弃，留标记只为让有损诊断报得出来——
-	// 解码时直接丢掉的话，IR 里就再没有痕迹可查。
+	// 这类块没有签名可言、且必须逐字回传：Anthropic 的续话校验要求上一轮的涂抹块
+	// 原样带回，丢掉它会让安全系统涂抹过一次之后多轮对话直接断链。
 	Redacted bool `json:"redacted,omitempty"`
+	// RedactedData 是涂抹块的加密载荷原文（Anthropic redacted_thinking 的 data）。
+	// 只在同族（anthropic↔anthropic）往返时有意义：出站编码逐字回吐，不解也不改
+	// （上游是密文有效性的权威，本地判定只会误杀）。跨族协议没有对应槽位，一律
+	// 丢弃并报有损——塞进别家的密文槽（Responses 的 encrypted_content、Gemini 的
+	// thoughtSignature）等于伪造凭据，客户端下一轮回传必被拒。
+	// 属会话内容，不进日志也不进诊断注记。
+	RedactedData string `json:"redacted_data,omitempty"`
 	// ItemID 是 Responses reasoning 条目的 item id（rs_…），同族往返原样
 	// 带回，理由同 ToolUse.ItemID。
 	ItemID string `json:"item_id,omitempty"`

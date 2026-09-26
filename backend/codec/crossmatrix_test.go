@@ -1800,17 +1800,30 @@ func TestSignatureLossIsFamilyScoped(t *testing.T) {
 	}
 }
 
-// TestRedactedThinkingIsAlwaysLossy 断言加密推理块在每个出站协议上都报有损，
-// 包括同族的 anthropic。载荷不可解读，谁都重编不出来——这是唯一与能力位
-// 无关的丢弃，所以不放进按能力位断言的字段矩阵。
-func TestRedactedThinkingIsAlwaysLossy(t *testing.T) {
+// TestRedactedThinkingLossyOnlyCrossFamily 断言加密推理块的有损性只落在跨族：
+// 同族（anthropic→anthropic）密文逐字往返、不报损耗，其余出站协议没有密文
+// 槽位、整块丢弃并恰报一条。载荷不可解读，跨族谁都重编不出来——塞进别家的
+// encrypted_content / thoughtSignature 等于伪造凭据，下一轮回传必被拒。
+func TestRedactedThinkingLossyOnlyCrossFamily(t *testing.T) {
 	for _, out := range outboundNames() {
 		t.Run(out, func(t *testing.T) {
 			req := probeRequest(ir.Block{Type: ir.BlockThinking,
-				Thinking: &ir.Thinking{Redacted: true, SignatureFrom: out}})
-			_, notes := lossyOf(t, out, req)
+				Thinking: &ir.Thinking{Redacted: true, RedactedData: "opaque", SignatureFrom: codec.ProtocolAnthropic}})
+			body, notes := lossyOf(t, out, req)
+			if out == codec.ProtocolAnthropic {
+				if len(notes) != 0 {
+					t.Errorf("同族 anthropic 不该报损耗，实得 %v", notes)
+				}
+				if !strings.Contains(string(body), `redacted_thinking`) || !strings.Contains(string(body), `opaque`) {
+					t.Errorf("同族 anthropic 必须逐字回吐密文，实得 %s", body)
+				}
+				return
+			}
 			if len(notes) != 1 || !strings.Contains(notes[0], "redacted_thinking") {
 				t.Errorf("%s 应恰报一条 redacted_thinking，实得 %v", out, notes)
+			}
+			if strings.Contains(string(body), "opaque") {
+				t.Errorf("%s 不得把密文塞进别家槽位，实得 %s", out, body)
 			}
 		})
 	}

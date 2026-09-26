@@ -74,6 +74,9 @@ type streamEncoder struct {
 	// droppedUploads 被跳过的容器文件引用块（container_upload）数：本协议
 	// 没有 file_id 槽位，整块跳过，Notes() 收尾时报出。
 	droppedUploads int
+	// droppedRedacted 被跳过的涂抹思考块（redacted_thinking）数：密文只有
+	// anthropic 同族槽位能逐字承载，本协议没有对应形态，整块跳过，Notes() 报出。
+	droppedRedacted int
 	// badToolArgs 是关块时判定畸形的函数调用入参数（增量已发出、改写
 	// 不了，只能计数），Notes() 报出。
 	badToolArgs int
@@ -115,6 +118,9 @@ func (e *streamEncoder) Notes() []string {
 	}
 	if e.droppedUploads > 0 {
 		notes = append(notes, codec.ContainerUploadDropNote(e.droppedUploads))
+	}
+	if e.droppedRedacted > 0 {
+		notes = append(notes, codec.RedactedDropNote(e.droppedRedacted))
 	}
 	if e.droppedTier != "" {
 		notes = append(notes, codec.TierEchoDropNote(e.droppedTier))
@@ -255,6 +261,16 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			e.skipIdx[ev.Index] = true
 			e.droppedUploads++
 			return nil, nil
+		case ir.BlockThinking:
+			// 涂抹思考块（redacted_thinking）的密文只有 anthropic 同族槽位能逐字
+			// 承载，本协议没有对应形态：整块跳过但计数，Notes() 报出。不跳过会落进
+			// openBlock，编出一个 encrypted_content 与 summary 全空的幽灵 reasoning
+			// 条目。非涂抹的普通思考块照常开条目。
+			if ev.Block != nil && ev.Block.Thinking != nil && ev.Block.Thinking.Redacted {
+				e.skipIdx[ev.Index] = true
+				e.droppedRedacted++
+				return nil, nil
+			}
 		}
 		return e.openBlock(ev.Index, kind, ev.Block)
 
@@ -895,6 +911,13 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			// 普通回答，落进 default 则整个响应编码失败。
 			parts = append(parts, wirePart{Type: partRefusal, Refusal: b.Text})
 		case ir.BlockThinking:
+			// 涂抹思考块（redacted_thinking）的密文只有 anthropic 同族槽位能逐字
+			// 承载，本协议没有对应形态：整块跳过，否则编出一个 encrypted_content 与
+			// summary 全空的幽灵 reasoning 条目。跳过时不 flush——没有推理条目要插在
+			// 这里，前后文本仍可并成一条。损耗由 EncodeResponseLossy 报出。
+			if b.Thinking != nil && b.Thinking.Redacted {
+				continue
+			}
 			// 推理条目要排在它所解释的输出之前，所以先把攒着的文本条目发出去。
 			if err := flush(); err != nil {
 				return nil, err

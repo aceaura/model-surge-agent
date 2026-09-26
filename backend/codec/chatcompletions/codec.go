@@ -72,6 +72,11 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	if n := codec.CountResponseContainerUploads(resp); n > 0 {
 		notes = append(notes, codec.ContainerUploadDropNote(n))
 	}
+	// 涂抹思考块（redacted_thinking）的密文只有 anthropic 同族槽位能逐字承载：
+	// 本协议无对应形态，编码器整块跳过，丢了要报出来。
+	if n := codec.CountResponseRedacted(resp); n > 0 {
+		notes = append(notes, codec.RedactedDropNote(n))
+	}
 	// 实际执行档位回显：值集装不下的（anthropic 的 batch、responses 的
 	// ultrafast）被编码器丢弃，照实报出——这一维决定计费。
 	notes = append(notes, codec.DescribeResponseTierLoss(resp, Name)...)

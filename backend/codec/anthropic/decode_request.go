@@ -279,11 +279,11 @@ func decodeBlock(b wireBlock) (ir.Block, bool, error) {
 			SignatureFrom: Name,
 		}
 	case blockRedactedThinking:
-		// 载荷是加密的，本服务无法解读也无法转给任何上游。这里不丢，
-		// 带标记进 IR，由出站编码丢弃并报一条有损说明——
-		// 解码期丢掉就再没有痕迹可查了。
+		// 载荷是加密的，本服务无法解读，但同族往返必须逐字保留：Anthropic 的
+		// 续话校验要求上一轮的涂抹块原样带回，丢掉它多轮对话会断链。带密文进 IR，
+		// 出站时同族（anthropic）逐字回吐，跨族丢弃并报有损。
 		out.Type = ir.BlockThinking
-		out.Thinking = &ir.Thinking{Redacted: true, SignatureFrom: Name}
+		out.Thinking = &ir.Thinking{Redacted: true, RedactedData: b.Data, SignatureFrom: Name}
 	case blockServerToolUse:
 		// 托管工具调用：放行而不是报 unknown——多轮历史里带 web_search
 		// 痕迹的同族往返是合法输入，拒收会让客户端整轮 400。
