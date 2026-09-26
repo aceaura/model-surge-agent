@@ -558,9 +558,11 @@ func convertError(status int, e *wireError) *ir.Error {
 func convertUsage(u wireUsage) ir.Usage {
 	out := ir.Usage{
 		InputTokens: u.PromptTokenCount,
-		// 推理消耗不含在 candidatesTokenCount 里，但计费上属于输出，
-		// 所以既并进输出总量，又单记一维——与 responses 口径一致。
-		OutputTokens:    u.CandidatesTokenCount + u.ThoughtsTokenCount,
+		// 推理消耗与工具调用消耗都不含在 candidatesTokenCount 里，但计费上
+		// 都属于输出，所以并进输出总量才与账单一致。推理另单记一维
+		// （ReasoningTokens）与 responses 口径对齐；工具调用消耗无对应细分维，
+		// 只并入总量，不新开一维（它是对同批输出 token 的再细分，不过进程边界）。
+		OutputTokens:    u.CandidatesTokenCount + u.ThoughtsTokenCount + u.ToolUsePromptTokenCount,
 		ReasoningTokens: u.ThoughtsTokenCount,
 		CacheReadTokens: u.CachedContentTokens,
 	}

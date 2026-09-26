@@ -152,7 +152,12 @@ type wireUsage struct {
 	// ThoughtsTokenCount 是推理消耗，不含在 CandidatesTokenCount 里，
 	// 计费上属于输出，累加进 output 才与账单一致。
 	ThoughtsTokenCount int64 `json:"thoughtsTokenCount,omitempty"`
-	TotalTokenCount    int64 `json:"totalTokenCount,omitempty"`
+	// ToolUsePromptTokenCount 是生成函数调用参数的消耗。名字里带 Prompt 是
+	// 上游的历史命名，语义上属于输出侧：它与 ThoughtsTokenCount 一样不含在
+	// CandidatesTokenCount 里，而是 totalTokenCount 的一个独立加项。此前这一维
+	// 全仓无人接收，工具调用回合的输出被系统性少计（少计的正是最贵的那部分）。
+	ToolUsePromptTokenCount int64 `json:"toolUsePromptTokenCount,omitempty"`
+	TotalTokenCount         int64 `json:"totalTokenCount,omitempty"`
 }
 
 type wireError struct {
