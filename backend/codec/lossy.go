@@ -783,6 +783,21 @@ func describeParamsLossy(req *ir.Request, name string, caps Capabilities, note, 
 		if rf.Description != "" && name != ProtocolChatCompletions && name != ProtocolResponses {
 			note("response_format.description", "the target protocol's structured-output slot has no description key, the schema's natural-language hint will not reach the model")
 		}
+		// json_schema.strict 与 .name 同样只有 OpenAI 两系有槽位。
+		if name != ProtocolChatCompletions && name != ProtocolResponses {
+			// strict：anthropic 的 output_config.format 与 gemini 的 responseSchema
+			// 恒为严格语义、没有开关。客户端显式要 strict:false（放宽 schema、
+			// 容忍额外字段或可选字段）时，这个放宽到不了目标，输出反被过度约束
+			// ——与工具级 strict 一样报出。显式 true 与目标的恒严格同义，不算
+			// 丢失，不报（否则每个严格结构化请求都白搭一条说明）。
+			if rf.Strict != nil && !*rf.Strict {
+				note("response_format.strict", "the target protocol's structured output is always schema-strict with no leniency switch, the requested non-strict mode is dropped and the response will be constrained to the schema")
+			}
+			// name：结构化输出的标识键（OpenAI 用于缓存/路由），目标没有这一键。
+			if rf.Name != "" {
+				note("response_format.name", "the target protocol's structured-output slot has no name key, the schema's identifier will not reach the model")
+			}
+		}
 	}
 	if req.Verbosity != "" && !caps.Verbosity {
 		note("verbosity", "no verbosity parameter")
@@ -1271,6 +1286,31 @@ func CitationDropNote(n int) string {
 func CitationResolveDropNote(n int) string {
 	return fmt.Sprintf(
 		"dropped %d citation(s): a cross-protocol citation carried no raw form to pass through and its cited_text could not be resolved against the block text, and web_search_result_location requires cited_text, so the annotation was skipped rather than sent empty", n)
+}
+
+// ResponseSchemaDowngradeNote 响应 schema 整体退成「只要求是 JSON」的注记：
+// 归一失败（schema 不是合法 JSON）或无可约束的 properties 时，本协议只发
+// responseMimeType 而不发 responseSchema。客户端会直接 JSON.parse 响应，
+// 少了 schema 约束就可能拿到不合结构的载荷，是它无从归因的硬失败。
+func ResponseSchemaDowngradeNote(name, why string) string {
+	return fmt.Sprintf(
+		"dropped response_format.schema (%s cannot express it: %s), downgraded to plain JSON mode; the response will still be JSON but is no longer constrained to the requested schema", name, why)
+}
+
+// ResponseSchemaTruncatedNote 响应 schema 超深的注记：超过归一深度上限的子树
+// 原样透传，可能被上游按方言拒收。与工具 schema 的同名诊断措辞对齐。
+func ResponseSchemaTruncatedNote(name string) string {
+	return fmt.Sprintf(
+		"rewrote response_format.schema (%s cannot express it: schema nesting exceeds the normalization depth cap), deeper subtrees passed through as-is", name)
+}
+
+// ResponseSchemaDroppedKeysNote 响应 schema 被剔除关键字的注记：本协议的方言
+// 白名单装不下的约束（minLength/maxLength/pattern/additionalProperties 等）
+// 被削掉，上游可能返回违反客户端 schema 的 JSON。列出的键名是 schema 结构、
+// 非会话内容，可进注记。
+func ResponseSchemaDroppedKeysNote(name string, keys []string) string {
+	return fmt.Sprintf(
+		"dropped response_format.schema keywords (%s cannot express it: schema keywords not in this protocol's dialect: %s), the response may violate those constraints", name, strings.Join(keys, ", "))
 }
 
 // countRequestServerTools 数出请求历史里的托管工具块。计数刻意分开：

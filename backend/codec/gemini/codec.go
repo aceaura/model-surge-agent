@@ -133,6 +133,9 @@ func (outboundCodec) EncodeRequestLossy(req *ir.Request) ([]byte, []string, erro
 	if note := codec.PayloadBudgetNote(body, Name, caps); note != "" {
 		shapeNotes = append(shapeNotes, note)
 	}
+	// 响应 schema 的方言归一在 EncodeRequest 内进行、不回传 note，降级此前
+	// 完全静默。按原始请求复算丢弃，与工具 schema 的 shapeToolSchema 对称。
+	shapeNotes = append(shapeNotes, responseSchemaLossNotes(req.ResponseFormat)...)
 	// 诊断按原始请求推导：shape 已把部分字段降级掉，拿改写后的请求去推
 	// 会漏报本该报的丢弃。
 	return body, codec.MergeNotes(codec.DescribeLossy(req, Name, caps), shapeNotes), nil

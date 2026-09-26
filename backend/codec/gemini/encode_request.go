@@ -361,3 +361,32 @@ func applyResponseFormat(cfg *wireGenerateCfg, rf *ir.ResponseFormat) {
 	}
 	cfg.ResponseSchema = json.RawMessage(rf.Schema)
 }
+
+// responseSchemaLossNotes 复算 applyResponseFormat 的降级，把静默丢弃变成有损
+// 诊断。判据与 applyResponseFormat 逐条对齐（同样调 Normalize、同样看
+// err/Omit/DroppedKeys/Truncated），否则报的与真丢的会漂移。
+//
+// 与工具 schema 的 shapeToolSchema 对称：那条路径早就报了这三类丢弃，响应
+// schema 走的是另一条编码路（EncodeRequest 内，不回传 note），此前完全静默。
+// 客户端会直接 JSON.parse 响应，schema 被削掉约束或整个退成纯 JSON 模式，
+// 拿到不合 schema 的载荷是它无从归因的硬失败。
+func responseSchemaLossNotes(rf *ir.ResponseFormat) []string {
+	if rf == nil || rf.Kind != ir.ResponseFormatSchema || rf.Schema == "" {
+		return nil
+	}
+	res, err := schemadialect.Normalize([]byte(rf.Schema), outboundCodec{}.Caps().SchemaDialect)
+	if err != nil {
+		return []string{codec.ResponseSchemaDowngradeNote(Name, "schema is not valid JSON")}
+	}
+	if res.Omit {
+		return []string{codec.ResponseSchemaDowngradeNote(Name, "schema has no properties to constrain")}
+	}
+	var notes []string
+	if res.Truncated {
+		notes = append(notes, codec.ResponseSchemaTruncatedNote(Name))
+	}
+	if len(res.DroppedKeys) > 0 {
+		notes = append(notes, codec.ResponseSchemaDroppedKeysNote(Name, res.DroppedKeys))
+	}
+	return notes
+}
