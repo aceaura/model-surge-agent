@@ -43,6 +43,14 @@ type streamDecoder struct {
 	// droppedBadFrames 外层 JSON 都解不开的坏帧计数：结构损坏而非内容损坏，
 	// 跳过续流（SSE 以事件边界自同步，坏一帧不污染后续帧），经 Notes() 报出。
 	droppedBadFrames int
+	// emittedText 累积已下发的正文（不含 thought）：累计式上游每帧重发
+	// 全部文本，按前缀比对只放行新增后缀（判据与取舍见 CumulativeTextNote）。
+	emittedText strings.Builder
+	// cumulativeFrames / rewoundFrames / nulParts 分别计累计帧、重复回退帧
+	// 与含 NUL 的文本 part，经 Notes() 报出。
+	cumulativeFrames int
+	rewoundFrames    int
+	nulParts         int
 }
 
 type openBlock struct {
@@ -63,6 +71,18 @@ func (d *streamDecoder) Notes() []string {
 	if d.droppedBadFrames > 0 {
 		notes = append(notes, codec.BadFrameSkipNote(d.droppedBadFrames))
 		d.droppedBadFrames = 0
+	}
+	if d.cumulativeFrames > 0 {
+		notes = append(notes, codec.CumulativeTextNote(d.cumulativeFrames))
+		d.cumulativeFrames = 0
+	}
+	if d.rewoundFrames > 0 {
+		notes = append(notes, codec.RewoundTextNote(d.rewoundFrames))
+		d.rewoundFrames = 0
+	}
+	if d.nulParts > 0 {
+		notes = append(notes, codec.NulTextStripNote(d.nulParts))
+		d.nulParts = 0
 	}
 	return codec.DedupeNotes(notes)
 }
@@ -174,8 +194,11 @@ func (d *streamDecoder) decodeParts(parts []wirePart) ([]ir.Event, error) {
 
 		case p.Thought:
 			out = append(out, d.switchTo(ir.BlockThinking)...)
-			if p.Text != "" {
-				out = append(out, ir.Event{Type: ir.EvThinkingDelta, Index: d.current.index, Text: p.Text})
+			// 推理正文只做 NUL 清理，不做累计检测：thought 与正文是两条
+			// 独立的文本流，共用一个前缀游标会让 thought 的重复前缀
+			// 被误判成正文的回退。签名照常透传。
+			if text := d.stripNul(p.Text); text != "" {
+				out = append(out, ir.Event{Type: ir.EvThinkingDelta, Index: d.current.index, Text: text})
 			}
 			if p.ThoughtSignature != "" {
 				out = append(out, ir.Event{
@@ -187,8 +210,19 @@ func (d *streamDecoder) decodeParts(parts []wirePart) ([]ir.Event, error) {
 			}
 
 		case p.Text != "":
+			// 先剥 NUL（清完为空则整 part 跳过，不开块），再按前缀比对
+			// 把累计式上游重发的全文压成新增后缀。ok=false 表示这帧没有
+			// 净增长（纯重复或回退），吞掉不发空增量。
+			text := d.stripNul(p.Text)
+			if text == "" {
+				continue
+			}
+			delta, ok := d.classifyText(text)
+			if !ok {
+				continue
+			}
 			out = append(out, d.switchTo(ir.BlockText)...)
-			out = append(out, ir.Event{Type: ir.EvTextDelta, Index: d.current.index, Text: p.Text})
+			out = append(out, ir.Event{Type: ir.EvTextDelta, Index: d.current.index, Text: delta})
 
 		case p.InlineData != nil || p.FileData != nil:
 			// 模型返回的图片本服务不往下游转：IR 的图片块只用于请求方向，
@@ -200,6 +234,60 @@ func (d *streamDecoder) decodeParts(parts []wirePart) ([]ir.Event, error) {
 		}
 	}
 	return out, nil
+}
+
+// stripNul 剥掉正文里的 NUL 字节并计数。上游偶尔把 \u0000 交织进文本，
+// 它会毒化下游终端与日志解析器。剥完为空表示这帧本就只含 NUL。
+func (d *streamDecoder) stripNul(s string) string {
+	clean := stripNulText(s)
+	if clean != s {
+		d.nulParts++
+	}
+	return clean
+}
+
+// stripNulText 是流式与非流式共用的 NUL 剥离：同一处措辞、同一处置，
+// 免得一次丢弃在两条路径上说法不同。不含 NUL 时原样返回（不做分配）。
+func stripNulText(s string) string {
+	if !strings.ContainsRune(s, 0) {
+		return s
+	}
+	return strings.ReplaceAll(s, "\x00", "")
+}
+
+// classifyText 把一帧正文压成相对已下发文本的净增量。
+//
+// 本协议「每帧一个完整响应对象」的模型下，有的上游按累计式发正文——
+// 每帧携带从头到当前的全部文本，而不是增量。直接逐帧转发会让客户端看到
+// 文本不断重复叠加。这里按前缀比对：
+//   - text 以已下发文本为前缀：是累计帧，只放行新增后缀（delta 为空则吞掉）；
+//   - 已下发文本以 text 为前缀：是重复或回退帧，增量流无法表达负增长，吞掉；
+//   - 其余：当作正常增量帧原样放行。
+//
+// 已知取舍：真正的增量上游若恰好发来一整段与已下发文本前缀相同的帧，会被
+// 误判为累计帧而只放行后缀。误判概率随文本长度指数下降，参考实现同此取舍
+// （见 CumulativeTextNote 的 doc 注释）。
+func (d *streamDecoder) classifyText(text string) (string, bool) {
+	emitted := d.emittedText.String()
+	switch {
+	case emitted == text:
+		// 纯重复帧：一字未增，吞掉。
+		d.rewoundFrames++
+		return "", false
+	case emitted != "" && strings.HasPrefix(text, emitted):
+		// 累计帧：带出了新增后缀，只放行后缀。
+		d.cumulativeFrames++
+		delta := text[len(emitted):]
+		d.emittedText.WriteString(delta)
+		return delta, delta != ""
+	case emitted != "" && strings.HasPrefix(emitted, text):
+		// 回退帧：比已下发的短且是其前缀，增量流表达不了负增长，吞掉。
+		d.rewoundFrames++
+		return "", false
+	default:
+		d.emittedText.WriteString(text)
+		return text, true
+	}
 }
 
 // droppedResponseMediaNote 是响应内媒体被丢弃的说明。
@@ -326,6 +414,7 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	}
 	var notes []string
 	maxCandidate := 0
+	nulParts := 0
 	out := &ir.Response{ID: w.ResponseID, Model: w.ModelVersion, Content: []ir.Block{}}
 	if w.UsageMetadata != nil {
 		out.Usage = convertUsage(*w.UsageMetadata)
@@ -369,11 +458,22 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 				}
 				out.Content = append(out.Content, ir.Block{Type: ir.BlockToolUse, ToolUse: use})
 			case p.Thought:
+				text := stripNulText(p.Text)
+				if strings.ContainsRune(p.Text, 0) {
+					nulParts++
+				}
 				out.Content = append(out.Content, ir.Block{Type: ir.BlockThinking, Thinking: &ir.Thinking{
-					Text: p.Text, Signature: p.ThoughtSignature, SignatureFrom: Name,
+					Text: text, Signature: p.ThoughtSignature, SignatureFrom: Name,
 				}})
 			case p.Text != "":
-				out.Content = append(out.Content, ir.Block{Type: ir.BlockText, Text: p.Text})
+				text := stripNulText(p.Text)
+				if strings.ContainsRune(p.Text, 0) {
+					nulParts++
+				}
+				if text == "" {
+					continue
+				}
+				out.Content = append(out.Content, ir.Block{Type: ir.BlockText, Text: text})
 			case p.InlineData != nil || p.FileData != nil:
 				// 与流式同一处置、同一措辞。这个分支此前不存在，媒体 part
 				// 落到 switch 外面被静默跳过——连「丢了」都不在代码里。
@@ -386,6 +486,9 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	}
 	if maxCandidate > 0 {
 		notes = append(notes, codec.DroppedCandidatesNote(maxCandidate))
+	}
+	if nulParts > 0 {
+		notes = append(notes, codec.NulTextStripNote(nulParts))
 	}
 	return out, codec.DedupeNotes(notes), nil
 }

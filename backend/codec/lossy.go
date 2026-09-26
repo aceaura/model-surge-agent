@@ -978,6 +978,34 @@ func RedactedDropNote(n int) string {
 		"dropped %d redacted_thinking block(s): the encrypted reasoning payload has no slot in this protocol, so the receiving side cannot replay it verbatim and Anthropic extended-thinking continuity breaks across the conversion", n)
 }
 
+// CumulativeTextNote 是累计式文本帧被改写的说明：部分上游每帧重发迄今
+// 全部正文而非只发增量，逐字转发会让客户端文本按帧数重复膨胀（最轻句子
+// 复读，最重 token 用量翻倍）。按前缀比对识别，只下发新增后缀。
+//
+// 判据的已知取舍：增量式上游若恰好发来一帧「以全部已下发文本为前缀」的
+// 增量（模型逐字复读自己全部输出且分块边界对齐），会被误判为累计帧而少发
+// 前缀部分——该形态出现的概率随文本变长指数下降，而漏判累计式上游的代价
+// 是整段文本平方级重复，两害相权取其轻（参考实现同此取舍）。
+func CumulativeTextNote(n int) string {
+	return fmt.Sprintf(
+		"rewrote %d cumulative text frame(s): each carried the whole text so far instead of an increment, so only the new suffix was forwarded to keep the client's text from duplicating", n)
+}
+
+// RewoundTextNote 是重复/回退文本帧被吞掉的说明：帧文本是已下发文本的
+// 真前缀（重复重发或回退），增量流无法表达负增长，整帧不下发。
+func RewoundTextNote(n int) string {
+	return fmt.Sprintf(
+		"swallowed %d duplicate or rewound text frame(s): the frame carried text already delivered, and a delta stream cannot express negative growth", n)
+}
+
+// NulTextStripNote 是文本里 NUL 字符被剥除的说明：Gemini 上游有在流式
+// 文本里偶发夹杂 \x00 的已知行为，透传会污染下游终端、日志与 JSON 消费方
+// （多数解析器把 NUL 当字符串终止或非法控制字符）。
+func NulTextStripNote(n int) string {
+	return fmt.Sprintf(
+		"stripped NUL characters from %d text part(s): the upstream interleaved \\u0000 bytes into the text, which poison downstream terminals and log parsers", n)
+}
+
 // BadFrameSkipNote 是坏帧跳帧续流的说明：上游发来的某些 SSE 帧外层 JSON 都
 // 解不开，取不出任何内容。SSE 以事件边界自同步，坏一帧不污染后续帧，于是跳过
 // 续流而非终止整流——终止会让坏帧之后的全部正常正文一起陪葬。计数报出，数字
