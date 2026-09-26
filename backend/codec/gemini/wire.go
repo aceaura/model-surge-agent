@@ -7,12 +7,15 @@ import "encoding/json"
 // 注意没有 model 字段：模型名在 URL 路径里。也没有 stream 字段：
 // 流式由 :streamGenerateContent 方法名加 alt=sse 决定。
 type wireRequest struct {
-	Contents          []wireContent     `json:"contents"`
-	SystemInstruction *wireContent      `json:"systemInstruction,omitempty"`
-	Tools             []wireTools       `json:"tools,omitempty"`
-	ToolConfig        *wireToolConfig   `json:"toolConfig,omitempty"`
-	GenerationConfig  *wireGenerateCfg  `json:"generationConfig,omitempty"`
-	SafetySettings    []wireSafetyEntry `json:"safetySettings,omitempty"`
+	Contents []wireContent `json:"contents"`
+	// SystemInstruction 系统提示槽位；空 system 时省略键。
+	SystemInstruction *wireContent     `json:"systemInstruction,omitempty"`
+	Tools             []wireTools      `json:"tools,omitempty"`
+	ToolConfig        *wireToolConfig  `json:"toolConfig,omitempty"`
+	GenerationConfig  *wireGenerateCfg `json:"generationConfig,omitempty"`
+	// 没有 safetySettings 槽位：IR 无安全阈值维度，入站三协议也没有
+	// 对应参数，留着就是一个永远为空的死键。风控偏好属于调度层与
+	// 上游账号配置，不经本服务转发。
 }
 
 // wireContent 的 Role 只有 user 与 model 两种，没有 system：
@@ -112,11 +115,6 @@ type wireGenerateCfg struct {
 type wireThinkinCfg struct {
 	IncludeThoughts bool `json:"includeThoughts,omitempty"`
 	ThinkingBudget  *int `json:"thinkingBudget,omitempty"`
-}
-
-type wireSafetyEntry struct {
-	Category  string `json:"category"`
-	Threshold string `json:"threshold"`
 }
 
 // wireResponse 既是非流式响应体，也是流式的每一帧：
