@@ -184,6 +184,20 @@ func itemTypeOf(raw json.RawMessage) string {
 	return ""
 }
 
+// rejectStrayRefusal 在非 assistant 消息里发现拒绝正文部件时返回错误，最终由
+// DecodeRequest 包成 400。refusal 是模型输出的专属槽位，system/developer/user
+// 消息携带它属于畸形输入；放任它进 IR 会分两种坏法——塞进 System 后外族编码
+// 器无 refusal 槽位直接报错，落到 user 消息则被 chat 编码器静默丢弃且无注记。
+// 与其在下游各处补救，不如在唯一的入站解码点一次拒清。
+func rejectStrayRefusal(blocks []ir.Block, role string) error {
+	for _, b := range blocks {
+		if b.Type == ir.BlockRefusal {
+			return fmt.Errorf("refusal content part is only valid in an assistant message, got role %q", role)
+		}
+	}
+	return nil
+}
+
 // appendItem 把一个条目并入 IR。raw 是该条目的线上原文，未知条目类型整块
 // 归不透明时要靠它逐字保真（wireItem 只认得已建模的键）。
 //
@@ -204,11 +218,29 @@ func appendItem(out *ir.Request, item wireItem, raw json.RawMessage) error {
 		}
 		switch item.Role {
 		case roleSystem, roleDeveloper:
+			// 拒绝正文是 assistant 专属槽位（模型「拒绝作答」时的输出）。客户端
+			// 把它塞进 system/developer 消息属于畸形输入：放进 out.System 后，
+			// chat 编码器没有 refusal 槽位会整轮报错，anthropic/gemini 又会把它
+			// 当系统指令降级成普通文本——两种处置都不是客户端本意，且跨外族不
+			// 一致。按「畸形请求→400」纪律在解码期就拒，而不是静默改写。
+			if err := rejectStrayRefusal(blocks, item.Role); err != nil {
+				return err
+			}
 			out.System = append(out.System, blocks...)
 		case roleAssistant:
 			appendBlocks(out, ir.RoleAssistant, blocks, item.ID)
-		default:
+		case roleUser, "":
+			// 同理：落到 user 消息的 refusal 会被 chat 编码器静默丢弃（refusal
+			// 只在 m.Role==assistant 时回写），且不留任何注记。解码期就拒。
+			if err := rejectStrayRefusal(blocks, item.Role); err != nil {
+				return err
+			}
 			appendBlocks(out, ir.RoleUser, blocks, item.ID)
+		default:
+			// 未知角色此前被静默当成 user：客户端拼错角色名（如 "tool"、
+			// "fucntion"）时，消息会以 user 身份送进模型，症状是答非所问，而请求
+			// 看起来成功了、无从察觉。与 chat 解码器同口径，直接 400。
+			return fmt.Errorf("unknown role %q", item.Role)
 		}
 		return nil
 
