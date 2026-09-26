@@ -214,8 +214,12 @@ func encodeMessage(m ir.Message, names map[string]string) ([]wireContent, error)
 			}}
 			// 签名写回 part 自身：本协议就是这样表达工具调用的推理凭据。
 			// 异族的不写（DescribeLossy 已经为它留了说明）——把别家的密文
-			// 发过来会让上游拒整轮。
-			if b.ToolUse.SignatureFrom == Name {
+			// 发过来会让上游拒整轮。判据必须与有损诊断（toolSigDropReason）、
+			// 以及上面思考块那条（ForeignSignature）同源：既看来源族，也看密文
+			// 前缀。只看 SignatureFrom==Name 会漏掉「来源被标成 gemini、密文却
+			// 是别家前缀（gAAAA… 归 responses）」的历史/伪造数据——诊断报「已
+			// 剥离」而编码器照发，既自相矛盾又把会被上游拒整轮的密文送出去。
+			if _, drop := codec.ForeignToolSignature(b.ToolUse.Signature, b.ToolUse.SignatureFrom, Name, true); !drop {
 				part.ThoughtSignature = b.ToolUse.Signature
 			}
 			parts = append(parts, part)

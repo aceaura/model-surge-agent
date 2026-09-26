@@ -92,6 +92,33 @@ func TestForeignToolSignatureIsStrippedWithANote(t *testing.T) {
 	}
 }
 
+// 判据 11b：来源族被标成 gemini、密文却是别家前缀（gAAAA… 归 responses）的
+// 历史/伪造数据，仍不得回写。判据 11 只覆盖 SignatureFrom=anthropic（靠来源族
+// 就能判异族）；这一条覆盖「来源自称本族、前缀出卖了它」——只看 SignatureFrom
+// 的旧判据会照发，与有损诊断报的「已剥离」自相矛盾，且上游会拒整轮。回写判据
+// 必须与诊断（toolSigDropReason）、思考块那条（ForeignSignature）同源。
+func TestForgedPrefixToolSignatureIsStrippedWithANote(t *testing.T) {
+	req := &ir.Request{Model: "gemini-3-pro", Messages: []ir.Message{{
+		Role: ir.RoleAssistant, Content: []ir.Block{{
+			Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
+				ID: "call_1", Name: "grep", Input: `{"q":"x"}`,
+				Signature: "gAAAAABxyz", SignatureFrom: Name, // 自称本族，密文却是别家前缀
+			},
+		}},
+	}}}
+	body, notes, err := outboundCodec{}.EncodeRequestLossy(req)
+	if err != nil {
+		t.Fatalf("EncodeRequestLossy: %v", err)
+	}
+	part := functionCallPart(t, body)
+	if part.ThoughtSignature != "" {
+		t.Errorf("伪造前缀的异族密文被发给了上游：%q——上游会拒整轮", part.ThoughtSignature)
+	}
+	if !hasNoteAbout(notes, "tool call signature") {
+		t.Errorf("剥离了却一声不响：%#v", notes)
+	}
+}
+
 // 判据 12：上游没给签名时字段整个省略，不出说明。
 //
 // 空字符串写进 part 会让 wire 上多一个空字段；出说明会让每次普通工具调用
