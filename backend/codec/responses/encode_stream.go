@@ -285,6 +285,18 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			return nil, fmt.Errorf(
 				"responses: cannot stream opaque output %q produced by protocol %q: the type is only defined in the protocol that produced it", wt, from)
 		}
+		// 工具调用自带的推理签名（gemini 把 thoughtSignature 挂在 functionCall
+		// part 自身）本协议的 function_call 条目没有承载槽位：必然丢弃。与非流式
+		// DescribeResponseToolSignatureLoss(resp, Name, false) 同口径报出，否则
+		// stream:true 时上游推理凭据蒸发得无影无踪、stream:false 时却有说明，
+		// 两条路径结论不一（判据同源，措辞一致）。只在真正的块开启帧上认：
+		// ensureOpen 补开走的是 nil block，签名本就无从谈起。
+		if kind == ir.BlockToolUse && ev.Block != nil && ev.Block.ToolUse != nil {
+			if note, drop := codec.ForeignToolSignature(
+				ev.Block.ToolUse.Signature, ev.Block.ToolUse.SignatureFrom, Name, false); drop {
+				e.notes = append(e.notes, note)
+			}
+		}
 		return e.openBlock(ev.Index, kind, ev.Block)
 
 	case ir.EvTextDelta:

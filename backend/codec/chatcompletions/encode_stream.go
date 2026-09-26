@@ -259,6 +259,17 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		if kind != ir.BlockToolUse {
 			return nil, nil
 		}
+		// 工具调用自带的推理签名（gemini 把 thoughtSignature 挂在 functionCall
+		// part 自身）本协议的 tool_calls 没有承载槽位：必然丢弃。与非流式
+		// DescribeResponseToolSignatureLoss(resp, Name, false) 同口径报出，否则
+		// stream:true 时上游推理凭据蒸发得无影无踪、stream:false 时却有说明，
+		// 两条路径结论不一（判据同源，措辞一致）。
+		if ev.Block != nil && ev.Block.ToolUse != nil {
+			if note, drop := codec.ForeignToolSignature(
+				ev.Block.ToolUse.Signature, ev.Block.ToolUse.SignatureFrom, Name, false); drop {
+				e.notes = append(e.notes, note)
+			}
+		}
 		// 工具调用的块开启帧带 id 与 name，必须立刻发出：
 		// 后续只有 arguments 分片，此时不发就永远发不出去了。
 		n := e.toolSlot(ev.Index)
