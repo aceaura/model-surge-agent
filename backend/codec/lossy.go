@@ -1262,6 +1262,17 @@ func CitationDropNote(n int) string {
 		"dropped %d document citation(s): this protocol identifies an annotation source by URL, and these citations point at a document index with page/block/character offsets instead, so the client cannot see which passage was cited", n)
 }
 
+// CitationResolveDropNote 反推失败的引用丢失注记：跨协议投影来的引用没有原文
+// 可透传，编成 web_search_result_location 又必须带 cited_text，而它既没自带
+// cited_text、也无法按范围从所在块正文切出来时，整条只能丢弃（带空 cited_text
+// 发出去上游 400，丢一条引用好过整轮被拒）。与文档类引用的 CitationDropNote
+// 分账——那是「形态装不下」，这是「形态装得下但正文里定位不到」。非流式扫描
+// 与流式编码器共用同一措辞。
+func CitationResolveDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped %d citation(s): a cross-protocol citation carried no raw form to pass through and its cited_text could not be resolved against the block text, and web_search_result_location requires cited_text, so the annotation was skipped rather than sent empty", n)
+}
+
 // countRequestServerTools 数出请求历史里的托管工具块。计数刻意分开：
 // 两个数字对称时「接反」这类错误在夹具上看不出来。
 func countRequestServerTools(req *ir.Request) (calls, results int) {

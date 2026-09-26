@@ -135,3 +135,34 @@ func encodeCitations(text string, cs []ir.Citation) []json.RawMessage {
 	}
 	return out
 }
+
+// countUnresolvableCitations 数出 encodeCitations 会整条丢弃的引用：没有 Raw
+// 可透传、又反推不出 cited_text 的那些。判据必须与 encodeCitations 的丢弃分支
+// 逐字对齐（同样是 len(Raw)==0 且 ResolveCitedText 返回空），否则诊断计数会与
+// 实际编码漂移——报了没丢、或丢了没报，两种都让「从不静默丢弃」失效。
+func countUnresolvableCitations(text string, cs []ir.Citation) int {
+	n := 0
+	for _, c := range cs {
+		if len(c.Raw) > 0 {
+			continue
+		}
+		if ir.ResolveCitedText(text, c) == "" {
+			n++
+		}
+	}
+	return n
+}
+
+// countResponseDroppedCitations 扫非流式响应，数出 encodeBlock 会整条丢弃的
+// 引用总数。判据与流式侧同源（逐文本块调 countUnresolvableCitations），两条
+// 路径报同一件事、用同一措辞，非流式响应不会因为走了另一条编码路就漏报。
+func countResponseDroppedCitations(resp *ir.Response) int {
+	if resp == nil {
+		return 0
+	}
+	n := 0
+	for _, b := range resp.Content {
+		n += countUnresolvableCitations(b.Text, b.Citations)
+	}
+	return n
+}

@@ -30,6 +30,10 @@ type streamEncoder struct {
 	toolArgs map[int][]byte
 	// badToolArgs 是关块时判定畸形的工具调用数，Notes() 报出。
 	badToolArgs int
+	// droppedCitations 是反推失败被整条丢弃的引用数：跨协议投影来、无 Raw
+	// 可透传又切不出 cited_text 的引用，encodeCitations 会跳过它们（带空
+	// cited_text 上游 400）。丢弃不能静默，计数经 Notes() 报出。
+	droppedCitations int
 	// blockOrder 让 Finish 按开启顺序闭合，避免 map 遍历顺序不定
 	// 导致同样的输入产出不同的帧序。
 	blockOrder []int
@@ -57,6 +61,10 @@ func (e *streamEncoder) Notes() []string {
 	notes := e.notes
 	if e.badToolArgs > 0 {
 		notes = append(notes, ir.RawArgsPassNote(e.badToolArgs))
+	}
+	if e.droppedCitations > 0 {
+		notes = append(notes, codec.CitationResolveDropNote(e.droppedCitations))
+		e.droppedCitations = 0
 	}
 	if e.droppedTier != "" {
 		notes = append(notes, codec.TierEchoDropNote(e.droppedTier))
@@ -187,7 +195,8 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		}
 		// 逐条编帧：本协议的 citations_delta 一帧只带一条引用。
 		// 带 Raw 的原样转出，投影来的重建；cited_text 反推不出的条目
-		// 由 encodeCitations 整条丢弃。
+		// 由 encodeCitations 整条丢弃，这里同步计数，Notes() 收尾报出。
+		e.droppedCitations += countUnresolvableCitations(e.text[ev.Index], ev.Citations)
 		var out [][]byte
 		for _, raw := range encodeCitations(e.text[ev.Index], ev.Citations) {
 			frame, err := marshalFrame(evContentBlockDelta, streamEvent{
