@@ -115,13 +115,42 @@ func (s *FrameScanner) Err() error {
 	return s.err
 }
 
+// maxLineBytes 是单行读入的上限：帧上限管的是 data 内容，行长还要容纳
+// 「data:」前缀与行尾 CRLF 这些框架开销，故比 maxFrameBytes 宽两字节。
+// 超过即拒：单行是帧的组成部分，没有理由允许它比整帧大出一个量级。
+const maxLineBytes = maxFrameBytes + 2
+
 // readLine 读一行并去掉行尾的 CR/LF。
+//
+// 不用 ReadString 是因为它读到换行为止、没有任何长度上限：上游发一条
+// 不带换行的巨行时内存在 maxFrameBytes 检查（只对已切成行的 data 生效）
+// 介入之前先无界增长。手工按 ReadSlice 分块累积并设 maxLineBytes 上限。
+//
+// EOF 契约与 ReadString 一致：半行内容先交出去（err 为 nil），
+// 下一次调用才报 EOF，Scan 借此把流断开处的最后一帧交给调用方。
 func (s *FrameScanner) readLine() (string, error) {
-	line, err := s.r.ReadString('\n')
-	if err != nil && line == "" {
-		return "", err
+	var buf []byte
+	for {
+		chunk, err := s.r.ReadSlice('\n')
+		buf = append(buf, chunk...)
+		if len(buf) > maxLineBytes {
+			return "", io.ErrShortBuffer
+		}
+		switch {
+		case err == nil:
+			return strings.TrimRight(string(buf), "\r\n"), nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			// 行超过读缓冲（64KB），继续攒下一段。
+			continue
+		case len(chunk) == 0 && len(buf) == 0:
+			return "", err
+		default:
+			// 底层读出错但已攒到内容（典型是 EOF 前的半行，或前几段
+			// 撑满读缓冲后 EOF 交回空段）：先交行，错误留到下一次调用
+			// 再报——与原 ReadString 的契约一致。
+			return strings.TrimRight(string(buf), "\r\n"), nil
+		}
 	}
-	return strings.TrimRight(line, "\r\n"), nil
 }
 
 // splitField 切 `field: value`。按 SSE 规范，冒号后的单个空格要去掉，
