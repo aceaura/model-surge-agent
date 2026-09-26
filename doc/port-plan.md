@@ -266,17 +266,26 @@
 | 45 | #79 | `f032c1b` | Created 透传 + incomplete reason 细分 + 废弃 functions 折现代槽位 |
 | 46 | #80 | `761be15` | steered 独立档 + usage.iterations + completed_at/缓存诊断/审核回执 + reasoning 双通道 |
 
-### 6.2 搁置清单（按用户批准口径，本轮不移植）
+### 6.2 原搁置清单（已批准并全量实施）
 
-| 项 | 旧仓 # | 搁置原因 |
-| --- | --- | --- |
-| P1 | #49（402 归因） | 改变上报 relay 的 outcome 归因语义，须单独批准 |
-| P2 | #51（408/425 归因） | 同上 |
-| P3 | #44 风控不可重试特判 | 同上（注：#44 的「嵌套 error 双层回落」纯保真部分已作为计划项 12 移植） |
-| D1 | #56 / #65（未知块/part 归 opaque） | 与本仓「未知一律 400」既定设计冲突，须先拍板 |
-| — | #62（anthropic document 块保真） | 依赖 D1 的 opaque 底座，随 D1 搁置 |
-| D2 | #55（redacted_thinking 同族往返） | 与本仓钉死测试 `TestSameProtocolStillNormalizes` 冲突 |
-| D3 | #71 跳帧续流 | 与本仓坏帧 fail-fast 哲学冲突（注：#71 的 output 双形态/created 已作为计划项 9/10 移植） |
+> 口径更新：用户批准「P1 做、P2 做、P3 做；D1 折中方案、D3 折中方案；D2 做」，
+> #62 随 D1 一并处理。以下 7 项已全部落地，不再是搁置项。
+
+| 项 | 旧仓 # | 采纳口径 | 提交 |
+| --- | --- | --- | --- |
+| P1 | #49（402 归因） | 全量：`402 → ir.ErrRateLimit`（换号重试） | `e7a3903` |
+| P2 | #51（408/425 归因） | 全量：`408/425 → ir.ErrTimeout`（换目标重试） | `e7a3903` |
+| P3 | #44 风控不可重试特判 | 全量：流内风控码表不可重试 + 嵌套 error 双层回落 | `e7a3903` |
+| D1 | #56 / #65（未知块/part 归 opaque） | **折中**：同族逐字透传、**跨族仍报错**（保留本仓防御性，不采旧仓的跳过+注记） | `bd911f9` |
+| — | #62（anthropic document 块保真） | 随 D1：content source 归 opaque + context/citations 配置贯通 | `e2715a3` |
+| D2 | #55（redacted_thinking 同族往返） | 全量：同族密文逐字往返（推翻原钉死测试 `TestSameProtocolStillNormalizes`） | `aa865b8` |
+| D3 | #71 跳帧续流 | **折中**：仅结构可忽略帧跳过+注记续流，内容损坏帧仍 fail-fast | `9592ae3` |
+
+D1 折中与旧仓的差异：旧仓跨族对 opaque 走「跳过 + `OpaqueDropNote` 注记」，本仓
+采更严的「跨族一律报错」——既补上 anthropic/chat/responses 的同族多轮保真，又与
+本仓「输入未知即拒、不静默伪造」的既定设计和 `codec.OpaqueVerbatimFor` 文档一致，
+且与改动前「未知块解码期即 400」的净效果相同。#62 的 document content source 正是
+依赖这一 opaque 底座。
 
 ### 6.3 #80 子项处置（旧仓 R110 共 10 点）
 
@@ -285,4 +294,5 @@
 - 点 9（anthropic 响应侧 image/document 块跳过）：**未移植**——不在本计划 #80 行
   （doc 第 126 行）的范围内，旧仓另列。
 - 点 10（gemini toolCall/toolResponse 归不透明块）：**不适用**——本仓 gemini 纯出站、
-  无入站解码路径，且 IR 无 BlockOpaque 型（同 #75 口径）。
+  无入站解码路径；D1 落地后 IR 已有 BlockOpaque 型，但 gemini 到达的不透明块恒为
+  跨族，编码器显式报错（见 `bd911f9`），无需入站归块。
