@@ -65,6 +65,12 @@ type streamDecoder struct {
 	// 与进度帧分账——前者是「已知但无对应物的过程信号」，这里是「解码器
 	// 连语义都不知道的帧」，混在一起会让上游新能力静默蒸发看不出来。
 	droppedUnknown int
+	// droppedMsgParts 是 message 条目里本变换没有映射的 content part 数
+	// （如音频输出 part）：非流式路径把未知 part 留成 opaque 块同族往返，
+	// 流式此前直接静默丢掉，客户端连「有个 part 没了」都看不到。计数经
+	// Notes() 报出。与 droppedUnknown 分账——那是「不认识的帧型」，这里是
+	// 「认识的帧、不认识的 part 种类」。
+	droppedMsgParts int
 	// droppedLogprobs 携带 logprobs 的 output_text part 数：逐 token 概率
 	// 没有 IR 槽位，计数经 Notes() 报出。
 	droppedLogprobs int
@@ -111,6 +117,11 @@ func (d *streamDecoder) Notes() []string {
 		notes = append(notes, fmt.Sprintf(
 			"ignored %d stream event(s) of a type this decoder does not know: the upstream sent event types outside the documented set, their payload was dropped because no mapping exists", d.droppedUnknown))
 		d.droppedUnknown = 0
+	}
+	if d.droppedMsgParts > 0 {
+		notes = append(notes, fmt.Sprintf(
+			"dropped %d message content part(s) of a kind this conversion does not map (e.g. audio output): the neutral stream representation carries only text and refusal parts, so the part was not forwarded", d.droppedMsgParts))
+		d.droppedMsgParts = 0
 	}
 	if d.droppedLogprobs > 0 {
 		notes = append(notes, codec.LogProbsDropNote(d.droppedLogprobs))
@@ -204,6 +215,12 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 			}
 			return out, nil
 		default:
+			// 非文本/拒绝的 part 种类（如音频输出）：本变换没有映射，此前静默
+			// 丢弃。计数经 Notes() 报出——非流式同情形会留成 opaque 块，流式
+			// 不能连「丢了个 part」都不说。空 type 不计（那是缺字段而非未知种类）。
+			if ev.Part.Type != "" {
+				d.droppedMsgParts++
+			}
 			return nil, nil
 		}
 

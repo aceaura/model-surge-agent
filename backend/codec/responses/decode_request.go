@@ -245,7 +245,10 @@ func appendItem(out *ir.Request, item wireItem, raw json.RawMessage) error {
 		// output 与 function_call_output 同款双形态（字符串或 part 数组），
 		// 复用同一套解析；失败前缀也照认——那是我们出站写的，换目标重试时
 		// 不认回来模型会把失败当成功。
-		content := decodeToolCallOutput(item.Output)
+		content, err := decodeToolCallOutput(item.Output)
+		if err != nil {
+			return badRequest(err.Error())
+		}
 		content, isErr := codec.AdoptToolResultError(content)
 		appendBlocks(out, ir.RoleUser, []ir.Block{{
 			Type: ir.BlockToolResult,
@@ -260,7 +263,10 @@ func appendItem(out *ir.Request, item wireItem, raw json.RawMessage) error {
 
 	case itemFunctionCallOutput:
 		// output 官方允许字符串或 content part 数组两种形态。
-		content := decodeToolCallOutput(item.Output)
+		content, err := decodeToolCallOutput(item.Output)
+		if err != nil {
+			return badRequest(err.Error())
+		}
 		// 本协议没有失败标记字段，失败态是我们出站时写进正文的前缀，
 		// 这里认回来：不认的话换目标重试时模型会把失败当成功。
 		content, isErr := codec.AdoptToolResultError(content)
@@ -331,14 +337,21 @@ func appendOpaqueItem(out *ir.Request, wireType string, raw json.RawMessage) {
 
 // decodeToolCallOutput 解 function_call_output.output 的双形态。
 // 字符串形态最常见，落成单个文本块；数组形态（output_text / input_image
-// 等 part）走与消息 content 同款的逐 part 解析。缺省、空串或数组解不出
-// 都落一个空文本块占位：结果块的内容全丢会让配平的 tool_use 读到
-// 不存在的结果，比空结果更难排查。
-func decodeToolCallOutput(raw json.RawMessage) []ir.Block {
-	if blocks, err := decodeContent(raw); err == nil && len(blocks) > 0 {
-		return blocks
+// 等 part）走与消息 content 同款的逐 part 解析。
+//
+// 缺省、空串落一个空文本块占位：结果块的内容全丢会让配平的 tool_use 读到
+// 不存在的结果，比空结果更难排查。但「格式畸形」（既非合法字符串也非合法
+// part 数组）不再混进占位——那会把「客户端的 output 字段写错了」伪装成
+// 「工具返回了空串」，模型据此继续，错得无声无息。畸形一律上抛 400。
+func decodeToolCallOutput(raw json.RawMessage) ([]ir.Block, error) {
+	blocks, err := decodeContent(raw)
+	if err != nil {
+		return nil, fmt.Errorf("function_call_output.output: %w", err)
 	}
-	return []ir.Block{{Type: ir.BlockText}}
+	if len(blocks) == 0 {
+		return []ir.Block{{Type: ir.BlockText}}, nil
+	}
+	return blocks, nil
 }
 
 // appendBlocks 把块并进末尾消息，角色不同才新开一条。
