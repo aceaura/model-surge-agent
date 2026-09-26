@@ -94,6 +94,17 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 		// 表态，所以这里一定给出 true 或 false，绝不留 nil——nil 是「没提」
 		// 那一档。adaptive 是官方推荐的现代形态（enabled 已标废弃）：模型
 		// 自主决定思考量，不带预算。
+		//
+		// 三种之外的取值（大小写写错、上游新增档、畸形）一律 400，不能默认
+		// 落进 disabled：那会把「客户端要求思考」静默改写成「明令模型别思考」，
+		// 出站编码器还会忠实地把 disabled 写回去。未知枚举拒收与本文件
+		// decodeToolChoice、以及 response_format/text.format 的处置一致。
+		switch w.Thinking.Type {
+		case "enabled", "disabled", "adaptive":
+		default:
+			return nil, wrapField("thinking.type",
+				fmt.Errorf("unknown thinking type %q, want one of enabled/disabled/adaptive", w.Thinking.Type))
+		}
 		enabled := w.Thinking.Type == "enabled" || w.Thinking.Type == "adaptive"
 		out.Thinking = &ir.ThinkingConfig{
 			Enabled:      &enabled,
