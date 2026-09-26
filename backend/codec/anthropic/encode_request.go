@@ -342,6 +342,14 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 		if !codec.ForeignSignature(b.Thinking, Name) {
 			out.Signature = b.Thinking.Signature
 		}
+		// 空壳判据（与 lossy.go 的 CountResponseEmptyThinking 同口径）：
+		// 正文为空且没有可写回的签名时，本块 marshal 出来是 {"type":"thinking"}
+		// ——thinking 键随 omitempty 蒸发，Anthropic 拒收缺 thinking 字段的块，
+		// 整份请求/响应会因一个空块 400。整块跳过，有损诊断报出。
+		// 空正文但签名可写回不是空壳：签名本身就是载荷，扩展思考续话的合法形态。
+		if out.Thinking == "" && out.Signature == "" {
+			return out, false, nil
+		}
 	case ir.BlockServerToolUse:
 		if b.ServerToolUse == nil {
 			return out, false, fmt.Errorf("server_tool_use block without payload")

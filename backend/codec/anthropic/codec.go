@@ -49,6 +49,11 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	notes = append(notes, codec.DescribeResponseToolSignatureLoss(resp, Name, false)...)
 	// 畸形工具参数：input 是对象槽位，原文挪进 ir.RawArgsKey，报出挪键。
 	notes = append(notes, codec.DescribeResponseToolArgsLoss(resp, true)...)
+	// 空壳 thinking 块（无正文且无可写回签名）被 encodeBlock 整块跳过——
+	// Anthropic 拒收缺 thinking 字段的块，带出去是整份响应 400。丢了要报出。
+	if n := codec.CountResponseEmptyThinking(resp, Name); n > 0 {
+		notes = append(notes, codec.EmptyThinkingDropNote(n))
+	}
 	// 实际执行档位回显有槽位：同族原值、跨族按 codec.MapServiceTierEcho
 	// 翻译回写；值集装不下的丢弃，照实报出——这一维决定计费，无声丢掉
 	// 会让客户端按点的档位对账。

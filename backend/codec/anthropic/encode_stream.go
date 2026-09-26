@@ -114,16 +114,29 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 				return nil, err
 			}
 			if !ok {
-				return out, nil
+				// 空壳跳过（见 encode_request.go 的 BlockThinking 分支）服务的是
+				// 请求/响应体完整性；流式开块是它的唯一例外：thinking 块的起始
+				// 快照必然正文为空、签名未到（增量随后才来），照跳会让后续
+				// thinking_delta 无块可落。官方起始帧本就是空壳形状
+				// {"type":"thinking"}，这里按原样开块。
+				if ev.Block.Type == ir.BlockThinking && ev.Block.Thinking != nil &&
+					!ev.Block.Thinking.Redacted {
+					block = wireBlock{Type: blockThinking}
+				} else {
+					return out, nil
+				}
+			} else {
+				block = wb
 			}
-			block = wb
-			// 块开启时入参尚未到齐，Anthropic 要求这里是空对象，
-			// 内容由后续 input_json_delta 累积。server_tool_use 的查询串
-			// 走同一条通道，同款处置。
-			if block.Type == blockToolUse || block.Type == blockServerToolUse {
-				block.Input = json.RawMessage(`{}`)
-				e.toolPending[ev.Index] = true
-				e.toolArgs[ev.Index] = nil
+			if ev.Block != nil {
+				// 块开启时入参尚未到齐，Anthropic 要求这里是空对象，
+				// 内容由后续 input_json_delta 累积。server_tool_use 的查询串
+				// 走同一条通道，同款处置。
+				if block.Type == blockToolUse || block.Type == blockServerToolUse {
+					block.Input = json.RawMessage(`{}`)
+					e.toolPending[ev.Index] = true
+					e.toolArgs[ev.Index] = nil
+				}
 			}
 		}
 		e.open(ev.Index)

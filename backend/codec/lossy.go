@@ -317,6 +317,14 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 				note("thinking blocks", "no reasoning content")
 				continue
 			}
+			if name == ProtocolAnthropic && b.Thinking.Text == "" &&
+				(b.Thinking.Signature == "" || ForeignSignature(b.Thinking, name)) {
+				// 空壳判据与 anthropic 编码器同口径（见 anthropic/encode_request.go
+				// 的 BlockThinking 分支）：Anthropic 拒收缺 thinking 字段的块，
+				// 编码器会整块跳过——这里先报出来，跳过才不是静默的。
+				note("empty thinking blocks", "a reasoning block with no text and no writable signature would encode to a payload-less shell that the upstream rejects")
+				continue
+			}
 			if b.Thinking.Signature == "" {
 				continue
 			}
@@ -1128,6 +1136,37 @@ func CountResponseRedacted(resp *ir.Response) int {
 		}
 	}
 	return n
+}
+
+// CountResponseEmptyThinking 数出响应里会编成空壳的 thinking 块：正文为空且
+// 没有可写回的签名（无签名，或签名属别家会被剥离）。判据与 anthropic
+// 编码器的跳过分支同口径——Anthropic 拒收缺 thinking 字段的块，编码器整块
+// 跳过之前先数出来，才不是静默的。只服务 anthropic 的响应侧诊断：其余协议
+// 的编码器不会因空壳硬失败（gemini 跳过空文本 part，chat 写空
+// reasoning_content），没有「必须丢」的语义。
+func CountResponseEmptyThinking(resp *ir.Response, name string) int {
+	if resp == nil {
+		return 0
+	}
+	n := 0
+	for _, b := range resp.Content {
+		if b.Type != ir.BlockThinking || b.Thinking == nil || b.Thinking.Redacted {
+			continue
+		}
+		if b.Thinking.Text == "" &&
+			(b.Thinking.Signature == "" || ForeignSignature(b.Thinking, name)) {
+			n++
+		}
+	}
+	return n
+}
+
+// EmptyThinkingDropNote 是空壳 thinking 块被跳过的说明。块本身没有任何正文，
+// 丢的不是内容而是「上游给了一个空推理块」这个事实——客户端按块数对账时
+// 需要它。
+func EmptyThinkingDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped %d empty thinking block(s): a reasoning block with no text and no writable signature would encode to a payload-less shell that Anthropic rejects, so it was skipped whole", n)
 }
 
 // CountResponseNonPortableCitations 数出响应里外族标注槽位装不下的引用条数
