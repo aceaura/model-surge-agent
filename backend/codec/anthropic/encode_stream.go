@@ -263,7 +263,13 @@ func (e *streamEncoder) encodeStart(ev ir.Event) ([][]byte, error) {
 		return nil, nil
 	}
 	e.started = true
-	msg := &streamMsg{ID: ev.MessageID, Model: ev.Model, Role: string(ir.RoleAssistant)}
+	// 官方 message_start 的 message 对象是完整 Message 形状：type/content/
+	// stop_reason/stop_sequence 四键恒在（content 空数组、两个 stop 键显式
+	// null），严格 SDK 按必填字段反序列化，缺键会在第一帧就解析失败。
+	msg := &streamMsg{
+		Type: "message", ID: ev.MessageID, Model: ev.Model, Role: string(ir.RoleAssistant),
+		Content: []json.RawMessage{},
+	}
 	// 实际执行档位回显：同族原值下发，跨族按回显值集翻译；装不下的
 	// 丢弃，Notes() 报出——这一维决定计费，无声丢掉会让客户端按自己
 	// 点的档位对账。

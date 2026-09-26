@@ -261,8 +261,12 @@ type wireResponse struct {
 // wireUsage 没有推理 token 维度：本协议把推理消耗直接算进 output_tokens。
 // 转成本协议时该维度只是看不见，数值仍含在输出总量里，故不报有损。
 type wireUsage struct {
-	InputTokens              int64 `json:"input_tokens,omitempty"`
-	OutputTokens             int64 `json:"output_tokens,omitempty"`
+	// input_tokens / output_tokens 不带 omitempty：官方 Usage 模型里这两个键
+	// 必填（SDK 反序列化按 required 校验），message_start 帧即使输出还没
+	// 开始也必须带 output_tokens（值为 0 或上游的预估小值）。缺键会让严格
+	// 客户端在流的第一帧就解析失败。
+	InputTokens              int64 `json:"input_tokens"`
+	OutputTokens             int64 `json:"output_tokens"`
 	CacheReadInputTokens     int64 `json:"cache_read_input_tokens,omitempty"`
 	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens,omitempty"`
 	// CacheCreation 写入用量的 TTL 明细。只在 IR 侧标记「明细已知」时写出；
@@ -383,10 +387,21 @@ type streamEvent struct {
 }
 
 type streamMsg struct {
-	ID    string    `json:"id"`
-	Model string    `json:"model"`
-	Role  string    `json:"role"`
-	Usage wireUsage `json:"usage"`
+	// Type/Content/StopReason/StopSequence 是官方 message_start 里 message
+	// 对象的固定键集：type 恒为 "message"、content 恒为空数组、stop_reason
+	// 与 stop_sequence 恒为显式 null（终止信息要等 message_delta 才有）。
+	// 官方 SDK 按必填字段反序列化 Message 模型，缺 type 键会让严格客户端
+	// 在流的第一帧直接解析失败——编码侧必须写全，解码侧收下忽略。
+	Type    string            `json:"type,omitempty"`
+	ID      string            `json:"id"`
+	Model   string            `json:"model"`
+	Role    string            `json:"role"`
+	Content []json.RawMessage `json:"content"`
+	// StopReason/StopSequence 用指针区分「显式 null」与「缺键」：
+	// message_start 编码写显式 null，不带 omitempty。
+	StopReason   *string   `json:"stop_reason"`
+	StopSequence *string   `json:"stop_sequence"`
+	Usage        wireUsage `json:"usage"`
 	// ServiceTier 实际执行档位回显（message_start 携带；message_delta
 	// 没有这个槽位，晚到的回显送不出去）。
 	ServiceTier string `json:"service_tier,omitempty"`
