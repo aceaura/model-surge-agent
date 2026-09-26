@@ -304,10 +304,12 @@ func TestEncodeLeavesLeadingUserAlone(t *testing.T) {
 
 func TestDecodeRequestRejectsBadInput(t *testing.T) {
 	cases := map[string]string{
-		"malformed":     `{`,
-		"no model":      `{"messages":[]}`,
-		"bad content":   `{"model":"m","messages":[{"role":"user","content":42}]}`,
-		"unknown block": `{"model":"m","messages":[{"role":"user","content":[{"type":"video"}]}]}`,
+		"malformed":   `{`,
+		"no model":    `{"messages":[]}`,
+		"bad content": `{"model":"m","messages":[{"role":"user","content":42}]}`,
+		// 未知块型不在此列：它归不透明块同族透传（见 opaque_test.go），
+		// 跨族拒收发生在出站编码而非入站解码。
+		"content elem not a block": `{"model":"m","messages":[{"role":"user","content":[42]}]}`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

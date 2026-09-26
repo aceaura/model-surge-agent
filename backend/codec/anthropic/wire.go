@@ -113,6 +113,22 @@ type wireBlock struct {
 	Data string `json:"data,omitempty"`
 
 	CacheControl *wireCacheControl `json:"cache_control,omitempty"`
+
+	// Raw 同族回写的不透明块原文（ir.BlockOpaque）。标 json:"-" 不参与逐字段
+	// 序列化：MarshalJSON 见到它就把整块原样吐出去（与 wireTool.Raw 同一手法）。
+	// 逐字段重建会丢掉 wireBlock 没建模的键，而这些块（web_fetch_tool_result 的
+	// caller、code_execution_tool_result 的 stdout、search_result 的 source）的
+	// 回传契约要求原样带回。
+	Raw json.RawMessage `json:"-"`
+}
+
+// MarshalJSON 有原文的不透明块整块原样写出，其余按字段序列化。
+func (b wireBlock) MarshalJSON() ([]byte, error) {
+	if len(b.Raw) > 0 {
+		return b.Raw, nil
+	}
+	type plain wireBlock
+	return json.Marshal(plain(b))
 }
 
 // citationIn text 块 citations 数组元素的解码形状：官方 union 五种形态的字段并集。
@@ -219,14 +235,17 @@ type wireMetadata struct {
 
 // wireResponse 是非流式响应体。
 type wireResponse struct {
-	ID           string      `json:"id"`
-	Type         string      `json:"type"`
-	Role         string      `json:"role"`
-	Model        string      `json:"model"`
-	Content      []wireBlock `json:"content"`
-	StopReason   string      `json:"stop_reason,omitempty"`
-	StopSequence string      `json:"stop_sequence,omitempty"`
-	Usage        wireUsage   `json:"usage"`
+	ID    string `json:"id"`
+	Type  string `json:"type"`
+	Role  string `json:"role"`
+	Model string `json:"model"`
+	// Content 用 RawMessage 收，解码时逐块拆 raw：未知块型要整块留成不透明块
+	// 供同族回吐，逐字段解析会丢掉没建模的键。一次性 []wireBlock 还会让任一块
+	// 的形状冲突拖垮整个数组（见 decodeBlocks）。
+	Content      json.RawMessage `json:"content"`
+	StopReason   string          `json:"stop_reason,omitempty"`
+	StopSequence string          `json:"stop_sequence,omitempty"`
+	Usage        wireUsage       `json:"usage"`
 	// ServiceTier 实际执行档位回显（standard/priority/batch）。上游同族
 	// 原值收下；跨族由编码器按 codec.MapServiceTierEcho 翻译或丢弃。
 	ServiceTier string `json:"service_tier,omitempty"`
@@ -348,13 +367,16 @@ type webSearchToolErrorBlock struct {
 // streamEvent 是所有流帧的联合体。Anthropic 每种帧字段不同，
 // 但字段名不冲突，用一个结构体解全部帧比每帧一个类型更短。
 type streamEvent struct {
-	Type    string       `json:"type"`
-	Index   int          `json:"index,omitempty"`
-	Message *streamMsg   `json:"message,omitempty"`
-	Block   *wireBlock   `json:"content_block,omitempty"`
-	Delta   *streamDelta `json:"delta,omitempty"`
-	Usage   *wireUsage   `json:"usage,omitempty"`
-	Error   *wireError   `json:"error,omitempty"`
+	Type    string     `json:"type"`
+	Index   int        `json:"index,omitempty"`
+	Message *streamMsg `json:"message,omitempty"`
+	// BlockRaw content_block_start 帧的块原文。用 RawMessage 而非 *wireBlock：
+	// 未知块型要整块留成不透明块供同族回吐（见 decodeRawBlock），且块内某字段
+	// 的形状冲突不该让整帧解析失败——那会把一个可透传的块误判成坏帧。
+	BlockRaw json.RawMessage `json:"content_block,omitempty"`
+	Delta    *streamDelta    `json:"delta,omitempty"`
+	Usage    *wireUsage      `json:"usage,omitempty"`
+	Error    *wireError      `json:"error,omitempty"`
 }
 
 type streamMsg struct {

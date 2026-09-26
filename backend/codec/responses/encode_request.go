@@ -283,6 +283,24 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 			// 伪装成 input_file 则会把只有 file_id 的容器引用当普通附件投递。
 			// 损耗由 DescribeLossy 统一报出。
 			continue
+		case ir.BlockOpaque:
+			// 不透明块：同族逐字回吐，跨族报错（理由见 ir.BlockOpaque）。
+			// Item 标记决定回吐形态——条目级作为独立 item，part 级并进消息
+			// content 数组；塞错层级会被上游按型校验直接 400。
+			o := b.Opaque
+			if !codec.OpaqueVerbatimFor(o, Name) {
+				wt, from := "", ""
+				if o != nil {
+					wt, from = o.WireType, o.From
+				}
+				return nil, fmt.Errorf(
+					"cannot carry opaque %q produced by protocol %q into %s: the type is only defined in the protocol that produced it", wt, from, Name)
+			}
+			if o.Item {
+				out = append(out, wireItem{Raw: o.Body})
+			} else {
+				parts = append(parts, wirePart{Raw: o.Body})
+			}
 		default:
 			return nil, fmt.Errorf("cannot encode block type %q", b.Type)
 		}

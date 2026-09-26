@@ -271,6 +271,19 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 				e.droppedRedacted++
 				return nil, nil
 			}
+		case ir.BlockOpaque:
+			// 响应侧不透明块只可能跨族来（本族响应解码器把未知托管条目走
+			// hostedItems 计数+注记，不产 opaque，同族此路不可达）。流式增量
+			// 更没有承载结构化未知条目的形态。一律报错而非静默落进 openBlock
+			//（那会编成一个凭空的空 message 条目），与旧行为（上游解码期即报错）
+			// 一致，保留防御性（判据见 codec.OpaqueVerbatimFor）。
+			o := ev.Block.Opaque
+			wt, from := "", ""
+			if o != nil {
+				wt, from = o.WireType, o.From
+			}
+			return nil, fmt.Errorf(
+				"responses: cannot stream opaque output %q produced by protocol %q: the type is only defined in the protocol that produced it", wt, from)
 		}
 		return e.openBlock(ev.Index, kind, ev.Block)
 
@@ -984,6 +997,19 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			// 报错，编成 message 条目则凭空多出一个空助手消息并泄漏 file_id。
 			// 跳过，损耗由 EncodeResponseLossy 经 CountResponseContainerUploads 报出。
 			continue
+		case ir.BlockOpaque:
+			// 响应侧的不透明块只可能是跨族来的：本族响应解码器把未知托管条目
+			// 走 hostedItems 计数+注记（drop+note），不产 opaque，所以同族此路
+			// 不可达。跨族（如 anthropic 上游的未知块）无法在本族表达，且今日
+			// 之前它在上游解码期就已报错——这里报错与旧行为一致，保留防御性
+			//（判据见 codec.OpaqueVerbatimFor）。
+			o := b.Opaque
+			wt, from := "", ""
+			if o != nil {
+				wt, from = o.WireType, o.From
+			}
+			return nil, fmt.Errorf(
+				"responses: cannot carry opaque output %q produced by protocol %q: the type is only defined in the protocol that produced it", wt, from)
 		default:
 			return nil, fmt.Errorf("responses: cannot encode block type %q", b.Type)
 		}

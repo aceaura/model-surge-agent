@@ -40,8 +40,17 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	if err != nil {
 		return nil, badRequest(fmt.Sprintf("input: %v", err))
 	}
-	for i, item := range items {
-		if err := appendItem(out, item); err != nil {
+	for i, raw := range items {
+		var item wireItem
+		if err := json.Unmarshal(raw, &item); err != nil {
+			// 整条解不动但带 type：归不透明条目，同族逐字回吐（见 appendItem）。
+			if wt := itemTypeOf(raw); wt != "" {
+				appendOpaqueItem(out, wt, raw)
+				continue
+			}
+			return nil, badRequest(fmt.Sprintf("input[%d]: %v", i, err))
+		}
+		if err := appendItem(out, item, raw); err != nil {
 			return nil, badRequest(fmt.Sprintf("input[%d]: %v", i, err))
 		}
 	}
@@ -133,8 +142,11 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	return out, nil
 }
 
-// decodeInput 认字符串与条目数组两种形态。
-func decodeInput(raw json.RawMessage) ([]wireItem, error) {
+// decodeInput 认字符串与条目数组两种形态，逐条目保留原文。
+//
+// 保留原文是为了未知条目能整块归不透明（同族逐字回吐，见 appendItem 的
+// default）：wireItem 只认得已建模的键，未知托管条目的键集解进来就丢了。
+func decodeInput(raw json.RawMessage) ([]json.RawMessage, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
 	}
@@ -144,20 +156,36 @@ func decodeInput(raw json.RawMessage) ([]wireItem, error) {
 			return nil, nil
 		}
 		content, _ := json.Marshal(text)
-		return []wireItem{{Type: itemMessage, Role: roleUser, Content: content}}, nil
+		synthetic, err := json.Marshal(wireItem{Type: itemMessage, Role: roleUser, Content: content})
+		if err != nil {
+			return nil, err
+		}
+		return []json.RawMessage{synthetic}, nil
 	}
-	var items []wireItem
+	var items []json.RawMessage
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return nil, fmt.Errorf("must be a string or an item array: %w", err)
 	}
 	return items, nil
 }
 
-// appendItem 把一个条目并入 IR。
+// itemTypeOf 只取条目的 {type}，用于解析失败时仍能给出可识别的判别值。
+func itemTypeOf(raw json.RawMessage) string {
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(raw, &probe) == nil {
+		return probe.Type
+	}
+	return ""
+}
+
+// appendItem 把一个条目并入 IR。raw 是该条目的线上原文，未知条目类型整块
+// 归不透明时要靠它逐字保真（wireItem 只认得已建模的键）。
 //
 // 条目类型比消息角色更细：function_call 与 function_call_output 是独立条目，
 // 而 IR 把它们当成消息里的块，所以这里要合并进相邻的消息而非各自成条。
-func appendItem(out *ir.Request, item wireItem) error {
+func appendItem(out *ir.Request, item wireItem, raw json.RawMessage) error {
 	// 缺 type 时按 role 推断：本协议允许省略 type 写成裸消息。
 	kind := item.Type
 	if kind == "" && item.Role != "" {
@@ -271,8 +299,30 @@ func appendItem(out *ir.Request, item wireItem) error {
 		return nil
 
 	default:
-		return fmt.Errorf("unknown item type %q", item.Type)
+		// 未知条目类型（官方 item union 里本服务未建模的托管条目，如
+		// file_search_call / computer_call_output / mcp_list_tools 等）整块归
+		// 不透明：同族逐字回吐，跨族由编码器报错（见 encodeMessage 的 BlockOpaque）。
+		// Item=true 标记这是条目级不透明块——回吐时作为独立 item 而非消息内 part。
+		if kind == "" {
+			return fmt.Errorf("item missing type")
+		}
+		appendOpaqueItem(out, kind, raw)
+		return nil
 	}
+}
+
+// appendOpaqueItem 把一个未知条目整块归不透明块，并进助手回合（未知托管条目
+// 都是模型侧产出，归 assistant）。同族编码时按 Item 标记回吐成独立 item。
+func appendOpaqueItem(out *ir.Request, wireType string, raw json.RawMessage) {
+	appendBlocks(out, ir.RoleAssistant, []ir.Block{{
+		Type: ir.BlockOpaque,
+		Opaque: &ir.Opaque{
+			WireType: wireType,
+			Body:     append(json.RawMessage(nil), raw...),
+			From:     Name,
+			Item:     true,
+		},
+	}}, "")
 }
 
 // decodeToolCallOutput 解 function_call_output.output 的双形态。
@@ -352,68 +402,102 @@ func decodeContent(raw json.RawMessage) ([]ir.Block, error) {
 		return []ir.Block{{Type: ir.BlockText, Text: text}}, nil
 	}
 
-	var parts []wirePart
-	if err := json.Unmarshal(raw, &parts); err != nil {
+	// 逐 part 保留原文再解析：未知 part 型要整块归不透明（同族逐字回吐），
+	// 且一个 part 的形状冲突不能连累同数组里的其它 part。
+	var raws []json.RawMessage
+	if err := json.Unmarshal(raw, &raws); err != nil {
 		return nil, fmt.Errorf("content must be a string or a part array: %w", err)
 	}
-	out := make([]ir.Block, 0, len(parts))
-	for _, p := range parts {
-		switch p.Type {
-		case partInputText, partOutputText, "":
-			out = append(out, ir.Block{Type: ir.BlockText, Text: p.Text,
-				Citations: decodeAnnotations(p.Annotations)})
-		case partRefusal:
-			// 拒绝正文是可见内容而非元数据，且本族有专属槽位：解成独立的
-			// refusal 块，同族往返才能原样回到 refusal part。并进文本块会让
-			// 客户端无法区分「模型拒绝了」与「模型这么答的」。
-			out = append(out, ir.Block{Type: ir.BlockRefusal, Text: p.Refusal})
-		case partInputImage:
-			var url, nested string
-			if p.ImageURL != nil {
-				url, nested = p.ImageURL.URL, p.ImageURL.Detail
-			}
-			media := decodeImageURL(url)
-			media.FileID = p.FileID
-			// detail 的规范位置是 part 顶层；chat 形态把它嵌在 image_url
-			// 对象里。两处都给了以顶层为准——那是本族自己的键位。
-			media.Detail = p.Detail
-			if media.Detail == "" {
-				media.Detail = nested
-			}
-			out = append(out, ir.Block{Type: ir.BlockImage, Media: media})
-		case partInputAudio:
-			if p.InputAudio == nil {
-				return nil, fmt.Errorf("input_audio part needs a payload")
-			}
-			out = append(out, ir.Block{Type: ir.BlockAudio, Media: &ir.Media{
-				MediaType: audioMediaType(p.InputAudio.Format),
-				Data:      p.InputAudio.Data,
-			}})
-		case partInputFile:
-			media := &ir.Media{Name: p.Filename}
-			if p.FileData != "" {
-				if got := decodeImageURL(p.FileData); got.Data != "" {
-					media.MediaType, media.Data = got.MediaType, got.Data
-				} else {
-					media.URL = p.FileData
-				}
-			} else {
-				// file_id 指向上游已存的文件，本服务不解引用：
-				// 原样进 FileID，同族编码时带回；当 URL 透传会让别族
-				// 上游拿一个 id 去当链接抓。
-				media.FileID = p.FileID
-			}
-			out = append(out, ir.Block{Type: codec.MediaKindFor(codec.SniffMediaType(media)), Media: media})
-		case partSummaryText:
-			out = append(out, ir.Block{
-				Type:     ir.BlockThinking,
-				Thinking: &ir.Thinking{Text: p.Text, SignatureFrom: Name},
-			})
-		default:
-			return nil, fmt.Errorf("unknown content part type %q", p.Type)
+	out := make([]ir.Block, 0, len(raws))
+	for _, rp := range raws {
+		b, err := decodePart(rp)
+		if err != nil {
+			return nil, err
 		}
+		out = append(out, b)
 	}
 	return out, nil
+}
+
+// partTypeOf 只取 part 的 {type}，用于解析失败时仍能给出可识别的判别值。
+func partTypeOf(raw json.RawMessage) string {
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(raw, &probe) == nil {
+		return probe.Type
+	}
+	return ""
+}
+
+// decodePart 解单个 content part。未知型或解析失败但带 type 的，整块归
+// ir.BlockOpaque（Item=false：这是消息内的 part，不是独立条目），同族编码
+// 时逐字回吐，跨族由编码器报错（见 encodeMessage 的 BlockOpaque）。
+func decodePart(raw json.RawMessage) (ir.Block, error) {
+	var p wirePart
+	if err := json.Unmarshal(raw, &p); err != nil {
+		if wt := partTypeOf(raw); wt != "" {
+			return ir.Block{Type: ir.BlockOpaque,
+				Opaque: &ir.Opaque{WireType: wt, Body: raw, From: Name}}, nil
+		}
+		return ir.Block{}, fmt.Errorf("content part is not a valid object: %w", err)
+	}
+	switch p.Type {
+	case partInputText, partOutputText, "":
+		return ir.Block{Type: ir.BlockText, Text: p.Text,
+			Citations: decodeAnnotations(p.Annotations)}, nil
+	case partRefusal:
+		// 拒绝正文是可见内容而非元数据，且本族有专属槽位：解成独立的
+		// refusal 块，同族往返才能原样回到 refusal part。并进文本块会让
+		// 客户端无法区分「模型拒绝了」与「模型这么答的」。
+		return ir.Block{Type: ir.BlockRefusal, Text: p.Refusal}, nil
+	case partInputImage:
+		var url, nested string
+		if p.ImageURL != nil {
+			url, nested = p.ImageURL.URL, p.ImageURL.Detail
+		}
+		media := decodeImageURL(url)
+		media.FileID = p.FileID
+		// detail 的规范位置是 part 顶层；chat 形态把它嵌在 image_url
+		// 对象里。两处都给了以顶层为准——那是本族自己的键位。
+		media.Detail = p.Detail
+		if media.Detail == "" {
+			media.Detail = nested
+		}
+		return ir.Block{Type: ir.BlockImage, Media: media}, nil
+	case partInputAudio:
+		if p.InputAudio == nil {
+			return ir.Block{}, fmt.Errorf("input_audio part needs a payload")
+		}
+		return ir.Block{Type: ir.BlockAudio, Media: &ir.Media{
+			MediaType: audioMediaType(p.InputAudio.Format),
+			Data:      p.InputAudio.Data,
+		}}, nil
+	case partInputFile:
+		media := &ir.Media{Name: p.Filename}
+		if p.FileData != "" {
+			if got := decodeImageURL(p.FileData); got.Data != "" {
+				media.MediaType, media.Data = got.MediaType, got.Data
+			} else {
+				media.URL = p.FileData
+			}
+		} else {
+			// file_id 指向上游已存的文件，本服务不解引用：
+			// 原样进 FileID，同族编码时带回；当 URL 透传会让别族
+			// 上游拿一个 id 去当链接抓。
+			media.FileID = p.FileID
+		}
+		return ir.Block{Type: codec.MediaKindFor(codec.SniffMediaType(media)), Media: media}, nil
+	case partSummaryText:
+		return ir.Block{
+			Type:     ir.BlockThinking,
+			Thinking: &ir.Thinking{Text: p.Text, SignatureFrom: Name},
+		}, nil
+	default:
+		// 未知 part 型整块归不透明：同族逐字回吐，跨族报错（见 ir.BlockOpaque）。
+		return ir.Block{Type: ir.BlockOpaque,
+			Opaque: &ir.Opaque{WireType: p.Type, Body: raw, From: Name}}, nil
+	}
 }
 
 // audioMediaType 把本协议的裸格式名补成完整 media type。

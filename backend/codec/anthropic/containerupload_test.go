@@ -18,7 +18,7 @@ import (
 
 // 请求侧解码：user 消息里的 container_upload（客户端把文件送进容器）。
 func TestContainerUploadDecodeBlock(t *testing.T) {
-	b, ok, err := decodeBlock(wireBlock{Type: blockContainerUpload, FileID: "file_abc123"})
+	b, ok, err := decodeBlock(wireBlock{Type: blockContainerUpload, FileID: "file_abc123"}, nil)
 	if err != nil || !ok {
 		t.Fatalf("decodeBlock: ok=%v err=%v", ok, err)
 	}

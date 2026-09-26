@@ -213,14 +213,25 @@ func decodeContent(raw json.RawMessage) ([]ir.Block, error) {
 		}
 		return []ir.Block{{Type: ir.BlockText, Text: text}}, nil
 	}
+	return decodeBlocks(raw)
+}
 
-	var blocks []wireBlock
-	if err := json.Unmarshal(raw, &blocks); err != nil {
+// decodeBlocks 逐块解析 block 数组。必须逐块而不是一次性 []wireBlock：
+// Anthropic 在不同块型上复用同一个键名承载不同形状——source 在 document 块上
+// 是对象、在 search_result 块上是字符串。一次性解析时任一块的形状冲突都会让
+// 整个 Unmarshal 失败，同消息的其他块（包括用户真正在问的那句话）随之全部蒸发，
+// 调用方只拿到一个错误。逐块解析让冲突块降级成不透明块，兄弟块照常解码。
+func decodeBlocks(raw json.RawMessage) ([]ir.Block, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var raws []json.RawMessage
+	if err := json.Unmarshal(raw, &raws); err != nil {
 		return nil, fmt.Errorf("must be a string or a block array: %w", err)
 	}
-	out := make([]ir.Block, 0, len(blocks))
-	for _, b := range blocks {
-		block, ok, err := decodeBlock(b)
+	out := make([]ir.Block, 0, len(raws))
+	for _, r := range raws {
+		block, ok, err := decodeRawBlock(r)
 		if err != nil {
 			return nil, err
 		}
@@ -231,8 +242,37 @@ func decodeContent(raw json.RawMessage) ([]ir.Block, error) {
 	return out, nil
 }
 
-// decodeBlock 返回 ok=false 表示该块要丢弃（如 redacted_thinking）。
-func decodeBlock(b wireBlock) (ir.Block, bool, error) {
+// decodeRawBlock 解析单个块的原文。块内字段形状冲突（如 source 在该块型上是
+// 字符串而非对象）时整块留成不透明块供同族回吐——丢弃它会破坏 assistant 历史里
+// server_tool_use 与结果块的配平，上游按配平校验拒整轮。连判别值都读不出来才算
+// 真畸形，报错（与本仓「输入未知即拒」一致）。
+func decodeRawBlock(raw json.RawMessage) (ir.Block, bool, error) {
+	var b wireBlock
+	if err := json.Unmarshal(raw, &b); err != nil {
+		if wt := wireTypeOf(raw); wt != "" {
+			return ir.Block{Type: ir.BlockOpaque,
+				Opaque: &ir.Opaque{WireType: wt, Body: raw, From: Name}}, true, nil
+		}
+		return ir.Block{}, false, fmt.Errorf("content element is not a valid block: %w", err)
+	}
+	return decodeBlock(b, raw)
+}
+
+// wireTypeOf 只从块原文里抠出判别值 type，供形状冲突时给不透明块定型。
+func wireTypeOf(raw json.RawMessage) string {
+	var head struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &head); err != nil {
+		return ""
+	}
+	return head.Type
+}
+
+// decodeBlock 已知块型的解码。raw 是块的原始 JSON，供 default 分支把未知块
+// 整块留成不透明块——未知块型的载荷形状由上游定义，逐字段猜必丢内容。
+// 返回 ok=false 表示该块要丢弃（当前仅伴随 error 出现）。
+func decodeBlock(b wireBlock, raw json.RawMessage) (ir.Block, bool, error) {
 	out := ir.Block{}
 	if b.CacheControl != nil {
 		out.CacheCtl = b.CacheControl.Type
@@ -298,7 +338,17 @@ func decodeBlock(b wireBlock) (ir.Block, bool, error) {
 		out.Type = ir.BlockContainerUpload
 		out.ContainerUpload = &ir.ContainerUploadRef{FileID: b.FileID}
 	default:
-		return out, false, fmt.Errorf("unknown block type %q", b.Type)
+		// 未知块型原样留成不透明块，不降级成文本也不报错：Anthropic 的服务端
+		// 工具结果块（web_fetch / code_execution / bash_code_execution /
+		// text_editor_code_execution / tool_search 等）根本没有 text 字段，降级
+		// 等于把抓取的网页正文、stdout、文件内容换成一个空文本块，而兄弟
+		// server_tool_use 块还留在原地——发给上游的 tool_use/tool_result 配平当场
+		// 断裂。同族逐字回吐无损，跨族由编码器报错（见 encodeBlock 的 BlockOpaque）。
+		if b.Type == "" {
+			return out, false, fmt.Errorf("block missing type")
+		}
+		out.Type = ir.BlockOpaque
+		out.Opaque = &ir.Opaque{WireType: b.Type, Body: raw, From: Name}
 	}
 	return out, true, nil
 }

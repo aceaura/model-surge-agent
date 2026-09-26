@@ -2,6 +2,7 @@ package chatcompletions
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -242,6 +243,18 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 				e.droppedRedacted++
 			}
 			return nil, nil
+		case ir.BlockOpaque:
+			// 不透明块在本协议的流式增量里没有承载形态：content 增量是字符串，
+			// 装不下结构化的 part（同族也带不回，何况本族响应解码不产 opaque，
+			// 同族此路本不可达）。跨族更无法表达。一律报错而非静默跳过——
+			// 静默丢会让上游的未知块凭空消失且不留痕（判据见 codec.OpaqueVerbatimFor）。
+			o := ev.Block.Opaque
+			wt, from := "", ""
+			if o != nil {
+				wt, from = o.WireType, o.From
+			}
+			return nil, fmt.Errorf(
+				"cannot stream opaque part %q produced by protocol %q into %s: streaming deltas carry text only", wt, from, Name)
 		}
 		if kind != ir.BlockToolUse {
 			return nil, nil

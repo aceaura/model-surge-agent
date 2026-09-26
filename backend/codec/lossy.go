@@ -626,6 +626,18 @@ func ForeignSignature(t *ir.Thinking, name string) bool {
 	return t.SignatureFrom != name
 }
 
+// OpaqueVerbatimFor 报告不透明块能否在 name 的线上原样回吐：只有解码出它的
+// 那一族能（From 记录来路族，见 ir.Opaque）。与 ForeignSignature 同为「同族
+// 保真门控」，判据同源，供三族编码器共用，避免各自漂移。
+//
+// 跨族的处置与签名相反：签名跨族是「剥离后块仍可降级投递」，不透明块跨族是
+// 「整块无法表达」——逐字发过去是目标上游不认识的块型/part 型，按块型校验
+// 直接 400；降级成文本会把别家载荷拼进正文污染回答。所以编码器对本判定为假
+// 的不透明块一律报错，不静默丢弃也不降级（理由见 ir.BlockOpaque）。
+func OpaqueVerbatimFor(o *ir.Opaque, name string) bool {
+	return o != nil && len(o.Body) > 0 && o.From == name
+}
+
 // describeParamsLossy 报这一批调参字段的丢弃。
 //
 // 判据统一：只有客户端**给了**的字段才报（指针非 nil / 字符串非空 /

@@ -55,6 +55,18 @@ const (
 	// 空消息配一个拒绝标记，像成功的空回复。无槽位协议降级为文本而非丢弃，
 	// 且不加标注前缀——正文会成为模型后续轮次读到的自己说过的话。
 	BlockRefusal BlockType = "refusal"
+	// BlockOpaque 载荷无法用 IR 表达的块：原样保留 wire 判别值与整个块体。
+	// 「未知块降级成文本」并不安全——Anthropic 有一整族服务端工具结果块
+	// （web_fetch / code_execution / bash_code_execution /
+	// text_editor_code_execution / tool_search 等）根本没有 text 字段，降级过去
+	// 等于把抓取的网页正文、stdout、文件内容换成一个空文本块，而兄弟
+	// server_tool_use 块还留在原地，发给上游的 tool_use/tool_result 配平当场断裂。
+	//
+	// 处置按来路分两档，与本仓「输入未知即拒、输出不可载即丢」的防御取向一致：
+	// 同族（解码出它的那一族）原样回吐，多轮历史无损；跨族一律报错而不是静默
+	// 丢弃或降级——把别家的块型逐字发给目标上游会被按块型校验直接 400，而降级
+	// 成文本会污染正文，两者都比响亮拒绝更糟。载荷见 Opaque。
+	BlockOpaque BlockType = "opaque"
 )
 
 // IsServerTool 判断块是否为服务端托管工具产物（调用或结果）。
@@ -95,6 +107,9 @@ type Block struct {
 	// ContainerUpload 承载容器文件引用块（BlockContainerUpload），仅
 	// Anthropic 一族可往返，外族编码整块跳过（无 file_id 槽位）。
 	ContainerUpload *ContainerUploadRef `json:"container_upload,omitempty"`
+	// Opaque 承载不透明块（BlockOpaque）：判别值 + 上游给的完整块体原文。
+	// 同族逐字回吐，跨族报错（理由见 BlockOpaque）。
+	Opaque *Opaque `json:"opaque,omitempty"`
 	// Citations 本块正文引用的来源。挂在块上而非消息上，是因为各协议都把它
 	// 绑到单个文本块：Anthropic 的 text.citations、Chat 的 message.annotations、
 	// Responses 的 output_text.annotations。偏移量也只有在单块正文内才有意义
@@ -132,6 +147,34 @@ type Skill struct {
 // 送进容器输入目录」，响应侧代表「模型在容器里产出了这个文件」。
 type ContainerUploadRef struct {
 	FileID string `json:"file_id,omitempty"`
+}
+
+// Opaque 不透明块的载荷：wire 判别值 + 上游给的完整块 JSON。
+// Body 保留整块而非挑字段，是因为这些块的形状由上游定义且随版本增长
+// （web_fetch_tool_result 有 caller，search_result 有 source/title/citations），
+// 逐个建模永远慢一步，而原样带回是「同族往返无损」的唯一可靠做法。
+// Body 属会话内容，不进日志与诊断注记。
+type Opaque struct {
+	// WireType 是上游线上的块判别值（如 "code_execution_tool_result"）。同族
+	// 回吐时按它复原块型；空值表示连判别值都读不出来，不可回吐。
+	WireType string `json:"wire_type,omitempty"`
+	// Body 是整块原文。omitempty 承重：空 Body 不参与序列化，避免
+	// JSON 往返（Clone）把空 RawMessage 写成字面量 null 再读回成 4 字节，
+	// 让「同族原样带回」把 null 当成上游原文塞回块数组。
+	Body json.RawMessage `json:"body,omitempty"`
+	// From 解码出这个块的协议族（取该 codec 的 Name），语义同
+	// Thinking.SignatureFrom：不透明块的判别值只在它自己的协议里有定义，只有
+	// 那一族能原样接回去。缺了来源标记就没法区分「本族未知块」与「别家未知
+	// 块」，而两者处置相反——前者逐字回吐，后者逐字发出去就是一个目标上游
+	// 不认识的块型/part 型，被按块型校验直接 400。空值按外族处理（宁拒不伪造）。
+	From string `json:"from,omitempty"`
+	// Item 记录捕获位置，仅 responses 一族用得上：true=从 output/input 数组的
+	// item 位捕获（线体是完整 item，回吐时必须作为独立 item 写回数组）；
+	// false=从 message 的 content part 位捕获（回吐进 part 数组）。官方 item 型
+	// 并不都以 _call 结尾（computer_call_output、mcp_list_tools、compaction 等），
+	// 按名字判型会把 item 级载荷错塞进 part 数组——那是一个本族上游不认识的
+	// part 型，必 400。判别只能在捕获时做，编码侧读这个标记。
+	Item bool `json:"item,omitempty"`
 }
 
 // Citation 正文中一段文字的来源标注。
@@ -937,6 +980,12 @@ func cloneBlocks(in []Block) []Block {
 		if b.ContainerUpload != nil {
 			v := *b.ContainerUpload
 			out[i].ContainerUpload = &v
+		}
+		if b.Opaque != nil {
+			// Body 是 RawMessage，按不可变惯例随值共享（同 Media.Data）；
+			// 换头是为了让判别值/来路族/Item 标记的改动不串到另一份克隆。
+			v := *b.Opaque
+			out[i].Opaque = &v
 		}
 		if b.Citations != nil {
 			out[i].Citations = append([]Citation(nil), b.Citations...)

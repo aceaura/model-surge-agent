@@ -158,7 +158,7 @@ func TestDecodeWebSearchToolResultErrorUnion(t *testing.T) {
 func TestDecodeBlockAcceptsServerToolBlocks(t *testing.T) {
 	in := wireBlock{Type: blockServerToolUse, ID: "srvtoolu_1",
 		Name: "web_search", Input: json.RawMessage(`{"query":"q"}`)}
-	b, ok, err := decodeBlock(in)
+	b, ok, err := decodeBlock(in, nil)
 	if err != nil || !ok {
 		t.Fatalf("decodeBlock: ok=%v err=%v", ok, err)
 	}
@@ -169,7 +169,7 @@ func TestDecodeBlockAcceptsServerToolBlocks(t *testing.T) {
 
 	in = wireBlock{Type: blockWebSearchToolResult, ToolUseID: "srvtoolu_1",
 		Content: json.RawMessage(`{"type":"web_search_tool_result_error","error_code":"x"}`)}
-	b, ok, err = decodeBlock(in)
+	b, ok, err = decodeBlock(in, nil)
 	if err != nil || !ok {
 		t.Fatalf("decodeBlock: ok=%v err=%v", ok, err)
 	}

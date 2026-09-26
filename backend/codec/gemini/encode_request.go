@@ -238,6 +238,18 @@ func encodeMessage(m ir.Message, names map[string]string) ([]wireContent, error)
 			// 伪装成 inlineData/fileData 则会把只有 file_id 的容器引用当普通附件
 			// 投递。损耗由 DescribeLossy 统一报出。
 			continue
+		case ir.BlockOpaque:
+			// 不透明块整块无法在本族表达：本协议是出站专属（没有 gemini 客户端），
+			// 到达这里的不透明块必然产自别族（anthropic/chat_completions/responses），
+			// 恒为跨族。逐字发过去是上游不认识的 part 型，降级成文本会污染正文，
+			// 故报错（判据见 codec.OpaqueVerbatimFor，理由见 ir.BlockOpaque）。
+			o := b.Opaque
+			wt, from := "", ""
+			if o != nil {
+				wt, from = o.WireType, o.From
+			}
+			return nil, fmt.Errorf(
+				"cannot carry opaque block %q produced by protocol %q into %s: the block type is only defined in the protocol that produced it", wt, from, Name)
 		default:
 			return nil, fmt.Errorf("cannot encode block type %q", b.Type)
 		}

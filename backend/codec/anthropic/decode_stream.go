@@ -114,8 +114,8 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 
 	case evContentBlockStart:
 		block := ir.Block{Type: ir.BlockText}
-		if ev.Block != nil {
-			b, ok, err := decodeBlock(*ev.Block)
+		if len(ev.BlockRaw) > 0 {
+			b, ok, err := decodeRawBlock(ev.BlockRaw)
 			if err != nil {
 				return nil, ir.NewError(ir.ErrUpstream, 0, "",
 					fmt.Sprintf("undecodable content block: %v", err))
@@ -127,6 +127,7 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 			// 才能在下一轮原样回传，Anthropic 的续话校验才不会断链。跨族客户端
 			// 表达不了，由各自的出站编码器跳过并报有损。涂抹块没有 delta，密文随
 			// 块开始全量下发（与 web_search_tool_result.content 同一处置）。
+			// 未知块型同理留成不透明块，随块开始全量下发，同族逐字回吐。
 			block = b
 			// 块开启时的 input 通常是占位空对象，真正入参由后续 input_json_delta
 			// 累积；留着占位符会被当成前缀拼进入参，产出非法 JSON。
@@ -256,17 +257,12 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 		Container:   decodeContainer(w.Container),
 	}
 	out.StopSequence = adoptStopSequence(out.StopReason, w.StopSequence)
-	out.Content = make([]ir.Block, 0, len(w.Content))
-	for _, b := range w.Content {
-		block, ok, err := decodeBlock(b)
-		if err != nil {
-			return nil, ir.NewError(ir.ErrUpstream, 0, "",
-				fmt.Sprintf("undecodable response block: %v", err))
-		}
-		if ok {
-			out.Content = append(out.Content, block)
-		}
+	blocks, err := decodeBlocks(w.Content)
+	if err != nil {
+		return nil, ir.NewError(ir.ErrUpstream, 0, "",
+			fmt.Sprintf("undecodable response block: %v", err))
 	}
+	out.Content = blocks
 	return out, nil
 }
 

@@ -153,6 +153,19 @@ type wirePart struct {
 	// InputAudio 的 format 是裸格式名（"wav"、"mp3"）而非完整 media type。
 	InputAudio *wireInputAudio `json:"input_audio,omitempty"`
 	File       *wireFile       `json:"file,omitempty"`
+	// Raw 同族回写的不透明 part 原文（ir.BlockOpaque）。标 json:"-" 不参与逐字段
+	// 序列化：MarshalJSON 见到它就把整个 part 原样吐出去（与 anthropic wireBlock.Raw
+	// 同一手法）。逐字段重建会丢掉本协议没建模的 part 型/键。
+	Raw json.RawMessage `json:"-"`
+}
+
+// MarshalJSON 有原文的不透明 part 整块原样写出，其余按字段序列化。
+func (p wirePart) MarshalJSON() ([]byte, error) {
+	if len(p.Raw) > 0 {
+		return p.Raw, nil
+	}
+	type plain wirePart
+	return json.Marshal(plain(p))
 }
 
 type wireImageURL struct {

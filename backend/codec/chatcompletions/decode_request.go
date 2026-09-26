@@ -313,53 +313,89 @@ func decodeContent(raw json.RawMessage) ([]ir.Block, error) {
 		return []ir.Block{{Type: ir.BlockText, Text: text}}, nil
 	}
 
-	var parts []wirePart
-	if err := json.Unmarshal(raw, &parts); err != nil {
+	// 逐 part 拆原文而非一次性 []wirePart：未知 part 型要整块留成不透明块供
+	// 同族回吐，且单个 part 的形状冲突不该拖垮同消息的其他 part。
+	var raws []json.RawMessage
+	if err := json.Unmarshal(raw, &raws); err != nil {
 		return nil, fmt.Errorf("content must be a string or a parts array: %w", err)
 	}
-	out := make([]ir.Block, 0, len(parts))
-	for _, p := range parts {
-		switch p.Type {
-		case partText, "":
-			out = append(out, ir.Block{Type: ir.BlockText, Text: p.Text})
-		case partImageURL:
-			if p.ImageURL == nil {
-				return nil, fmt.Errorf("image_url part needs a url")
-			}
-			media := decodeImageURL(p.ImageURL.URL)
-			media.Detail = p.ImageURL.Detail
-			out = append(out, ir.Block{Type: ir.BlockImage, Media: media})
-		case partInputAudio:
-			if p.InputAudio == nil {
-				return nil, fmt.Errorf("input_audio part needs a payload")
-			}
-			out = append(out, ir.Block{Type: ir.BlockAudio, Media: &ir.Media{
-				MediaType: audioMediaType(p.InputAudio.Format),
-				Data:      p.InputAudio.Data,
-			}})
-		case partFile:
-			if p.File == nil {
-				return nil, fmt.Errorf("file part needs a payload")
-			}
-			media := &ir.Media{Name: p.File.Filename}
-			if p.File.FileData != "" {
-				if t, data, ok := splitDataURI(p.File.FileData); ok {
-					media.MediaType, media.Data = t, data
-				} else {
-					media.URL = p.File.FileData
-				}
-			} else {
-				// file_id 指向上游已存的文件，本服务不解引用：
-				// 原样进 FileID，同族编码时带回；当 URL 透传会让别族
-				// 上游拿一个 id 去当链接抓。
-				media.FileID = p.File.FileID
-			}
-			out = append(out, ir.Block{Type: codec.MediaKindFor(codec.SniffMediaType(media)), Media: media})
-		default:
-			return nil, fmt.Errorf("unknown content part type %q", p.Type)
+	out := make([]ir.Block, 0, len(raws))
+	for _, r := range raws {
+		block, err := decodePart(r)
+		if err != nil {
+			return nil, err
 		}
+		out = append(out, block)
 	}
 	return out, nil
+}
+
+// decodePart 解单个 content part 的原文。未知 part 型整块留成不透明块（同族逐字
+// 回吐、跨族由编码器报错）；part 内字段形状冲突时同样归不透明块；连判别值都读
+// 不出来才算真畸形，报错。
+func decodePart(raw json.RawMessage) (ir.Block, error) {
+	var p wirePart
+	if err := json.Unmarshal(raw, &p); err != nil {
+		if wt := partTypeOf(raw); wt != "" {
+			return ir.Block{Type: ir.BlockOpaque,
+				Opaque: &ir.Opaque{WireType: wt, Body: raw, From: Name}}, nil
+		}
+		return ir.Block{}, fmt.Errorf("content part is not valid: %w", err)
+	}
+	switch p.Type {
+	case partText, "":
+		return ir.Block{Type: ir.BlockText, Text: p.Text}, nil
+	case partImageURL:
+		if p.ImageURL == nil {
+			return ir.Block{}, fmt.Errorf("image_url part needs a url")
+		}
+		media := decodeImageURL(p.ImageURL.URL)
+		media.Detail = p.ImageURL.Detail
+		return ir.Block{Type: ir.BlockImage, Media: media}, nil
+	case partInputAudio:
+		if p.InputAudio == nil {
+			return ir.Block{}, fmt.Errorf("input_audio part needs a payload")
+		}
+		return ir.Block{Type: ir.BlockAudio, Media: &ir.Media{
+			MediaType: audioMediaType(p.InputAudio.Format),
+			Data:      p.InputAudio.Data,
+		}}, nil
+	case partFile:
+		if p.File == nil {
+			return ir.Block{}, fmt.Errorf("file part needs a payload")
+		}
+		media := &ir.Media{Name: p.File.Filename}
+		if p.File.FileData != "" {
+			if t, data, ok := splitDataURI(p.File.FileData); ok {
+				media.MediaType, media.Data = t, data
+			} else {
+				media.URL = p.File.FileData
+			}
+		} else {
+			// file_id 指向上游已存的文件，本服务不解引用：
+			// 原样进 FileID，同族编码时带回；当 URL 透传会让别族
+			// 上游拿一个 id 去当链接抓。
+			media.FileID = p.File.FileID
+		}
+		return ir.Block{Type: codec.MediaKindFor(codec.SniffMediaType(media)), Media: media}, nil
+	default:
+		// 未知 part 型原样留成不透明块，不降级成文本也不报错：降级会把别家载荷
+		// 拼进正文，而 OpenAI 两系的客户端确实会发来本仓没建模的 part 型。同族
+		// （chat）逐字回吐无损，跨族由编码器报错（见 encodeContent 的 BlockOpaque）。
+		return ir.Block{Type: ir.BlockOpaque,
+			Opaque: &ir.Opaque{WireType: p.Type, Body: raw, From: Name}}, nil
+	}
+}
+
+// partTypeOf 只从 part 原文里抠出判别值 type，供形状冲突时给不透明块定型。
+func partTypeOf(raw json.RawMessage) string {
+	var head struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &head); err != nil {
+		return ""
+	}
+	return head.Type
 }
 
 // audioMediaType 把本协议的裸格式名补成完整 media type。

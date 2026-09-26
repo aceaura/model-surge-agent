@@ -343,6 +343,21 @@ func encodeContent(blocks []ir.Block) (json.RawMessage, error) {
 				part = wirePart{Type: partText, Text: codec.DowngradeMedia(b).Text}
 			}
 			parts = append(parts, part)
+		case ir.BlockOpaque:
+			// 不透明块：同族逐字回吐，跨族报错（理由见 ir.BlockOpaque）。
+			// 本协议的 part 没有「承载任意未知形状」的通用槽，逐字回吐
+			// 靠 wirePart.Raw；跨族无法表达，降级成文本会丢判别值且写出
+			// 上游不认的形状，故直接拒。
+			o := b.Opaque
+			if !codec.OpaqueVerbatimFor(o, Name) {
+				wt, from := "", ""
+				if o != nil {
+					wt, from = o.WireType, o.From
+				}
+				return nil, fmt.Errorf(
+					"cannot carry opaque part %q produced by protocol %q into %s: the part type is only defined in the protocol that produced it", wt, from, Name)
+			}
+			parts = append(parts, wirePart{Type: o.WireType, Raw: o.Body})
 		default:
 			return nil, fmt.Errorf("cannot encode block type %q as content", b.Type)
 		}

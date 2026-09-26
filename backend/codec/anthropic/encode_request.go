@@ -374,6 +374,25 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 		if b.ContainerUpload != nil {
 			out.FileID = b.ContainerUpload.FileID
 		}
+	case ir.BlockOpaque:
+		// 同族逐字回吐：整块原文经 wireBlock.Raw 原样写出（MarshalJSON 见到 Raw
+		// 就整块吐），未建模的键一个不丢——web_fetch_tool_result 的 caller、
+		// code_execution_tool_result 的 stdout 都靠这条通道在多轮历史里活下来。
+		// 跨族报错而非降级或丢弃：把别家的块型逐字发给目标上游会被按块型校验直接
+		// 400，降级成文本会把别家载荷拼进正文污染回答，两者都比响亮拒绝更糟
+		// （与本仓「输入未知即拒、不静默伪造」一致，见 ir.BlockOpaque）。
+		o := b.Opaque
+		if !codec.OpaqueVerbatimFor(o, Name) {
+			wt, from := "", ""
+			if o != nil {
+				wt, from = o.WireType, o.From
+			}
+			return out, false, fmt.Errorf(
+				"cannot carry opaque block %q produced by protocol %q into %s: the block type is only defined in the protocol that produced it", wt, from, Name)
+		}
+		out.Type = o.WireType
+		out.Raw = o.Body
+		return out, true, nil
 	default:
 		return out, false, fmt.Errorf("cannot encode block type %q", b.Type)
 	}

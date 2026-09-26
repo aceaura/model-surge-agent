@@ -152,6 +152,11 @@ type wireItem struct {
 	// 通道的 reasoning 条目，靠 MarshalJSON 补出空的 "summary":[]。
 	// 不参与序列化（unexported）。
 	summaryPlaceholder bool
+
+	// Raw 是同族回吐的不透明条目原文（ir.BlockOpaque 且 Opaque.Item）。
+	// 标 json:"-" 不参与逐字段序列化，由 MarshalJSON 优先整块吐出：未知托管
+	// 条目的键集本服务不认识，逐字段重建必丢键，只有原文能逐字保真。
+	Raw json.RawMessage `json:"-"`
 }
 
 // MarshalJSON 只为走 content 通道的 reasoning 条目补出 "summary":[]。
@@ -159,7 +164,12 @@ type wireItem struct {
 // 其余条目一律原样返回 plain 序列化结果——wireItem 服务出站请求编码，
 // 上游的 prompt cache 按前缀逐字节比对，多写或重排一个键都会让缓存失效，
 // 所以这里绝不无谓地改动字节。
+//
+// Raw 非空时优先整块吐出：那是同族不透明条目的原文，逐字段重建会丢键。
 func (i wireItem) MarshalJSON() ([]byte, error) {
+	if len(i.Raw) > 0 {
+		return i.Raw, nil
+	}
 	type plain wireItem
 	data, err := json.Marshal(plain(i))
 	if err != nil {
@@ -297,6 +307,20 @@ type wirePart struct {
 	// 请求侧 top_logprobs 给档时下发）。IR 响应模型没有槽位：只探测计数、
 	// 经注记报出，内容不建模。
 	LogProbs json.RawMessage `json:"logprobs,omitempty"`
+
+	// Raw 是同族回吐的不透明 part 原文（ir.BlockOpaque 且 !Opaque.Item）。
+	// 标 json:"-" 不参与逐字段序列化，由 MarshalJSON 优先整块吐出：未知 part
+	// 型的键集本服务不认识，逐字段重建必丢键，只有原文能逐字保真。
+	Raw json.RawMessage `json:"-"`
+}
+
+// MarshalJSON 在 Raw 非空时整块吐出不透明 part 原文，否则按字段序列化。
+func (p wirePart) MarshalJSON() ([]byte, error) {
+	if len(p.Raw) > 0 {
+		return p.Raw, nil
+	}
+	type plain wirePart
+	return json.Marshal(plain(p))
 }
 
 // annotation 是 url_citation 标注。字段是平的（chat 形态嵌一层

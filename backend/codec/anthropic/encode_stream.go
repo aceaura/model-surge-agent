@@ -127,8 +127,16 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			}
 		}
 		e.open(ev.Index)
+		// content_block 以原文槽位写出：不透明块的 wireBlock.Raw 要整块逐字带回，
+		// 先 marshal 成 BlockRaw 再进帧。streamEvent 的 content_block 槽位解码侧
+		// 也用它收原文（编解码共用一个 RawMessage 字段，见 wire.go），普通块经
+		// wireBlock.MarshalJSON 仍按字段序列化，产物与改动前一致。
+		rawBlock, err := json.Marshal(block)
+		if err != nil {
+			return nil, err
+		}
 		frame, err := marshalFrame(evContentBlockStart, streamEvent{
-			Type: evContentBlockStart, Index: ev.Index, Block: &block,
+			Type: evContentBlockStart, Index: ev.Index, BlockRaw: rawBlock,
 		})
 		if err != nil {
 			return nil, err
@@ -463,16 +471,23 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 	if w.StopReason == "" {
 		w.StopReason = "end_turn"
 	}
-	w.Content = make([]wireBlock, 0, len(resp.Content))
+	blocks := make([]wireBlock, 0, len(resp.Content))
 	for _, b := range resp.Content {
 		wb, ok, err := encodeBlock(b)
 		if err != nil {
 			return nil, err
 		}
 		if ok {
-			w.Content = append(w.Content, wb)
+			blocks = append(blocks, wb)
 		}
 	}
+	// Content 是 RawMessage 槽位（解码侧逐块拆原文用），这里把块数组整体 marshal
+	// 进去：不透明块的 wireBlock.Raw 经其 MarshalJSON 逐字嵌入，其余按字段序列化。
+	content, err := json.Marshal(blocks)
+	if err != nil {
+		return nil, err
+	}
+	w.Content = content
 	return json.Marshal(w)
 }
 
