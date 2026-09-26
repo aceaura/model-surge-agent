@@ -12,6 +12,7 @@ func TestRetryableIsDerivedFromKind(t *testing.T) {
 		ErrAuth:            false,
 		ErrNotFound:        false,
 		ErrContextExceeded: false,
+		ErrContentFilter:   false,
 		ErrInternal:        false,
 	}
 	for kind, want := range cases {

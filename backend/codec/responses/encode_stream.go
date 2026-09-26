@@ -1015,7 +1015,7 @@ func errorEnvelope(err *ir.Error) (int, wireErrorEnvelope) {
 
 func errorTypeForKind(kind ir.ErrorKind) string {
 	switch kind {
-	case ir.ErrInvalidRequest, ir.ErrContextExceeded:
+	case ir.ErrInvalidRequest, ir.ErrContextExceeded, ir.ErrContentFilter:
 		return "invalid_request_error"
 	case ir.ErrAuth:
 		return "authentication_error"

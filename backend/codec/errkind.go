@@ -18,12 +18,20 @@ func KindForStatus(status int, message string) ir.ErrorKind {
 	switch {
 	case status == http.StatusTooManyRequests:
 		return ir.ErrRateLimit
+	// P1：402 是「当前账号欠费 / 额度耗尽」，换号是唯一正确动作。归 rate_limit 族
+	// 让 outcome 从 abnormal（不换号、白烧当前账号直到人工介入）变 retrying（换号重试）。
+	case status == http.StatusPaymentRequired:
+		return ir.ErrRateLimit
 	case status == http.StatusUnauthorized, status == http.StatusForbidden:
 		return ir.ErrAuth
 	case status == http.StatusNotFound:
 		return ir.ErrNotFound
 	case status == http.StatusRequestEntityTooLarge:
 		return ir.ErrContextExceeded
+	// P2：408（请求超时）换目标合理，425（Too Early，TLS 早期数据被拒）极罕见但重试
+	// 无害。归 timeout 族让 outcome 从 abnormal 变 retrying；重试次数受 MaxAttempts 兜底。
+	case status == http.StatusRequestTimeout, status == http.StatusTooEarly:
+		return ir.ErrTimeout
 	case status == http.StatusBadRequest:
 		if IsContextOverflow(message) {
 			return ir.ErrContextExceeded
@@ -107,12 +115,21 @@ var codeKinds = map[string]ir.ErrorKind{
 	"invalid_request_error":   ir.ErrInvalidRequest,
 	"invalid_argument":        ir.ErrInvalidRequest,
 	"context_length_exceeded": ir.ErrContextExceeded,
-	"overloaded_error":        ir.ErrUpstream,
-	"api_error":               ir.ErrUpstream,
-	"unavailable":             ir.ErrUpstream,
-	"internal":                ir.ErrUpstream,
-	"deadline_exceeded":       ir.ErrTimeout,
-	"timeout":                 ir.ErrTimeout,
+	// P3：风控 / 内容安全拦截码。归 ErrContentFilter（不可重试、outcome=abnormal），
+	// 而不是落到 default=ErrUpstream（可重试）：否则调度器会换号重发一个永远被策略
+	// 挡下的请求，把整个账号池白烧一遍。码表对齐 sub2api 与旧仓 4b6afce 的 cyber_policy
+	// 特例。注意 content_filter 作「错误码」与作「finish_reason / incomplete reason」
+	// 是两条不同的路径：后者是正常终止（StopContentFilter），只有错误体里的 code 才走这里。
+	"cyber_policy":             ir.ErrContentFilter,
+	"content_policy":           ir.ErrContentFilter,
+	"content_policy_violation": ir.ErrContentFilter,
+	"content_filter":           ir.ErrContentFilter,
+	"overloaded_error":         ir.ErrUpstream,
+	"api_error":                ir.ErrUpstream,
+	"unavailable":              ir.ErrUpstream,
+	"internal":                 ir.ErrUpstream,
+	"deadline_exceeded":        ir.ErrTimeout,
+	"timeout":                  ir.ErrTimeout,
 }
 
 // KindForCode 按错误码/状态串归类，未知码返回 false 交回调用方。
@@ -158,7 +175,7 @@ func StatusMessage(status int, body []byte) string {
 // StatusForKind 是 KindForStatus 的反向映射，供入站 codec 决定响应状态码。
 func StatusForKind(kind ir.ErrorKind) int {
 	switch kind {
-	case ir.ErrInvalidRequest, ir.ErrContextExceeded:
+	case ir.ErrInvalidRequest, ir.ErrContextExceeded, ir.ErrContentFilter:
 		return http.StatusBadRequest
 	case ir.ErrAuth:
 		return http.StatusUnauthorized

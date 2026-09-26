@@ -22,6 +22,7 @@ func errorKinds() []ir.ErrorKind {
 		ir.ErrNotFound,
 		ir.ErrRateLimit,
 		ir.ErrContextExceeded,
+		ir.ErrContentFilter,
 		ir.ErrUpstream,
 		ir.ErrTimeout,
 		ir.ErrInternal,

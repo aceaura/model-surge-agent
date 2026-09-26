@@ -645,7 +645,7 @@ func errorEnvelope(err *ir.Error) (int, wireErrorEnvelope) {
 // errorTypeForKind 用 OpenAI 的错误类型名，让客户端 SDK 能按自己的分类处理。
 func errorTypeForKind(kind ir.ErrorKind) string {
 	switch kind {
-	case ir.ErrInvalidRequest, ir.ErrContextExceeded:
+	case ir.ErrInvalidRequest, ir.ErrContextExceeded, ir.ErrContentFilter:
 		return "invalid_request_error"
 	case ir.ErrAuth:
 		return "authentication_error"

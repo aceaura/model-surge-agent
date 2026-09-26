@@ -31,6 +31,14 @@ const (
 	ErrTransport ErrorKind = "transport"
 	// ErrTimeout 首字节或空闲超时。
 	ErrTimeout ErrorKind = "timeout"
+	// ErrContentFilter 上游风控 / 内容安全拦截（cyber_policy、content_policy_violation 等）。
+	//
+	// 与 ErrInvalidRequest 分开而不是并进去：后者是「请求写错了，改一改能成」，
+	// 这一类是「内容本身被策略挡下，换个目标同样会被挡」。若归成可重试的
+	// ErrUpstream，调度器会换号重发一个永远不可能成功的请求，把整个账号池白烧
+	// 一遍——这正是它单独成类的原因。故不可重试（落 retryable 的 default=false），
+	// outcome 归 abnormal（落 outcomeFor 的 default），不换目标、直接向客户端报错。
+	ErrContentFilter ErrorKind = "content_filter"
 	// ErrInternal 本服务自身出错。
 	ErrInternal ErrorKind = "internal"
 	// ErrCanceled 客户端自己取消了请求。既不是目标的故障也不是本服务的错，
