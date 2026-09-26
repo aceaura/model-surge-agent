@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -39,6 +40,9 @@ type streamDecoder struct {
 	// maxCandidate 是见过的最大候选索引。只记最大值不逐帧记说明：
 	// 说明按字符串去重，逐帧生成会让一个流报出好几条不同数字的说明。
 	maxCandidate int
+	// droppedBadFrames 外层 JSON 都解不开的坏帧计数：结构损坏而非内容损坏，
+	// 跳过续流（SSE 以事件边界自同步，坏一帧不污染后续帧），经 Notes() 报出。
+	droppedBadFrames int
 }
 
 type openBlock struct {
@@ -56,6 +60,10 @@ func (d *streamDecoder) Notes() []string {
 	if d.maxCandidate > 0 {
 		notes = append(notes, codec.DroppedCandidatesNote(d.maxCandidate))
 	}
+	if d.droppedBadFrames > 0 {
+		notes = append(notes, codec.BadFrameSkipNote(d.droppedBadFrames))
+		d.droppedBadFrames = 0
+	}
 	return codec.DedupeNotes(notes)
 }
 
@@ -63,6 +71,12 @@ func (d *streamDecoder) Feed(event, data string) ([]ir.Event, error) {
 	out, split, err := codec.FeedWithSplit(event, data, d.feedOne)
 	if split {
 		d.notes = append(d.notes, codec.MultipleJSONDocsNote)
+	}
+	// 整行解不开也拆不出多文档：结构上可忽略的坏帧，计数后吞成无事件无错误，
+	// 读流循环据此续流而不是终止整流。内容损坏帧不包裹 ErrSkipFrame，照常上抛。
+	if errors.Is(err, codec.ErrSkipFrame) {
+		d.droppedBadFrames++
+		return nil, nil
 	}
 	return out, err
 }
@@ -74,8 +88,10 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 	}
 	var frame wireResponse
 	if err := json.Unmarshal([]byte(data), &frame); err != nil {
-		return nil, ir.NewError(ir.ErrUpstream, 0, "",
-			fmt.Sprintf("undecodable stream frame: %v", err))
+		// 帧外层解不开：交 ClassifyBadFrame 按「有没有完整文档已解出来」分类——
+		// 纯垃圾帧包裹 ErrSkipFrame（Feed 计数跳过续流），残缺多文档行返回内容
+		// 损坏错误（fail-fast，除非 FeedWithSplit 能干净拆开）。
+		return nil, codec.ClassifyBadFrame(err, data)
 	}
 	// 错误可能以流内帧的形式出现，而非 HTTP 状态码。
 	if frame.Error != nil {

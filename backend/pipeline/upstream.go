@@ -473,17 +473,19 @@ func (u *upstream) read(ctx context.Context) <-chan frame {
 			send(ctx, out, frame{done: true})
 			return
 		}
-		sawFrame := false
+		produced := false
 		for u.scanner.Scan() {
-			sawFrame = true
 			f := u.scanner.Frame()
 			events, err := u.decoder.Feed(f.Event, f.Data)
 			if err != nil {
 				send(ctx, out, frame{err: asIRError(err, ir.ErrUpstream)})
 				return
 			}
-			if len(events) > 0 && !send(ctx, out, frame{events: events}) {
-				return
+			if len(events) > 0 {
+				produced = true
+				if !send(ctx, out, frame{events: events}) {
+					return
+				}
 			}
 		}
 		if err := u.scanner.Err(); err != nil {
@@ -491,10 +493,12 @@ func (u *upstream) read(ctx context.Context) <-chan frame {
 				fmt.Sprintf("upstream stream broke: %v", err))})
 			return
 		}
-		if !sawFrame {
-			// HTTP 200 但 body 一帧都没有：上游在写内容之前就断了。
-			// 此时不能让解码器补终止事件——那会让上层以为目标已经响应而
-			// 锁定它，实际这是截断，还能换个目标重来。
+		if !produced {
+			// HTTP 200 但整份响应没解出任何事件：要么 body 一帧都没有（上游在写
+			// 内容之前就断了），要么来的全是被跳过的坏帧 / 不认识的事件型（坏目标
+			// 或方言不通）。两种都按截断处理——此时不能让解码器补终止事件，那会让
+			// 上层以为目标已经响应而锁定它，实际还能换个目标重来。回一个空 200 会
+			// 把坏目标锁死、让客户端拿到一句空回答。
 			send(ctx, out, frame{done: true})
 			return
 		}

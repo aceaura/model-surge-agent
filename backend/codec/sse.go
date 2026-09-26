@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"strings"
 
@@ -204,6 +206,49 @@ func SplitJSONDocuments(data string) ([]string, bool) {
 		return nil, false
 	}
 	return out, true
+}
+
+// ErrSkipFrame 标记一帧「结构上不可解但可安全跳过」：外层 JSON 都解不开，
+// 取不出任何 type 与正文。SSE 以事件边界自同步，坏一帧不污染后续帧——跳过
+// 续流比终止整流更保内容，故归结构损坏而非内容损坏。
+//
+// 与 FeedWithSplit 的契约：解码器的 feedOne 在「帧外层解不开」时返回包裹了
+// 本哨兵的错误（而不是直接吞掉），FeedWithSplit 据此仍会尝试把一行里首尾相接
+// 的多文档拆开；只有拆开也无望（整行确属坏帧）时，哨兵才会原样回到解码器的
+// Feed，由 Feed 计数后吞成 (nil, nil)，读流循环因此无须改动地续流。
+//
+// 内容损坏帧（认得出的事件、载荷语义坏了）不包裹本哨兵，照常报错终止——
+// 那是 fail-fast 的对象，跳过去会让客户端收到半截却看不出丢了东西的内容。
+var ErrSkipFrame = errors.New("skippable malformed stream frame")
+
+// ClassifyBadFrame 把「帧外层 JSON 解不开」的错误按可跳过性分类，供四个解码器
+// 的 feedOne 共用。判据落在「有没有一个完整文档已经解出来」：解出来了就意味着
+// 这一行带着正文，丢掉它而不报错正是本仓最忌讳的静默缺失。
+//
+//   - 整行连第一个 JSON 文档都解不开（纯垃圾帧）：结构损坏，取不出任何正文，
+//     返回包裹 ErrSkipFrame 的错误。FeedWithSplit 拆它也无望，哨兵原样回到
+//     Feed，由 Feed 计数后吞成 (nil, nil) 跳帧续流。
+//   - 行首有完整文档、其后跟着解不开的残余（残缺多文档行）：返回内容损坏错误
+//     （不包裹哨兵），fail-fast 终止整流。唯一例外是残余其实也是一个完整文档——
+//     那时 FeedWithSplit 会把整行干净拆开、各自可解，这个错误根本不会浮出来。
+func ClassifyBadFrame(err error, data string) error {
+	if hasLeadingJSONDocument(data) {
+		return ir.NewError(ir.ErrUpstream, 0, "",
+			fmt.Sprintf("undecodable stream frame: %v", err))
+	}
+	return fmt.Errorf("%w: %v", ErrSkipFrame, err)
+}
+
+// hasLeadingJSONDocument 报告 data 是否以一个完整 JSON 文档开头、且其后还有
+// 非空白残余。两者都成立才是「残缺多文档行」；纯垃圾（第一个文档就解不开）
+// 与规规矩矩的单文档（无残余，本就轮不到这里报错）都返回 false。
+func hasLeadingJSONDocument(data string) bool {
+	dec := json.NewDecoder(strings.NewReader(data))
+	var raw json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
+		return false
+	}
+	return strings.TrimSpace(data[dec.InputOffset():]) != ""
 }
 
 // FeedWithSplit 是四个解码器共用的「先按单文档解，失败再试拆分」流程。

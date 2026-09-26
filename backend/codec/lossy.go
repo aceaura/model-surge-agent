@@ -952,6 +952,18 @@ func RedactedDropNote(n int) string {
 		"dropped %d redacted_thinking block(s): the encrypted reasoning payload has no slot in this protocol, so the receiving side cannot replay it verbatim and Anthropic extended-thinking continuity breaks across the conversion", n)
 }
 
+// BadFrameSkipNote 是坏帧跳帧续流的说明：上游发来的某些 SSE 帧外层 JSON 都
+// 解不开，取不出任何内容。SSE 以事件边界自同步，坏一帧不污染后续帧，于是跳过
+// 续流而非终止整流——终止会让坏帧之后的全部正常正文一起陪葬。计数报出，数字
+// 偏大即提示上游成帧可能已失步。帧体属会话内容，不进说明。
+//
+// 只覆盖结构损坏帧；认得出事件、载荷语义坏了的内容损坏帧仍 fail-fast 终止，
+// 不在此列（跳过去会让客户端收到半截却看不出丢了东西的内容）。
+func BadFrameSkipNote(n int) string {
+	return fmt.Sprintf(
+		"skipped %d malformed stream frame(s) and kept going: the wire carried bytes that were not a decodable payload, so no content could be extracted from them; a large count suggests the upstream framing desynchronized", n)
+}
+
 // MediaOutputDropNote 是模型产出附件丢失的说明：图片与非图片附件分开计数，
 // 合成一个数字会让排障时分不清丢的是哪一类——两者在源协议里是不同块型，
 // 处置路径也不同。

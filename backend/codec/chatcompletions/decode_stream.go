@@ -2,6 +2,7 @@ package chatcompletions
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -54,6 +55,9 @@ type streamDecoder struct {
 	// 一个让另外三个协议能把结果回指到调用。这是改写不是透传，经 Notes()
 	// 报出，客户端有权知道历史里的 id 不是上游给的原号。
 	synthIDs int
+	// droppedBadFrames 外层 JSON 都解不开的坏帧计数：结构损坏而非内容损坏，
+	// 跳过续流（SSE 以事件边界自同步，坏一帧不污染后续帧），经 Notes() 报出。
+	droppedBadFrames int
 
 	// stopReason 与 usage 先攒着，到 [DONE] 才发一帧 message_delta。
 	// 本协议把它们分散在不同 chunk（finish_reason 一帧、usage 另一帧），
@@ -92,6 +96,12 @@ func (d *streamDecoder) Feed(event, data string) ([]ir.Event, error) {
 	if split {
 		d.notes = append(d.notes, codec.MultipleJSONDocsNote)
 	}
+	// 整行解不开也拆不出多文档：结构上可忽略的坏帧，计数后吞成无事件无错误，
+	// 读流循环据此续流而不是终止整流。内容损坏帧不包裹 ErrSkipFrame，照常上抛。
+	if errors.Is(err, codec.ErrSkipFrame) {
+		d.droppedBadFrames++
+		return nil, nil
+	}
 	return out, err
 }
 
@@ -106,8 +116,10 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 
 	var chunk wireResponse
 	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-		return nil, ir.NewError(ir.ErrUpstream, 0, "",
-			fmt.Sprintf("undecodable stream frame: %v", err))
+		// 帧外层解不开：交 ClassifyBadFrame 按「有没有完整文档已解出来」分类——
+		// 纯垃圾帧包裹 ErrSkipFrame（Feed 计数跳过续流），残缺多文档行返回内容
+		// 损坏错误（fail-fast，除非 FeedWithSplit 能干净拆开）。
+		return nil, codec.ClassifyBadFrame(err, data)
 	}
 	// 有些实现把错误塞进流内的 chunk 而非独立的 HTTP 状态码。
 	var env wireErrorEnvelope
@@ -421,6 +433,10 @@ func (d *streamDecoder) Notes() []string {
 				"the upstream never sent an id, and the call would otherwise have been dropped",
 			d.synthIDs))
 		d.synthIDs = 0
+	}
+	if d.droppedBadFrames > 0 {
+		notes = append(notes, codec.BadFrameSkipNote(d.droppedBadFrames))
+		d.droppedBadFrames = 0
 	}
 	return codec.DedupeNotes(notes)
 }
