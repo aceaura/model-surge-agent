@@ -79,17 +79,28 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	// 废弃形态折进现代槽位：functions 条目就是扁平的 {name,description,
 	// parameters}；function_call 的 none/auto/{"name":...} 与 tool_choice
 	// 同值集。现代键已给时现代键胜出（官方语义 tools 取代 functions）。
-	for _, f := range w.Functions {
+	for i, f := range w.Functions {
 		var fd struct {
 			Name        string          `json:"name"`
 			Description string          `json:"description"`
 			Parameters  json.RawMessage `json:"parameters"`
 		}
-		if json.Unmarshal(f, &fd) == nil && fd.Name != "" {
-			out.Tools = append(out.Tools, ir.Tool{
-				Name: fd.Name, Description: fd.Description, Schema: string(fd.Parameters),
-			})
+		if err := json.Unmarshal(f, &fd); err != nil {
+			// 与现代 tools 路径、responses 兄弟同口径：静默跳过的症状是「模型
+			// 声称没有这个工具」，而客户端从响应里看不出是自己声明被丢还是模型
+			// 不愿调，因此留一条说明。废弃形态不是可以悄悄吞掉声明的理由。
+			out.DecodeNotes = append(out.DecodeNotes, fmt.Sprintf(
+				"skipped functions[%d]: malformed legacy function declaration (%v)", i, err))
+			continue
 		}
+		if fd.Name == "" {
+			out.DecodeNotes = append(out.DecodeNotes, fmt.Sprintf(
+				"skipped functions[%d]: legacy function declaration with no name", i))
+			continue
+		}
+		out.Tools = append(out.Tools, ir.Tool{
+			Name: fd.Name, Description: fd.Description, Schema: string(fd.Parameters),
+		})
 	}
 	if out.ToolChoice == nil && len(w.FunctionCall) > 0 {
 		fc, err := decodeToolChoice(w.FunctionCall)
