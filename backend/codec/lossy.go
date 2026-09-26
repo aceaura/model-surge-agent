@@ -345,8 +345,7 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 				// 因为照编是缺必填键/data:"" 的形状，上游 400 拒整轮。图片的
 				// 三维细则由 describeImageLossy 报，其余媒体在这里报「无可投递
 				// 载荷」。跳过/降级优先于「类型不支持」的降级说明，故 continue。
-				note(string(b.Type)+" blocks",
-					"the part carries no payload the target protocol can express (no base64, no URL, no usable file reference); it is not sent as media")
+				note(string(b.Type)+" blocks", emptyMediaWhy)
 				continue
 			}
 			// 「降级为文本」只在确有载荷可渲染成文本时才成立。空壳图片是被整块
@@ -371,6 +370,14 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 	}
 }
 
+// emptyMediaWhy 是「媒体部件三载体全空（无 base64、无 URL、无可用文件引用）」
+// 的统一措辞。处置随目标协议而异——anthropic 整块跳过、chat/gemini 降级为文本
+// 占位——但共性是「不会作为媒体发出去」，故措辞与具体处置无关。图片走
+// describeImageLossy、其余媒体走 describeBlocksLossy，两处共用此串以免一处改了
+// 另一处漂移：此前图片那条写「空图片部件会被上游拒收」，对把空媒体降级成文本
+// 的 chat/gemini 并不准确（它压根没被当媒体发出去，谈不上拒收）。
+const emptyMediaWhy = "the part carries no payload the target protocol can express (no base64, no URL, no usable file reference); it is not sent as media"
+
 // describeImageLossy 报一张图片相对目标协议丢掉的三维：detail 档位、file_id
 // 引用、以及整个部件没有任何可投递载荷。与能力位判定同一出处，编码器的跳过
 // 判据（HasPayload）与这里的「确实丢了」口径一致。
@@ -390,8 +397,7 @@ func describeImageLossy(m *ir.Media, caps Capabilities, note func(field, why str
 		// 上游 400 拒整轮，编码器于是整块跳过。这一维与媒体类型无关——裸图连
 		// 类型都嗅不出，此前会因 AcceptsMedia("")==false 提前 return，最终被
 		// describeBlocksLossy 误报成「类型不支持，降级为文本」。
-		note("image payload",
-			"the part carries no payload the target protocol can express (no base64, no URL, no usable file reference); an empty image part would be rejected upstream")
+		note("image payload", emptyMediaWhy)
 		return
 	}
 	if !caps.AcceptsMedia(SniffMediaType(m)) && m.FileID == "" {

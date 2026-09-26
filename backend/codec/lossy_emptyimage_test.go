@@ -32,6 +32,16 @@ func TestDescribeLossyEmptyImageReportsNoPayload(t *testing.T) {
 			if strings.Contains(got, "downgraded to text") {
 				t.Errorf("an empty image is skipped, not downgraded; got:\n%s", got)
 			}
+			// 措辞与处置无关（轮次6 F3）：空媒体的处置随目标协议而异（anthropic
+			// 整块跳过、chat/gemini 降级为文本占位），统一说「不会作为媒体发出去」
+			// 对各协议都准确；此前图片那条写「会被上游拒收」，对降级为文本的
+			// chat/gemini 并不成立——它压根没被当媒体发出去，谈不上拒收。
+			if !strings.Contains(got, "it is not sent as media") {
+				t.Errorf("expected the disposition-agnostic wording, got:\n%s", got)
+			}
+			if strings.Contains(got, "rejected upstream") {
+				t.Errorf("wording must not claim upstream rejection; got:\n%s", got)
+			}
 		})
 	}
 }
