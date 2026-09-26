@@ -349,7 +349,11 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 					"the part carries no payload the target protocol can express (no base64, no URL, no usable file reference); it is not sent as media")
 				continue
 			}
-			if !caps.AcceptsMedia(SniffMediaType(b.Media)) {
+			// 「降级为文本」只在确有载荷可渲染成文本时才成立。空壳图片是被整块
+			// 跳过（describeImageLossy 已报「无可投递载荷」），不能再叠一条说它
+			// 被降级——否则同一处丢弃报出两条互相矛盾的处置。b.Media==nil 沿用
+			// 旧行为：chat 编码器会把无载荷图片降级成文本 part，那条注记是准的。
+			if (b.Media == nil || b.Media.HasPayload()) && !caps.AcceptsMedia(SniffMediaType(b.Media)) {
 				note(string(b.Type)+" blocks", "unsupported media type, downgraded to text")
 			}
 
@@ -367,14 +371,32 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 	}
 }
 
-// describeImageLossy 报一张图片相对目标协议丢掉的三维：detail 档位、
-// file_id 引用、以及整个部件没有任何可投递载荷。与能力位判定同一出处，
-// 编码器的跳过判据（HasPayload）与这里的「确实丢了」口径一致。
+// describeImageLossy 报一张图片相对目标协议丢掉的三维：detail 档位、file_id
+// 引用、以及整个部件没有任何可投递载荷。与能力位判定同一出处，编码器的跳过
+// 判据（HasPayload）与这里的「确实丢了」口径一致。
 //
-// 媒体类型不被接受时不报这三条：那种图片本来就要整体降级成文本，
-// 三条细则叠上去只会盖掉真正的原因。
+// 判序很关键：先看「有没有载荷」。三载体全空（既无内联字节、又无 file_id）的
+// 图片是被编码器整块跳过的，只报「无可投递载荷」这一条——detail/file 细则对
+// 一个根本发不出去的部件没有意义，叠上去只会盖掉真因，还会让 describeBlocks
+// Lossy 误以为它被「降级成文本」。只有「有载荷但类型不被接受」才走降级路径，
+// 那条「降级为文本」由调用方统一报，这里保持沉默。
 func describeImageLossy(m *ir.Media, caps Capabilities, note func(field, why string)) {
-	if m == nil || !caps.AcceptsMedia(SniffMediaType(m)) && m.FileID == "" {
+	if m == nil {
+		return
+	}
+	if !m.HasPayload() && m.FileID == "" {
+		// 三个载体全空：照编上去是缺必填键的形状（anthropic 的 base64 source
+		// 缺 media_type/data，OpenAI 两系写出 url:"" 或连 image_url 键都没有），
+		// 上游 400 拒整轮，编码器于是整块跳过。这一维与媒体类型无关——裸图连
+		// 类型都嗅不出，此前会因 AcceptsMedia("")==false 提前 return，最终被
+		// describeBlocksLossy 误报成「类型不支持，降级为文本」。
+		note("image payload",
+			"the part carries no payload the target protocol can express (no base64, no URL, no usable file reference); an empty image part would be rejected upstream")
+		return
+	}
+	if !caps.AcceptsMedia(SniffMediaType(m)) && m.FileID == "" {
+		// 有载荷但类型不被接受：整张图会降级成文本，detail/file 细则不必叠报，
+		// 「降级为文本」由 describeBlocksLossy 统一报出。
 		return
 	}
 	if m.Detail != "" && !caps.ImageDetail {
@@ -385,22 +407,15 @@ func describeImageLossy(m *ir.Media, caps Capabilities, note func(field, why str
 	if m.HasPayload() {
 		return
 	}
-	if m.FileID != "" {
-		if caps.ImageFileRef {
-			// 只凭文件引用即可投递，本目标装得下。
-			return
-		}
-		// 图片字节从未内联进请求体，本服务也不代取上游文件服务，所以这一维
-		// 装不下就是彻底没了——与 URL 那种「换成 base64 即可」不同。
-		note("image file reference",
-			"the image slot cannot point at a file-service id, and the bytes were never inlined, so they cannot be recovered here")
+	// 走到这里：无内联载荷但带 file_id 引用。
+	if caps.ImageFileRef {
+		// 只凭文件引用即可投递，本目标装得下。
 		return
 	}
-	// 三个载体全空：照编上去是缺必填键的形状（anthropic 的 base64 source
-	// 缺 media_type/data，OpenAI 两系写出 url:"" 或连 image_url 键都没有），
-	// 上游 400 拒整轮。
-	note("image payload",
-		"the part carries no payload the target protocol can express (no base64, no URL, no usable file reference); an empty image part would be rejected upstream")
+	// 图片字节从未内联进请求体，本服务也不代取上游文件服务，所以这一维
+	// 装不下就是彻底没了——与 URL 那种「换成 base64 即可」不同。
+	note("image file reference",
+		"the image slot cannot point at a file-service id, and the bytes were never inlined, so they cannot be recovered here")
 }
 
 // sigDropReason 回答签名是否要剥离，以及为什么。
