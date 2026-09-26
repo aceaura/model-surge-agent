@@ -18,9 +18,9 @@ type wireRequest struct {
 	Stream        bool            `json:"stream,omitempty"`
 	Thinking      *wireThinking   `json:"thinking,omitempty"`
 	Metadata      *wireMetadata   `json:"metadata,omitempty"`
-	// OutputConfig 2026 新增的输出控制：format 是结构化输出槽位。
-	// effort 子字段暂不解码（IR 没有 anthropic 输出级 effort 的对应维度，
-	// 那是 #28 思考现代化的事）。
+	// OutputConfig 2026 新增的输出控制：format 是结构化输出槽位；
+	// effort 子字段解码进 ir.Thinking.Effort（见 decode_request.go，
+	// 独立出现也算开了思考），编码侧按封闭五值集校验后原值回写。
 	OutputConfig *wireOutputConfig `json:"output_config,omitempty"`
 	// OutputFormat beta 的请求级结构化输出旧槽位（官方 BetaJSONOutputFormatParam）：
 	// 与 output_config.format 同形同判据，是同一诉求的废弃写法。只入不出——
