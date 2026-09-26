@@ -136,7 +136,16 @@ type Capabilities struct {
 	// URL 那种「换成 base64 即可」不同，读者无从补救，故单独立一位。
 	// 当前只有 Responses 一族有这一维。
 	ImageFileRef bool
-	LogitBias    bool
+	// NativeFileRef 为真表示本协议有一个原生「文件引用」槽位，可只凭上游
+	// 文件服务的 id 投递**非图片**媒体（document/file/audio）而不内联字节：
+	// chat_completions 的 file part、responses 的 input_file。与 ImageFileRef
+	// 刻意分开：图片的 file_id 只有 Responses 能在「仍是图片」的槽位
+	// （input_image.file_id）里承载，chat_completions 会把图片的 file_id 塞进
+	// 通用 file part——文档当成文件是忠实的，图片当成文件就丢了「这是张图」的
+	// 语义，故 chat_completions 有 NativeFileRef 而无 ImageFileRef。出站编码器
+	// 的 encodeMediaPart FileID 分支是这一维的事实出处，诊断与它同源避免漂移。
+	NativeFileRef bool
+	LogitBias     bool
 	// ServiceTier 有服务质量档位槽位。三家值集不同：anthropic 只有
 	// auto/standard_only，chat 是 auto/default/flex/scale/priority/fast，
 	// responses 的值集是 chat 的超集（另有 ultrafast）。有槽位不代表

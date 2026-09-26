@@ -158,6 +158,9 @@ func (outboundCodec) Caps() codec.Capabilities {
 		// file_id 是它的第二种合法载体，同族往返原样带回。
 		ImageDetail:  true,
 		ImageFileRef: true,
+		// input_file 原生收 file_id：非图片媒体（document/file/audio）只凭
+		// 引用即可投递，不内联字节。与 encodeMediaPart 的 FileID 分支同源。
+		NativeFileRef: true,
 		// ThinkingExcludesForcedTools 留零值：无账号、无官方文档，
 		// 推理与强制工具是否互斥**未核实**。零值不等于已确认允许，
 		// 拿到能发请求的账号后要补实测，别把它当成已有结论。

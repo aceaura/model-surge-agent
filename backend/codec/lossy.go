@@ -348,12 +348,18 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 			if b.Type == ir.BlockImage {
 				describeImageLossy(b.Media, caps, note)
 			} else if b.Media != nil && !b.Media.HasPayload() {
-				// 非图片媒体（document/file/audio）三载体全空：出站编码器不会
-				// 把它当媒体发出去（anthropic 整块跳过、gemini 降级为文本），
-				// 因为照编是缺必填键/data:"" 的形状，上游 400 拒整轮。图片的
-				// 三维细则由 describeImageLossy 报，其余媒体在这里报「无可投递
-				// 载荷」。跳过/降级优先于「类型不支持」的降级说明，故 continue。
-				note(string(b.Type)+" blocks", emptyMediaWhy)
+				// 非图片媒体（document/file/audio）base64 与 URL 两载体全空。
+				// 若还带 file_id 引用，则只有原生收文件引用的目标（chat_completions
+				// 的 file part、responses 的 input_file，见 caps.NativeFileRef）能
+				// 逐字投递，不算损耗；anthropic 整块跳过、gemini 降级为文本，这两族
+				// 表达不了纯引用，仍报「无可投递载荷」。file_id 也空时所有目标都无
+				// 从编起（照编是缺必填键/data:"" 的形状，上游 400 拒整轮），一律报。
+				// 判据与各出站编码器 encodeMediaPart 的 FileID 分支同源，避免漂移。
+				// 图片的三维细则由 describeImageLossy 报。跳过/降级优先于「类型不
+				// 支持」的降级说明，故 continue。
+				if b.Media.FileID == "" || !caps.NativeFileRef {
+					note(string(b.Type)+" blocks", emptyMediaWhy)
+				}
 				continue
 			}
 			// 「降级为文本」只在确有载荷可渲染成文本时才成立。空壳图片是被整块

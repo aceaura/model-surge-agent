@@ -138,8 +138,13 @@ func (outboundCodec) Caps() codec.Capabilities {
 		ClientMetadata: true,
 		// image_url.detail 决定识别精度与计费档位。
 		ImageDetail: true,
-		LogitBias:   true,
-		ServiceTier: true,
+		// file part 原生收 file_id：非图片媒体（document/file/audio）只凭引用
+		// 即可投递，不内联字节（encodeMediaPart 的 FileID 分支，不看媒体类型）。
+		// 刻意不设 ImageFileRef：图片的 file_id 会被塞进通用 file part 而非
+		// image_url，丢了「这是张图」的语义，那一维仍只有 Responses 装得下。
+		NativeFileRef: true,
+		LogitBias:     true,
+		ServiceTier:   true,
 		// prompt_cache_key 有原生槽位。
 		PromptCacheKey:    true,
 		ParallelToolCalls: true,
