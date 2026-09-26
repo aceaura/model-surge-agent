@@ -83,7 +83,11 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 		}
 		out.Tools = append(out.Tools, tool)
 	}
-	out.ToolChoice = decodeToolChoice(w.ToolChoice)
+	toolChoice, err := decodeToolChoice(w.ToolChoice)
+	if err != nil {
+		return nil, wrapField("tool_choice", err)
+	}
+	out.ToolChoice = toolChoice
 
 	if w.Thinking != nil {
 		// type 有 enabled / disabled / adaptive 三种取值，都是客户端的明确
@@ -399,21 +403,24 @@ func decodeWebSearchToolResult(toolUseID string, raw json.RawMessage) *ir.WebSea
 	return out
 }
 
-func decodeToolChoice(tc *wireToolChoice) *ir.ToolChoice {
+func decodeToolChoice(tc *wireToolChoice) (*ir.ToolChoice, error) {
 	if tc == nil {
-		return nil
+		return nil, nil
 	}
 	switch tc.Type {
 	case "auto":
-		return &ir.ToolChoice{Mode: ir.ToolChoiceAuto}
+		return &ir.ToolChoice{Mode: ir.ToolChoiceAuto}, nil
 	case "any":
-		return &ir.ToolChoice{Mode: ir.ToolChoiceAny}
+		return &ir.ToolChoice{Mode: ir.ToolChoiceAny}, nil
 	case "none":
-		return &ir.ToolChoice{Mode: ir.ToolChoiceNone}
+		return &ir.ToolChoice{Mode: ir.ToolChoiceNone}, nil
 	case "tool":
-		return &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: tc.Name}
+		return &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: tc.Name}, nil
 	default:
-		return nil
+		// 未知模式必须报错而非静默回落 nil：nil 是「客户端没提工具选择」那一档，
+		// 会把「强制某个工具」悄悄降级成 auto，客户端以为钉死了工具实则没有。
+		// 与 chat_completions / responses 两族对未知 mode 一律 400 同口径。
+		return nil, fmt.Errorf("unknown tool_choice type %q", tc.Type)
 	}
 }
 

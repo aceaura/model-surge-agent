@@ -119,7 +119,11 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	if string(w.PromptCacheOptions) != "null" {
 		out.PromptCacheOptions = w.PromptCacheOptions
 	}
-	out.ResponseFormat = decodeResponseFormat(w.ResponseFormat)
+	respFormat, err := decodeResponseFormat(w.ResponseFormat)
+	if err != nil {
+		return nil, badRequest(fmt.Sprintf("response_format: %v", err))
+	}
+	out.ResponseFormat = respFormat
 
 	// chat 一族专属四维：同族往返靠它们，跨族损耗由 DescribeLossy 报出。
 	out.Modalities = w.Modalities
@@ -525,13 +529,16 @@ func badRequest(msg string) error {
 // type 为 text 解成 nil：那是默认形态，不是一项要求。解成一个非 nil 值会让
 // 出站把「没要求结构化」写成「要求纯文本」，在不支持该字段的协议上还会
 // 多报一条假的有损诊断。
-func decodeResponseFormat(w *wireResponseFormat) *ir.ResponseFormat {
+func decodeResponseFormat(w *wireResponseFormat) (*ir.ResponseFormat, error) {
 	if w == nil {
-		return nil
+		return nil, nil
 	}
 	switch w.Type {
+	case "", "text":
+		// 默认形态，不是一项要求。
+		return nil, nil
 	case "json_object":
-		return &ir.ResponseFormat{Kind: ir.ResponseFormatJSON}
+		return &ir.ResponseFormat{Kind: ir.ResponseFormatJSON}, nil
 	case "json_schema":
 		out := &ir.ResponseFormat{Kind: ir.ResponseFormatSchema}
 		if w.JSONSchema != nil {
@@ -540,8 +547,10 @@ func decodeResponseFormat(w *wireResponseFormat) *ir.ResponseFormat {
 			out.Schema = string(w.JSONSchema.Schema)
 			out.Strict = w.JSONSchema.Strict
 		}
-		return out
+		return out, nil
 	default:
-		return nil
+		// 未知类型不能静默解成 nil：那等于把「要求某种结构化输出」悄悄降级成
+		// 「不要求」，客户端拿到自由文本还以为约束生效。与 tool_choice 同口径 400。
+		return nil, fmt.Errorf("unknown response_format type %q", w.Type)
 	}
 }

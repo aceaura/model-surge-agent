@@ -104,7 +104,11 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	out.TopLogProbs = w.TopLogProbs
 	if w.Text != nil {
 		out.Verbosity = w.Text.Verbosity
-		out.ResponseFormat = decodeTextFormat(w.Text.Format)
+		textFormat, err := decodeTextFormat(w.Text.Format)
+		if err != nil {
+			return nil, badRequest(fmt.Sprintf("text.format: %v", err))
+		}
+		out.ResponseFormat = textFormat
 	}
 
 	// reasoning 的四个子参数逐轴收下。此前只在 effort 非空时才建 Thinking，
@@ -686,13 +690,16 @@ func hasJSONValue(raw json.RawMessage) bool {
 
 // decodeTextFormat 把 text.format 解成 IR 形态。type 为 text 解成 nil：
 // 那是默认形态而不是一项要求（同 chat_completions 的判据）。
-func decodeTextFormat(w *wireTextFormat) *ir.ResponseFormat {
+func decodeTextFormat(w *wireTextFormat) (*ir.ResponseFormat, error) {
 	if w == nil {
-		return nil
+		return nil, nil
 	}
 	switch w.Type {
+	case "", "text":
+		// 默认形态，不是一项要求。
+		return nil, nil
 	case "json_object":
-		return &ir.ResponseFormat{Kind: ir.ResponseFormatJSON}
+		return &ir.ResponseFormat{Kind: ir.ResponseFormatJSON}, nil
 	case "json_schema":
 		return &ir.ResponseFormat{
 			Kind:        ir.ResponseFormatSchema,
@@ -700,8 +707,10 @@ func decodeTextFormat(w *wireTextFormat) *ir.ResponseFormat {
 			Description: w.Description,
 			Schema:      string(w.Schema),
 			Strict:      w.Strict,
-		}
+		}, nil
 	default:
-		return nil
+		// 未知类型不能静默解成 nil：那等于把「要求某种结构化输出」悄悄降级成
+		// 「不要求」。与 tool_choice 同口径 400。
+		return nil, fmt.Errorf("unknown text.format type %q", w.Type)
 	}
 }
