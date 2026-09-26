@@ -62,6 +62,12 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	if resp != nil && resp.Audio != nil {
 		notes = append(notes, codec.AudioOutputDropNote())
 	}
+	// 本协议只读图片与 PDF：上游产出的音频/其他附件被 encodeBlock 降级为
+	// 文本占位。请求侧同类降级由 describeBlocksLossy 报出，响应侧此前静默，
+	// 这里补齐，与 chat/responses 两族的 MediaOutputDropNote 对称。
+	if images, files := countResponseDowngradedMedia(resp); images+files > 0 {
+		notes = append(notes, codec.MediaOutputDropNote(images, files))
+	}
 	// usage 细分维度：chat 专属的音频/预测四位本协议 usage 没有槽位，
 	// 聚合总量不丢，细分蒸发要报出。判据与流式编码器 Notes() 同源。
 	notes = append(notes, codec.DescribeResponseUsageDetailsLoss(resp, Name)...)

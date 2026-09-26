@@ -34,6 +34,12 @@ type streamEncoder struct {
 	// 可透传又切不出 cited_text 的引用，encodeCitations 会跳过它们（带空
 	// cited_text 上游 400）。丢弃不能静默，计数经 Notes() 报出。
 	droppedCitations int
+	// downgradedMediaImages / downgradedMediaFiles 是被降级为文本占位的模型
+	// 产出附件数（图片单列、音频/文档/文件合列）。上游返回本协议白名单
+	// （图片 + PDF）之外的媒体时 encodeBlock 会降级，判据与非流式响应扫描
+	// 同源（mediaDowngraded），计数经 Notes() 报出。
+	downgradedMediaImages int
+	downgradedMediaFiles  int
 	// blockOrder 让 Finish 按开启顺序闭合，避免 map 遍历顺序不定
 	// 导致同样的输入产出不同的帧序。
 	blockOrder []int
@@ -65,6 +71,10 @@ func (e *streamEncoder) Notes() []string {
 	if e.droppedCitations > 0 {
 		notes = append(notes, codec.CitationResolveDropNote(e.droppedCitations))
 		e.droppedCitations = 0
+	}
+	if e.downgradedMediaImages+e.downgradedMediaFiles > 0 {
+		notes = append(notes, codec.MediaOutputDropNote(e.downgradedMediaImages, e.downgradedMediaFiles))
+		e.downgradedMediaImages, e.downgradedMediaFiles = 0, 0
 	}
 	if e.droppedTier != "" {
 		notes = append(notes, codec.TierEchoDropNote(e.droppedTier))
@@ -117,6 +127,15 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		out := e.ensureStarted(ev)
 		block := wireBlock{Type: blockText}
 		if ev.Block != nil {
+			// 本协议白名单（图片 + PDF）之外的模型产出附件会被 encodeBlock
+			// 降级为文本占位，计数经 Notes() 报出，判据与非流式响应扫描同源。
+			if mediaDowngraded(*ev.Block) {
+				if ev.Block.Type == ir.BlockImage {
+					e.downgradedMediaImages++
+				} else {
+					e.downgradedMediaFiles++
+				}
+			}
 			wb, ok, err := encodeBlock(*ev.Block)
 			if err != nil {
 				return nil, err

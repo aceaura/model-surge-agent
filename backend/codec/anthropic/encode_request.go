@@ -438,6 +438,46 @@ func anthropicMediaContainer(media string) (string, bool) {
 	}
 }
 
+// mediaDowngraded 报告一个媒体块是否会被 encodeBlock 降级为文本：有载荷、
+// 但嗅出的 media type 不在本协议白名单（图片 + PDF）内。空壳（无载荷）走的是
+// 整块跳过路径、不是降级，故不算在内。判据与 encodeBlock 的 !ok 分支同源
+// （同样调 anthropicMediaContainer），非流式响应扫描与流式开块共用它，两条
+// 路径报同一件事、不会漂移。
+func mediaDowngraded(b ir.Block) bool {
+	switch b.Type {
+	case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
+	default:
+		return false
+	}
+	if b.Media == nil || !b.Media.HasPayload() {
+		return false
+	}
+	_, ok := anthropicMediaContainer(codec.SniffMediaType(b.Media))
+	return !ok
+}
+
+// countResponseDowngradedMedia 数出非流式响应里会被降级为文本的媒体块：图片
+// 单列、音频/文档/文件合列，与 codec.MediaOutputDropNote 的两类计数对应。
+// 请求侧的同类降级由 describeBlocksLossy 报出，响应侧此前完全静默——上游
+// （如返回音频的 gemini/chat）产出的媒体到了 anthropic 客户端只剩一段
+// 「[附件略]」占位文本，客户端无从知道这里本来有个文件。
+func countResponseDowngradedMedia(resp *ir.Response) (images, files int) {
+	if resp == nil {
+		return 0, 0
+	}
+	for _, b := range resp.Content {
+		if !mediaDowngraded(b) {
+			continue
+		}
+		if b.Type == ir.BlockImage {
+			images++
+		} else {
+			files++
+		}
+	}
+	return images, files
+}
+
 func encodeToolChoice(tc *ir.ToolChoice) *wireToolChoice {
 	if tc == nil {
 		return nil
