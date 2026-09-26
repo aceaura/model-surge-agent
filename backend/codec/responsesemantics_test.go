@@ -127,7 +127,9 @@ func TestStopSequenceNotAdoptedOnOtherStopReason(t *testing.T) {
 		{Type: ir.EvMessageDelta, StopReason: ir.StopEndTurn, StopSequence: "END", Usage: &ir.Usage{}},
 		{Type: ir.EvMessageStop},
 	})
-	if strings.Contains(out, "stop_sequence") {
+	// message_start 的 message 对象按官方键集恒带 "stop_sequence":null，
+	// 判「未采纳」要看的是序列值有没有被写出去，而不是键名出现过。
+	if strings.Contains(out, `"stop_sequence":"END"`) {
 		t.Errorf("流式出站在 stop_reason 不匹配时写出了 stop_sequence：%s", out)
 	}
 }
