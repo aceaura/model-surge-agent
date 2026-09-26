@@ -478,6 +478,40 @@ func countResponseDowngradedMedia(resp *ir.Response) (images, files int) {
 	return images, files
 }
 
+// mediaEmptyShell 报告一个媒体块是否会被 encodeBlock 整块跳过：是媒体类型、
+// Media 非 nil、但三载体（base64 / URL / 文件引用）全空即 !HasPayload()。
+// 与 mediaDowngraded 互斥——那条要求 HasPayload()（有载荷但类型不支持，降级
+// 为文本），这条要求 !HasPayload()（无载荷，无从编起，跳过）。Media 为 nil
+// 不在此列：那是 encodeBlock 直接报错的形状，不是静默跳过。
+//
+// 判据与 encodeBlock 媒体分支的 `!b.Media.HasPayload() → return out, false, nil`
+// 逐字同源，非流式响应扫描与流式开块共用，两条路径报同一件事。
+func mediaEmptyShell(b ir.Block) bool {
+	switch b.Type {
+	case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
+	default:
+		return false
+	}
+	return b.Media != nil && !b.Media.HasPayload()
+}
+
+// countResponseEmptyMedia 数出非流式响应里因无任何可投递载荷而被整块跳过的
+// 媒体块。请求侧同类空壳由 describeBlocksLossy / describeImageLossy 报「carries
+// no payload」，响应侧此前静默——而 encodeBlock 跳过分支的注释写着「损耗由
+// 有损诊断报出」，那句在响应路径上并不成立。这里补齐，使注释在两条路径都为真。
+func countResponseEmptyMedia(resp *ir.Response) int {
+	if resp == nil {
+		return 0
+	}
+	n := 0
+	for _, b := range resp.Content {
+		if mediaEmptyShell(b) {
+			n++
+		}
+	}
+	return n
+}
+
 func encodeToolChoice(tc *ir.ToolChoice) *wireToolChoice {
 	if tc == nil {
 		return nil

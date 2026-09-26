@@ -119,8 +119,7 @@ func (d *streamDecoder) Notes() []string {
 		d.droppedUnknown = 0
 	}
 	if d.droppedMsgParts > 0 {
-		notes = append(notes, fmt.Sprintf(
-			"dropped %d message content part(s) of a kind this conversion does not map (e.g. audio output): the neutral stream representation carries only text and refusal parts, so the part was not forwarded", d.droppedMsgParts))
+		notes = append(notes, codec.DroppedStreamContentPartsNote(d.droppedMsgParts))
 		d.droppedMsgParts = 0
 	}
 	if d.droppedLogprobs > 0 {

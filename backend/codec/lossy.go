@@ -1087,6 +1087,32 @@ func MediaOutputDropNote(images, files int) string {
 		" from the model output: this protocol's conversion has no way to carry them in an assistant turn, so the receiving side sees only the text the model produced"
 }
 
+// EmptyMediaOutputDropNote 是模型产出里「有媒体块但无任何可投递载荷」被整块
+// 跳过的说明。与 MediaOutputDropNote 分账：那条说的是「有载荷、但目标协议
+// 装不下这个类型」（降级为文本占位），这条说的是「压根没有载荷」（base64 /
+// URL / 文件引用三者全空），编码器只能整块跳过——照编是缺必填键的形状，
+// 上游 400 拒整份响应。
+//
+// 请求侧同类空壳由 describeBlocksLossy / describeImageLossy 报「carries no
+// payload」，响应侧此前静默：encodeBlock 的跳过判据（!HasPayload）没有任何
+// 对应计数，而它自己的注释写着「损耗由有损诊断报出」。这条补齐响应侧与流式
+// 侧，使那句注释在两条路径上都成立。
+//
+// 措辞刻意不含「from the model output」：那是 MediaOutputDropNote（降级）的
+// 专属短语，两条注记必须能被分别断言，不能因为都提到媒体就互相误伤。
+func EmptyMediaOutputDropNote(n int) string {
+	return fmt.Sprintf("dropped %d media part(s) that carried no payload (no base64, no URL, no file-service reference): there was nothing to encode, so the part was skipped rather than sent as a payload-less shell the upstream would reject", n)
+}
+
+// DroppedStreamContentPartsNote 是流式解码时「content part 的种类本变换没有
+// 映射」被丢弃的说明。中立的流式表示只携带文本与拒绝两类 part，上游若在
+// delta/message 的 content 数组里发来图片、音频、文件之类，解码器只能跳过——
+// 此前 chat_completions 一族静默跳过（responses 的 droppedMsgParts、gemini 的
+// droppedUnknownParts 都计数报出，唯它没有），这里抽成共享措辞让三族对齐。
+func DroppedStreamContentPartsNote(n int) string {
+	return fmt.Sprintf("dropped %d message content part(s) of a kind this conversion does not map (e.g. audio output): the neutral stream representation carries only text and refusal parts, so the part was not forwarded", n)
+}
+
 // CountResponseMedia 数出响应里模型产出的附件块：图片单列，音频/文档/文件
 // 合列——与 MediaOutputDropNote 的两类计数一一对应。
 func CountResponseMedia(resp *ir.Response) (images, files int) {

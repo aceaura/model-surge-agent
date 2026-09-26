@@ -40,6 +40,10 @@ type streamEncoder struct {
 	// 同源（mediaDowngraded），计数经 Notes() 报出。
 	downgradedMediaImages int
 	downgradedMediaFiles  int
+	// emptyMedia 是因无任何可投递载荷而被 encodeBlock 整块跳过的模型产出
+	// 媒体数（与降级互斥：降级有载荷、空壳没有）。判据 mediaEmptyShell 与
+	// 非流式 countResponseEmptyMedia 同源，计数经 Notes() 报出。
+	emptyMedia int
 	// blockOrder 让 Finish 按开启顺序闭合，避免 map 遍历顺序不定
 	// 导致同样的输入产出不同的帧序。
 	blockOrder []int
@@ -75,6 +79,10 @@ func (e *streamEncoder) Notes() []string {
 	if e.downgradedMediaImages+e.downgradedMediaFiles > 0 {
 		notes = append(notes, codec.MediaOutputDropNote(e.downgradedMediaImages, e.downgradedMediaFiles))
 		e.downgradedMediaImages, e.downgradedMediaFiles = 0, 0
+	}
+	if e.emptyMedia > 0 {
+		notes = append(notes, codec.EmptyMediaOutputDropNote(e.emptyMedia))
+		e.emptyMedia = 0
 	}
 	if e.droppedTier != "" {
 		notes = append(notes, codec.TierEchoDropNote(e.droppedTier))
@@ -135,6 +143,11 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 				} else {
 					e.downgradedMediaFiles++
 				}
+			}
+			// 空壳媒体（无载荷）走整块跳过、不是降级，mediaDowngraded 数不到，
+			// 单列计数。与非流式 countResponseEmptyMedia 判据同源。
+			if mediaEmptyShell(*ev.Block) {
+				e.emptyMedia++
 			}
 			wb, ok, err := encodeBlock(*ev.Block)
 			if err != nil {

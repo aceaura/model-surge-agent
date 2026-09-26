@@ -68,6 +68,13 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	if images, files := countResponseDowngradedMedia(resp); images+files > 0 {
 		notes = append(notes, codec.MediaOutputDropNote(images, files))
 	}
+	// 空壳媒体（有块但无任何可投递载荷）走的是 encodeBlock 的整块跳过路径、
+	// 不是降级，故 mediaDowngraded 数不到它。请求侧同类空壳由 describeBlocksLossy
+	// 报「carries no payload」，响应侧此前静默——而跳过分支的注释自称「损耗由
+	// 有损诊断报出」。这里补齐，与降级注记分账（措辞不含「from the model output」）。
+	if n := countResponseEmptyMedia(resp); n > 0 {
+		notes = append(notes, codec.EmptyMediaOutputDropNote(n))
+	}
 	// usage 细分维度：chat 专属的音频/预测四位本协议 usage 没有槽位，
 	// 聚合总量不丢，细分蒸发要报出。判据与流式编码器 Notes() 同源。
 	notes = append(notes, codec.DescribeResponseUsageDetailsLoss(resp, Name)...)

@@ -58,6 +58,11 @@ type streamDecoder struct {
 	// droppedBadFrames 外层 JSON 都解不开的坏帧计数：结构损坏而非内容损坏，
 	// 跳过续流（SSE 以事件边界自同步，坏一帧不污染后续帧），经 Notes() 报出。
 	droppedBadFrames int
+	// droppedContentParts 是 delta.content 数组里非文本 part（图片/音频/文件
+	// 之类）被跳过的计数。中立的流式表示只把文本增量转发给客户端，其余种类
+	// 无处安放只能丢——但丢弃不能静默。responses 的 droppedMsgParts、gemini
+	// 的 droppedUnknownParts 都计数报出，本协议此前唯独漏了，经 Notes() 补齐。
+	droppedContentParts int
 
 	// stopReason 与 usage 先攒着，到 [DONE] 才发一帧 message_delta。
 	// 本协议把它们分散在不同 chunk（finish_reason 一帧、usage 另一帧），
@@ -207,7 +212,15 @@ func (d *streamDecoder) decodeDelta(delta wireMessage) ([]ir.Event, error) {
 				fmt.Sprintf("undecodable delta content: %v", err))
 		}
 		for _, b := range blocks {
-			if b.Type != ir.BlockText || b.Text == "" {
+			if b.Type != ir.BlockText {
+				// 非文本 part（图片/音频/文件）：中立的流式表示只转发文本，
+				// 这类 part 无处安放只能跳过——计数经 Notes() 报出，不静默。
+				// 与 responses droppedMsgParts / gemini droppedUnknownParts 同口径。
+				d.droppedContentParts++
+				continue
+			}
+			if b.Text == "" {
+				// 空文本块本就没有内容可转发，跳过但不算丢失、不计数。
 				continue
 			}
 			idx, opened := d.slot("text", ir.BlockText)
@@ -437,6 +450,10 @@ func (d *streamDecoder) Notes() []string {
 	if d.droppedBadFrames > 0 {
 		notes = append(notes, codec.BadFrameSkipNote(d.droppedBadFrames))
 		d.droppedBadFrames = 0
+	}
+	if d.droppedContentParts > 0 {
+		notes = append(notes, codec.DroppedStreamContentPartsNote(d.droppedContentParts))
+		d.droppedContentParts = 0
 	}
 	return codec.DedupeNotes(notes)
 }
