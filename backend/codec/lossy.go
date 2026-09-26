@@ -918,6 +918,15 @@ func DroppedCandidatesNote(extra int) string {
 	return fmt.Sprintf("dropped %d extra response candidate(s): the neutral representation holds one", extra)
 }
 
+// DroppedUnknownPartsNote 是上游 part 种类未被建模而整块丢弃的说明（gemini 的
+// executableCode / codeExecutionResult 之类）。kinds 是去重排序后的字段名，
+// n 是丢弃的 part 总数。带上种类名：客户端据此分得出「模型没产这类内容」与
+// 「产了被我们丢了」，也指明了要补建模的是哪一维。
+func DroppedUnknownPartsNote(kinds []string, n int) string {
+	return fmt.Sprintf("dropped %d response part(s) of unmodeled kind(s) [%s]: the neutral representation has no slot for them",
+		n, strings.Join(kinds, ", "))
+}
+
 // maxFinishDetail 是上游收尾原因原文的保留字节数。
 // 说明会落库进流水，而原文长度不受本服务控制。
 const maxFinishDetail = 200
@@ -931,6 +940,19 @@ func FinishDetailNote(detail string) string {
 		detail = textsafe.Truncate(detail, maxFinishDetail) + "..."
 	}
 	return "dropped the upstream finish detail: " + detail
+}
+
+// BlockReasonNote 是上游整轮安全阻断原因（如 gemini 的
+// promptFeedback.blockReason）被压成停因后、原文串本身的留存说明。
+//
+// 停因只告诉客户端「被内容过滤挡了」，分不出是哪条策略命中，而下一步动作
+// （改提示词还是换安全档）取决于原文。与 FinishDetailNote 同一路数：原文
+// 必须带上，砍掉只剩「被挡了」等于没说。
+func BlockReasonNote(reason string) string {
+	if len(reason) > maxFinishDetail {
+		reason = textsafe.Truncate(reason, maxFinishDetail) + "..."
+	}
+	return "the upstream blocked the whole prompt, stop reason is content_filter; block reason: " + reason
 }
 
 // TierEchoDropNote 是上游回显的实际执行档位送不到客户端的说明。

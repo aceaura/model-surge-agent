@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -51,6 +52,11 @@ type streamDecoder struct {
 	cumulativeFrames int
 	rewoundFrames    int
 	nulParts         int
+	// droppedUnknownParts 计未建模种类的 part（executableCode 之类），
+	// unknownPartKinds 收其字段名，经 Notes() 报出——静默跳过会让客户端
+	// 分不出「模型没产这类内容」与「产了被丢了」。
+	droppedUnknownParts int
+	unknownPartKinds    map[string]bool
 }
 
 type openBlock struct {
@@ -83,6 +89,16 @@ func (d *streamDecoder) Notes() []string {
 	if d.nulParts > 0 {
 		notes = append(notes, codec.NulTextStripNote(d.nulParts))
 		d.nulParts = 0
+	}
+	if d.droppedUnknownParts > 0 {
+		kinds := make([]string, 0, len(d.unknownPartKinds))
+		for k := range d.unknownPartKinds {
+			kinds = append(kinds, k)
+		}
+		sort.Strings(kinds)
+		notes = append(notes, codec.DroppedUnknownPartsNote(kinds, d.droppedUnknownParts))
+		d.droppedUnknownParts = 0
+		d.unknownPartKinds = nil
 	}
 	return codec.DedupeNotes(notes)
 }
@@ -135,6 +151,8 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 	// 整个请求被安全策略拒了：candidates 为空，只能从 promptFeedback 读出原因。
 	if frame.PromptFeedback != nil && frame.PromptFeedback.BlockReason != "" {
 		d.stopReason = ir.StopContentFilter
+		// 停因只说「被内容过滤挡了」，具体哪条策略命中在原文串里，带出。
+		d.notes = append(d.notes, codec.BlockReasonNote(frame.PromptFeedback.BlockReason))
 	}
 
 	for _, cand := range frame.Candidates {
@@ -231,6 +249,20 @@ func (d *streamDecoder) decodeParts(parts []wirePart) ([]ir.Event, error) {
 			// 但要出说明：客户端只看到文字时分不出「模型没画」与
 			// 「画了被我们丢了」，而这两者的下一步动作完全不同。
 			d.notes = append(d.notes, droppedResponseMediaNote(p))
+
+		default:
+			// 未建模的 part 种类（executableCode / codeExecutionResult /
+			// videoMetadata / 未来新增）：wirePart 没有对应字段，此前落到
+			// switch 外被静默跳过。计数并记种类名，经 Notes() 报出。
+			if p.hasUnknownContent() {
+				d.droppedUnknownParts++
+				if d.unknownPartKinds == nil {
+					d.unknownPartKinds = map[string]bool{}
+				}
+				for _, k := range p.unknownKeys {
+					d.unknownPartKinds[k] = true
+				}
+			}
 		}
 	}
 	return out, nil
@@ -415,12 +447,16 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	var notes []string
 	maxCandidate := 0
 	nulParts := 0
+	unknownParts := 0
+	unknownKinds := map[string]bool{}
 	out := &ir.Response{ID: w.ResponseID, Model: w.ModelVersion, Content: []ir.Block{}}
 	if w.UsageMetadata != nil {
 		out.Usage = convertUsage(*w.UsageMetadata)
 	}
 	if w.PromptFeedback != nil && w.PromptFeedback.BlockReason != "" {
 		out.StopReason = ir.StopContentFilter
+		// 与流式同一处置：具体阻断原因串带出，不只留一个 content_filter 停因。
+		notes = append(notes, codec.BlockReasonNote(w.PromptFeedback.BlockReason))
 	}
 
 	var calls int
@@ -478,6 +514,14 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 				// 与流式同一处置、同一措辞。这个分支此前不存在，媒体 part
 				// 落到 switch 外面被静默跳过——连「丢了」都不在代码里。
 				notes = append(notes, droppedResponseMediaNote(p))
+			default:
+				// 未建模的 part 种类：与流式同一处置，计数+记种类名后报出。
+				if p.hasUnknownContent() {
+					unknownParts++
+					for _, k := range p.unknownKeys {
+						unknownKinds[k] = true
+					}
+				}
 			}
 		}
 	}
@@ -489,6 +533,14 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	}
 	if nulParts > 0 {
 		notes = append(notes, codec.NulTextStripNote(nulParts))
+	}
+	if unknownParts > 0 {
+		kinds := make([]string, 0, len(unknownKinds))
+		for k := range unknownKinds {
+			kinds = append(kinds, k)
+		}
+		sort.Strings(kinds)
+		notes = append(notes, codec.DroppedUnknownPartsNote(kinds, unknownParts))
 	}
 	return out, codec.DedupeNotes(notes), nil
 }

@@ -1,6 +1,9 @@
 package gemini
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"sort"
+)
 
 // wireRequest 是 generateContent 的请求体。
 //
@@ -37,6 +40,49 @@ type wirePart struct {
 	FunctionResponse *wireFunctionResp `json:"functionResponse,omitempty"`
 	// ThoughtSignature 是 gemini 的推理签名，只对本族有效。
 	ThoughtSignature string `json:"thoughtSignature,omitempty"`
+	// unknownKeys 收下本结构没建模的 part 字段名（executableCode /
+	// codeExecutionResult / videoMetadata / 以及未来新增的种类）。gemini 的
+	// part 是「哪个字段非空」的判别式联合体，未建模的种类解完就凭空消失；
+	// 记下键名，解码侧才能报出「丢了个未识别的 part」而不是静默跳过。
+	unknownKeys []string `json:"-"`
+}
+
+// knownPartKeys 是 wirePart 已建模的字段名，用于从原始 JSON 里挑出未知键。
+var knownPartKeys = map[string]bool{
+	"text": true, "thought": true, "inlineData": true, "fileData": true,
+	"functionCall": true, "functionResponse": true, "thoughtSignature": true,
+}
+
+// UnmarshalJSON 在按已建模字段解码之外，额外扫一遍顶层键挑出未建模的种类。
+func (p *wirePart) UnmarshalJSON(data []byte) error {
+	// 别名类型避免递归调用本方法。
+	type plain wirePart
+	var pl plain
+	if err := json.Unmarshal(data, &pl); err != nil {
+		return err
+	}
+	*p = wirePart(pl)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for k := range raw {
+		if !knownPartKeys[k] {
+			p.unknownKeys = append(p.unknownKeys, k)
+		}
+	}
+	sort.Strings(p.unknownKeys)
+	return nil
+}
+
+// hasUnknownContent 报告这个 part 是否只携带了未建模的字段——即本服务识别
+// 不出任何已知内容，是个会被静默丢掉的未知 part 种类。带任一已知内容的 part
+// 不算（它已被正常解码，未知键只是附带的次要信息）。
+func (p wirePart) hasUnknownContent() bool {
+	return len(p.unknownKeys) > 0 &&
+		p.Text == "" && !p.Thought &&
+		p.InlineData == nil && p.FileData == nil &&
+		p.FunctionCall == nil && p.FunctionResponse == nil
 }
 
 type wireBlob struct {
