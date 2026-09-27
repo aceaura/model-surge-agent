@@ -730,14 +730,19 @@ func describeParamsLossy(req *ir.Request, name string, caps Capabilities, note, 
 		// 几路要到响应侧才知道，那个数字比「可能会丢」有用。两格互斥。
 		note("n", "no multi-candidate parameter, only one candidate will be returned")
 	}
+	// logprobs:false 是客户端明确「不要按 token 的概率」（SDK 常把默认值
+	// 序列化出来），不是「请求了又被丢」——两个分支都只在客户端真要概率时
+	// 才报，否则对每个 logprobs:false 的请求都喷一条假阳性注记。top_logprobs
+	// 一旦给了（非 nil）即表示要 top-N 概率，与 logprobs 开关同列。
+	wantsProbs := (req.LogProbs != nil && *req.LogProbs) || req.TopLogProbs != nil
 	if !caps.LogProbs {
-		if req.LogProbs != nil {
+		if req.LogProbs != nil && *req.LogProbs {
 			note("logprobs", "no log probability parameter")
 		}
 		if req.TopLogProbs != nil {
 			note("top_logprobs", "no log probability parameter")
 		}
-	} else if req.LogProbs != nil || req.TopLogProbs != nil {
+	} else if wantsProbs {
 		// 目标支持、上游会算，但本服务的中立表示不承载按 token 的概率，
 		// 解码时丢掉。与「目标不支持」是两件事，措辞必须不同：
 		// 前者客户端换个目标就有，后者换谁都没有。
@@ -867,9 +872,12 @@ func describeParamsLossy(req *ir.Request, name string, caps Capabilities, note, 
 	}
 	if len(req.ClientMetadata) > 0 && !caps.ClientMetadata {
 		if name == ProtocolAnthropic {
-			// anthropic 的 metadata 只有 user_id 一个键：措辞说清是受限而
-			// 非全无槽位，其余键装不下、不会随响应回来。
-			note("metadata", "the target protocol keeps only the end-user id from client metadata, the rest of the client's correlation data will not come back")
+			// anthropic 确有自己的 metadata 参数，但它只承载 user_id（滥用检测
+			// 标识，取自独立的 Metadata/SafetyIdentifier 维度），与这里被丢的
+			// ClientMetadata 无关——编码器从不读 ClientMetadata，客户端的自定义
+			// 关联键值整体丢弃。措辞不能说成「从 client metadata 保留 end-user
+			// id」：那个 id 另有来源，此处是「有 metadata 槽但装不下自定义键」。
+			note("metadata", "the target protocol's metadata parameter carries only an end-user id from a separate field, it has no slot for the client's custom key-values")
 		} else {
 			note("metadata", "no client metadata parameter")
 		}

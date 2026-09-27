@@ -37,8 +37,15 @@ func TestClientMetadataNotesPerTarget(t *testing.T) {
 		t.Errorf("responses 有 metadata 槽位，不该报：%q", got)
 	}
 	got := lossyFor(t, codec.ProtocolAnthropic, req)
-	if !strings.Contains(got, "keeps only the end-user id") {
-		t.Errorf("anthropic 应走「只留 user_id」措辞：%q", got)
+	// 纠正后措辞：anthropic 确有 metadata 槽，但它只承载独立来源的 end-user id，
+	// 装不下客户端自定义键值——ClientMetadata 被编码器整体忽略。
+	if !strings.Contains(got, "no slot for the client's custom key-values") {
+		t.Errorf("anthropic 应走「有 metadata 槽但装不下自定义键」措辞：%q", got)
+	}
+	// 反向钉住本轮修的 bug：不得再谎称 end-user id「来自 client metadata」
+	//（该 id 实际取自 Metadata/SafetyIdentifier，与 ClientMetadata 无关）。
+	if strings.Contains(got, "from client metadata") {
+		t.Errorf("anthropic 措辞不该谎称 end-user id 来自 client metadata：%q", got)
 	}
 	got = lossyFor(t, codec.ProtocolGemini, req)
 	if !strings.Contains(got, "no client metadata parameter") {

@@ -617,6 +617,32 @@ func TestLogProbsNoteDistinguishesTwoCases(t *testing.T) {
 	}
 }
 
+// TestLogProbsFalseIsNotReported 钉住本轮修的假阳性：logprobs:false 是客户端
+// 明确「不要按 token 的概率」（SDK 常把零值序列化出来），不是「请求了又被丢」。
+// 两个分支——目标不支持（dropped）与目标支持但不回传（unreturned）——都只能在
+// 客户端真要概率时才报；对 logprobs:false 一律静默，否则每个带默认值的请求都
+// 拖着一条假注记，真丢弃反而看不见。
+func TestLogProbsFalseIsNotReported(t *testing.T) {
+	req := paramBase()
+	off := false
+	req.LogProbs = &off // top_logprobs 留 nil：与 logprobs:false 同属「没要概率」
+
+	for _, out := range outboundNames() {
+		t.Run(out, func(t *testing.T) {
+			_, notes := lossyOf(t, out, req)
+			if containsDroppedField(notes, "logprobs") {
+				t.Errorf("%s: logprobs:false 不该报丢弃: %v", out, notes)
+			}
+			if containsDroppedField(notes, "top_logprobs") {
+				t.Errorf("%s: logprobs:false 不该报 top_logprobs 丢弃: %v", out, notes)
+			}
+			if hasNote(notes, "forwarded logprobs") {
+				t.Errorf("%s: logprobs:false 不该报「发出去但不回传」: %v", out, notes)
+			}
+		})
+	}
+}
+
 // TestSupportedCandidatesIsNotReportedOnRequest 是两格互斥的另一半：
 // 目标支持 n 时请求侧不报，实际丢了几路由响应侧报——那个数字更有用。
 func TestSupportedCandidatesIsNotReportedOnRequest(t *testing.T) {
