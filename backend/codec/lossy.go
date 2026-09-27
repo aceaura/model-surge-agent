@@ -436,8 +436,20 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 			if why, drop := toolSigDropReason(b.ToolUse, name, caps); drop {
 				note("tool call signature", why)
 			}
+			if b.ToolUse != nil && name != ProtocolAnthropic &&
+				(len(b.ToolUse.Caller) > 0 || b.ToolUse.ToolsetName != "") {
+				// caller / toolset_name 是 anthropic tool_use 块独有的发起方标记与
+				// beta toolsets 归属名，纯 provenance。同族逐字往返无损；投给外族
+				// 没有对应槽位，整维丢弃——与 ToolUse.ItemID 同一处置口径，报一条
+				// 而不是静默蒸发。
+				note("tool call caller/toolset_name", toolCallerWhy)
+			}
 			if b.ToolResult != nil {
 				describeBlocksLossy(b.ToolResult.Content, name, caps, note)
+			}
+		case b.Type == ir.BlockServerToolUse:
+			if b.ServerToolUse != nil && name != ProtocolAnthropic && len(b.ServerToolUse.Caller) > 0 {
+				note("server tool call caller", toolCallerWhy)
 			}
 		}
 	}
@@ -450,6 +462,12 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 // 另一处漂移：此前图片那条写「空图片部件会被上游拒收」，对把空媒体降级成文本
 // 的 chat/gemini 并不准确（它压根没被当媒体发出去，谈不上拒收）。
 const emptyMediaWhy = "the part carries no payload the target protocol can express (no base64, no URL, no usable file reference); it is not sent as media"
+
+// toolCallerWhy 是「anthropic 工具调用块的 caller / toolset_name 投给外族被丢」
+// 的统一措辞。caller 标识调用由模型直接发起还是 code_execution/advisor 编排
+// 发起，toolset_name 是 beta toolsets 归属名——都是纯 provenance/可观测信息，
+// 外族没有对应槽位。tool_use 与 server_tool_use 共用此串以免两处漂移。
+const toolCallerWhy = "the tool call carries an anthropic-only caller/toolset_name provenance marker that the target protocol has no field for; it is dropped"
 
 // describeImageLossy 报一张图片相对目标协议丢掉的三维：detail 档位、file_id
 // 引用、以及整个部件没有任何可投递载荷。与能力位判定同一出处，编码器的跳过

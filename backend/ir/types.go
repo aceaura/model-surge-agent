@@ -222,6 +222,11 @@ type ServerToolUse struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Input string `json:"input,omitempty"`
+	// Caller 与 ToolUse.Caller 同规矩：Anthropic server_tool_use 块的发起方
+	// 标记（响应侧必填、请求侧可选，union），同族逐字往返、跨族丢弃由有损诊断
+	// 报出。字节按 RawMessage 不可变惯例随 Clone 值共享。server_tool_use 官方
+	// 无 toolset_name 字段，故这里不设该维。
+	Caller json.RawMessage `json:"caller,omitempty"`
 }
 
 // WebSearchToolResult web_search 托管工具的结果块。content 在上游是 union：
@@ -317,6 +322,16 @@ type ToolUse struct {
 	// store=true 时上游存的条目按它索引，换成合成 id 后 item_reference
 	// 全部错指。外族没有这一维，跨族丢弃由有损诊断报出。
 	ItemID string `json:"item_id,omitempty"`
+	// Caller 是 Anthropic tool_use 块上的发起方标记（响应侧必填、请求侧
+	// 可选，union：DirectCaller | ServerToolCaller | ServerToolCaller20260120），
+	// 标识这次调用由模型直接发起还是 code_execution/advisor 编排发起。用
+	// json.RawMessage 原样透传而非建模 union：它是纯 provenance/可观测信息，
+	// 本网关不据其分支，逐字带回同族往返即无损；外族没有这一维，跨族丢弃
+	// 由有损诊断报出。字节按 RawMessage 不可变惯例随 Clone 值共享。
+	Caller json.RawMessage `json:"caller,omitempty"`
+	// ToolsetName 是 Anthropic tool_use 块上的 beta toolsets 归属名（可选）。
+	// 与 Caller 同规矩：同族逐字往返、跨族丢弃由有损诊断报出。
+	ToolsetName string `json:"toolset_name,omitempty"`
 }
 
 // ToolKind 工具调用形态。零值等同 function，保持既有构造与黄金文件兼容。

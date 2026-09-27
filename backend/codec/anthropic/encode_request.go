@@ -327,6 +327,13 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 		// 比 400 更糟）。规整把原文挪进 ir.RawArgsKey 键位保真。
 		// ObjectInput：custom 形态的自由文本以 {"input":…} 投影落进对象槽。
 		out.Input, _ = ir.NormalizeToolInput([]byte(b.ToolUse.ObjectInput()))
+		// caller / toolset_name 同族逐字回吐：这两个字段纯 provenance，本网关不
+		// 据其分支，但同族往返必须原样带回，否则上游 store 的条目与续话校验对不回去。
+		// 这个 encodeBlock 同时服务出站请求与（经 EvBlockStart）流式响应的
+		// content_block_start，改一处两条路径都保真。omitempty：外族投影或客户端
+		// 未给时为零值，自然不写。
+		out.Caller = b.ToolUse.Caller
+		out.ToolsetName = b.ToolUse.ToolsetName
 	case ir.BlockToolResult:
 		if b.ToolResult == nil {
 			return out, false, fmt.Errorf("tool_result block without payload")
@@ -381,6 +388,8 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 		// 与 tool_use 同口径：对象槽位，空与畸形都要规整（空补 {}，
 		// 畸形挪进 RawArgsKey），否则整份请求体 marshal 失败。
 		out.Input, _ = ir.NormalizeToolInput([]byte(b.ServerToolUse.Input))
+		// caller 同族逐字回吐，与 tool_use 同理（server_tool_use 官方无 toolset_name）。
+		out.Caller = b.ServerToolUse.Caller
 	case ir.BlockWebSearchToolResult:
 		if b.WebSearchToolResult == nil {
 			return out, false, fmt.Errorf("web_search_tool_result block without payload")

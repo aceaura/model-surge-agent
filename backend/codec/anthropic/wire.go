@@ -107,6 +107,14 @@ type wireBlock struct {
 	ID    string          `json:"id,omitempty"`
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
+	// Caller / ToolsetName tool_use / server_tool_use 块的发起方标记与 beta
+	// toolsets 归属名。Caller 官方是 union（DirectCaller | ServerToolCaller |
+	// ServerToolCaller20260120）、响应侧必填、请求侧可选；用 RawMessage 逐字
+	// 透传而不建模 union：本网关不据其分支，原样带回同族往返即无损。此前
+	// tool_use / server_tool_use 作为已知块型逐字段重建，未建模的 caller /
+	// toolset_name 会被静默丢掉（未知块型走 Raw 原文透传不受影响）。
+	Caller      json.RawMessage `json:"caller,omitempty"`
+	ToolsetName string          `json:"toolset_name,omitempty"`
 
 	// tool_result
 	ToolUseID string          `json:"tool_use_id,omitempty"`

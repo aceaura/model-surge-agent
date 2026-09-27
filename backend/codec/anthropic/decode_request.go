@@ -365,7 +365,8 @@ func decodeBlock(b wireBlock, raw json.RawMessage) (ir.Block, bool, error) {
 		out.Media = media
 	case blockToolUse:
 		out.Type = ir.BlockToolUse
-		out.ToolUse = &ir.ToolUse{ID: b.ID, Name: b.Name, Input: string(b.Input)}
+		out.ToolUse = &ir.ToolUse{ID: b.ID, Name: b.Name, Input: string(b.Input),
+			Caller: b.Caller, ToolsetName: b.ToolsetName}
 	case blockToolResult:
 		content, err := decodeContent(b.Content)
 		if err != nil {
@@ -394,7 +395,8 @@ func decodeBlock(b wireBlock, raw json.RawMessage) (ir.Block, bool, error) {
 		// 托管工具调用：放行而不是报 unknown——多轮历史里带 web_search
 		// 痕迹的同族往返是合法输入，拒收会让客户端整轮 400。
 		out.Type = ir.BlockServerToolUse
-		out.ServerToolUse = &ir.ServerToolUse{ID: b.ID, Name: b.Name, Input: string(b.Input)}
+		out.ServerToolUse = &ir.ServerToolUse{ID: b.ID, Name: b.Name, Input: string(b.Input),
+			Caller: b.Caller}
 	case blockWebSearchToolResult:
 		out.Type = ir.BlockWebSearchToolResult
 		out.WebSearchToolResult = decodeWebSearchToolResult(b.ToolUseID, b.Content)
