@@ -396,6 +396,9 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 		}
 		out.Type = blockWebSearchToolResult
 		out.ToolUseID = b.WebSearchToolResult.ToolUseID
+		// caller 与 tool_use / server_tool_use 同口径逐字回吐（union 原样透传），
+		// 同族往返才不丢这个响应侧必填标记。
+		out.Caller = b.WebSearchToolResult.Caller
 		// content 是 union：错误形态回错误对象，结果形态回子块数组。
 		// 把错误编成空数组就是把「搜索失败」伪造成「成功但没找到」。
 		var content any

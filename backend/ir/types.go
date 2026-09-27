@@ -237,6 +237,12 @@ type WebSearchToolResult struct {
 	ToolUseID string            `json:"tool_use_id"`
 	Results   []WebSearchResult `json:"results,omitempty"`
 	ErrorCode string            `json:"error_code,omitempty"`
+	// Caller 与 ToolUse.Caller / ServerToolUse.Caller 同规矩：Anthropic
+	// web_search_tool_result 块的发起方标记（响应侧必填、请求侧可选，union：
+	// DirectCaller | ServerToolCaller | ServerToolCaller20260120）。同族逐字往返、
+	// 跨族随整块被外族编码器跳过（已由 ServerToolDropNote 统一报出，故不再单设
+	// caller 专项说明）。字节按 RawMessage 不可变惯例随 Clone 值共享。
+	Caller json.RawMessage `json:"caller,omitempty"`
 }
 
 // WebSearchResult 单条搜索结果。Snippet 对应上游的 encrypted_content 字段

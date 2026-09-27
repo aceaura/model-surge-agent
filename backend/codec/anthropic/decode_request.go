@@ -399,7 +399,12 @@ func decodeBlock(b wireBlock, raw json.RawMessage) (ir.Block, bool, error) {
 			Caller: b.Caller}
 	case blockWebSearchToolResult:
 		out.Type = ir.BlockWebSearchToolResult
-		out.WebSearchToolResult = decodeWebSearchToolResult(b.ToolUseID, b.Content)
+		wsr := decodeWebSearchToolResult(b.ToolUseID, b.Content)
+		// caller 是响应侧必填、请求侧可选的发起方标记，与 tool_use /
+		// server_tool_use 同口径逐字回吐，同族往返才无损。decodeWebSearchToolResult
+		// 恒返回非 nil，直接在其上补 caller。
+		wsr.Caller = b.Caller
+		out.WebSearchToolResult = wsr
 	case blockContainerUpload:
 		// 容器文件引用：放行而不是报 unknown——多轮历史里带模型产出文件引用的
 		// 同族往返是合法输入，拒收会让客户端整轮 400。只有 file_id 一个载荷。
