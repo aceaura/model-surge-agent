@@ -699,6 +699,22 @@ type Request struct {
 	// 参数，string 简写与 {id,skills} 对象两形态统一成此结构；外族无对应，
 	// 跨族由诊断报出）。nil = 客户端没提。
 	Container *Container `json:"container,omitempty"`
+	// McpServers / ContextManagement 是 anthropic 的两个 beta 请求参数，本服务
+	// 不解析、原文透传（json.RawMessage 不可变惯例，Clone 随值共享）：
+	//   - mcp_servers：MCP 连接器声明，由上游去连接这些外部 MCP 服务器、发现
+	//     并调用其工具（beta mcp-client）。
+	//   - context_management：上下文编辑配置（如 clear_tool_uses），上游在推理前
+	//     就地裁剪本次请求自带的历史（beta context-management）。
+	// 二者都是 anthropic 专属、无跨族等价物：同族 anthropic→anthropic 原样回写
+	// 兑现，跨族整块丢弃并由诊断报出（谓词 name!=anthropic，同 Container）。
+	//
+	// 注意 ContextManagement 与 responses 的同名参数处置相反、并不矛盾：responses
+	// 的 context_management 依赖「上游那一侧存着历史」（previous_response_id/
+	// conversation），本服务多账号分发兑现不了，故入站直接 400 拒收；anthropic 是
+	// 无状态协议、历史随请求自带，context_management 只裁剪本次请求的消息，上游
+	// 拿得到全部输入即可执行，故透传而非拒收。
+	McpServers        json.RawMessage `json:"mcp_servers,omitempty"`
+	ContextManagement json.RawMessage `json:"context_management,omitempty"`
 	// ParallelToolCalls 是否允许一轮里并行多个工具调用。三态指针：
 	// 没给就不替客户端表态（同 ThinkingConfig.Enabled 的判据）。
 	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`

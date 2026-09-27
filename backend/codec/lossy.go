@@ -194,6 +194,19 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	if req.Container != nil && name != ProtocolAnthropic {
 		note("container", "no code-execution container reuse or skill declaration, the upstream starts with a fresh container and no skills loaded")
 	}
+	// MCP 服务器声明（mcp_servers，anthropic beta）：外族没有 MCP 连接器槽位，
+	// 声明的外部 MCP 服务器整条丢弃，上游无从发现或调用其工具。anthropic 同族
+	// 原样往返（RawMessage 透传），报了就是谎报。
+	if len(req.McpServers) > 0 && name != ProtocolAnthropic {
+		note("mcp_servers", "no MCP connector slot: the declared external MCP servers are dropped, the upstream cannot discover or call their tools")
+	}
+	// 上下文管理（context_management，anthropic beta）：外族没有上下文编辑槽位，
+	// 客户端请求的上下文裁剪（如清除旧工具调用）整条丢弃，上游发送未裁剪的完整
+	// 上下文，可能撞上客户端本以为会被裁掉的窗口上限。anthropic 同族原样往返
+	// （RawMessage 透传），报了就是谎报。
+	if len(req.ContextManagement) > 0 && name != ProtocolAnthropic {
+		note("context_management", "no context-editing slot: the requested context management (e.g. clearing old tool uses) is dropped, the upstream sends the full unpruned context and may hit the window limit the client expected to be pruned")
+	}
 	// 消息级发送者名（chat 的 message.name）：只有 chat_completions 解码器落进
 	// IR、只有 chat_completions 编码器回写，其余族没有逐消息作者名字段，跨族整条
 	// 丢失（rule a）。同族 chat→chat 原样保留，故报了就是谎报，排除之。

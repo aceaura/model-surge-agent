@@ -185,6 +185,15 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	out.Container = ct
 	// 原值进 IR，跨族映射是出站编码的事（codec.MapServiceTier）。
 	out.ServiceTier = w.ServiceTier
+	// mcp_servers / context_management 原文透传（不解析）：同族出站原样回写，
+	// 跨族无等价槽位、整块丢弃由 DescribeLossy 报出。显式 null 归一为没给，
+	// 否则这个 4 字节字面量会被当成客户端给过的配置写回线上。
+	if len(w.McpServers) > 0 && string(w.McpServers) != "null" {
+		out.McpServers = w.McpServers
+	}
+	if len(w.ContextManagement) > 0 && string(w.ContextManagement) != "null" {
+		out.ContextManagement = w.ContextManagement
+	}
 	return out, nil
 }
 

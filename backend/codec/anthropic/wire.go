@@ -34,6 +34,11 @@ type wireRequest struct {
 	// Container 代码执行容器复用标识与技能声明。官方两形态：string 简写
 	// （仅 id）或 {id, skills} 对象——RawMessage 延迟判断。
 	Container json.RawMessage `json:"container,omitempty"`
+	// McpServers / ContextManagement 是 anthropic 的两个 beta 请求参数，本服务
+	// 不解析、原文透传（同族回写兑现，跨族丢弃由诊断报出，理由见 ir.Request
+	// 同名字段注释）。显式 null 在解码侧归一为没给。
+	McpServers        json.RawMessage `json:"mcp_servers,omitempty"`
+	ContextManagement json.RawMessage `json:"context_management,omitempty"`
 	// ServiceTier 服务质量档位：auto / standard_only。OpenAI 方言值
 	//（default/flex/...）由出站编码按 codec.MapServiceTier 翻译或丢弃。
 	ServiceTier string `json:"service_tier,omitempty"`

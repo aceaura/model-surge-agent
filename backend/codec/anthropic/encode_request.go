@@ -200,6 +200,10 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	if tier, ok := codec.MapServiceTier(req.ServiceTier, Name); ok {
 		w.ServiceTier = tier
 	}
+	// mcp_servers / context_management 同族原样回写（不解析、不改形）。
+	// 跨族到不了这里——别的出站编码器没有这两个槽位，丢弃由 DescribeLossy 报出。
+	w.McpServers = req.McpServers
+	w.ContextManagement = req.ContextManagement
 	return json.Marshal(w)
 }
 
