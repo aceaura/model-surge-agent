@@ -38,6 +38,9 @@ type wireRequest struct {
 	Truncation string `json:"truncation,omitempty"`
 	// MaxToolCalls 单轮响应允许的工具调用总上限。
 	MaxToolCalls *int `json:"max_tool_calls,omitempty"`
+	// AccessPrograms 域专属访问计划（{cyber: standard|daybreak_blue|daybreak_red}），
+	// 不透明原文透传。仅本族有此键，omitempty；同族原样回写，跨族由诊断报出。
+	AccessPrograms json.RawMessage `json:"access_programs,omitempty"`
 	// StreamOptions 流式选项；本族目前只有 include_obfuscation。
 	StreamOptions *wireStreamOptions `json:"stream_options,omitempty"`
 	Metadata      map[string]string  `json:"metadata,omitempty"`

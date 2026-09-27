@@ -207,6 +207,15 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	if len(req.ContextManagement) > 0 && name != ProtocolAnthropic {
 		note("context_management", "no context-editing slot: the requested context management (e.g. clearing old tool uses) is dropped, the upstream sends the full unpruned context and may hit the window limit the client expected to be pruned")
 	}
+	// 域专属访问计划（access_programs，responses 独有，{cyber: standard|
+	// daybreak_blue|daybreak_red}）：外族没有访问计划槽位，客户端显式选定的 cyber
+	// 档位整条丢弃，上游按模型 tier 与组织/项目权限自行解析默认计划（通常是
+	// standard），可能落到与客户端意图不同的档位。responses 同族原样往返
+	// （RawMessage 透传），报了就是谎报。值是官方枚举非敏感串，但为与同槽位的
+	// 其它访问/档位参数保持一致，不回显具体档位。
+	if len(req.AccessPrograms) > 0 && name != ProtocolResponses {
+		note("access_programs", "no domain-specific access-program slot: the client's explicit cyber access program (standard/daybreak_blue/daybreak_red) is dropped and the upstream resolves its own default program from the model tier and org/project access")
+	}
 	// 消息级发送者名（chat 的 message.name）：只有 chat_completions 解码器落进
 	// IR、只有 chat_completions 编码器回写，其余族没有逐消息作者名字段，跨族整条
 	// 丢失（rule a）。同族 chat→chat 原样保留，故报了就是谎报，排除之。

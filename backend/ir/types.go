@@ -798,6 +798,17 @@ type Request struct {
 	// max_tool_calls）。三态指针：nil = 客户端没提。其余三族没有计数
 	// 闸门，客户端要的安全上限跨族不再生效，由诊断报出。
 	MaxToolCalls *int `json:"max_tool_calls,omitempty"`
+	// AccessPrograms 是域专属访问计划（responses 独有的 access_programs，
+	// 形如 {cyber: standard|daybreak_blue|daybreak_red}）。客户端用它显式选定
+	// 本次请求走哪个 cyber 访问档位；不透明原文透传（json.RawMessage 不可变
+	// 惯例，Clone 随 out:=*r 浅拷贝共享字节，同 Moderation/McpServers）。
+	// 只有 responses 一族有此槽位：同族 responses→responses 原样回写兑现，
+	// 跨族整块丢弃并由诊断报出（谓词 name!=responses，同 McpServers 之于
+	// anthropic）。与 Background/Store 不同，它不与本服务强制的 stream:true+
+	// store:false 冲突，故同族照转发而非出站抹掉——客户端显式选定的访问档位
+	// 被静默降级成上游默认（standard）才是不可接受的丢弃；若目标账号没有对应
+	// Daybreak 授权而上游 403，那是客户端能据以行动的真实错误，好过静默改档。
+	AccessPrograms json.RawMessage `json:"access_programs,omitempty"`
 	// IncludeObfuscation 流式混淆开关（OpenAI 两系的 stream_options.
 	// include_obfuscation）。三态指针：显式 false 是「关掉上游默认开着的
 	// 混淆保护」，与没提不是一回事，两态布尔会把显式 false 吞回缺省。

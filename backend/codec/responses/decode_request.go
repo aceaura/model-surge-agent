@@ -89,6 +89,12 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	out.Store = w.Store
 	out.Truncation = w.Truncation
 	out.MaxToolCalls = w.MaxToolCalls
+	// access_programs 是域专属访问计划（responses 独有），不透明原文透传。
+	// 显式 null 等同没给（与 Moderation/PromptCacheOptions 同款归一），避免
+	// 4 字节字面量被当配置回写。
+	if string(w.AccessPrograms) != "null" {
+		out.AccessPrograms = w.AccessPrograms
+	}
 	if w.StreamOptions != nil {
 		out.IncludeObfuscation = w.StreamOptions.IncludeObfuscation
 	}

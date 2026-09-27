@@ -69,6 +69,10 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	// 丢弃由 DescribeLossy 报出（见 wireRequest.Background 注释）。
 	w.Truncation = req.Truncation
 	w.MaxToolCalls = req.MaxToolCalls
+	// access_programs 同族原样回写：客户端显式选定的 cyber 访问档位照转发，
+	// 不静默降级成上游默认。与 Background/Store 不同，它不和本服务强制的
+	// stream:true+store:false 冲突，故不在出站抹掉。跨族丢弃由 DescribeLossy 报出。
+	w.AccessPrograms = req.AccessPrograms
 	// 混淆开关只在客户端显式表态时写：显式 false 是「关掉上游默认的混淆
 	// 保护」，与没提不是一回事，替客户端造键就是替它表态。
 	if req.IncludeObfuscation != nil {
