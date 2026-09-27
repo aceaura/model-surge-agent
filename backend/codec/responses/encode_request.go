@@ -320,7 +320,7 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, wireItem{Type: itemMessage, Role: string(m.Role), Content: content, ID: m.ItemID})
+		out = append(out, wireItem{Type: itemMessage, Role: string(m.Role), Content: content, ID: m.ItemID, Phase: m.ResponsesPhase})
 	}
 	out = append(out, callItems...)
 	if len(out) == start && len(m.Content) > 0 {
@@ -335,7 +335,7 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, wireItem{Type: itemMessage, Role: string(m.Role), Content: content, ID: m.ItemID})
+		out = append(out, wireItem{Type: itemMessage, Role: string(m.Role), Content: content, ID: m.ItemID, Phase: m.ResponsesPhase})
 	}
 	return out, nil
 }

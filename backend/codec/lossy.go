@@ -226,6 +226,16 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 				"dropped the responses item id on %d item(s): the target protocol has no item-id slot, a stored-item reference the client sends later will not resolve", n)
 		}
 	}
+	// responses assistant message 的 phase（commentary|final_answer）：只有
+	// responses 解码器落进 IR、只有 responses 编码器回写，其余族没有对应槽位。
+	// 官方要求后续请求 preserve-and-resend，跨族丢弃后上游无从区分旁白与最终
+	// 答复。同族 responses→responses 原样回写，排除之（与 item id 同款门控）。
+	if name != ProtocolResponses {
+		if n := countMessagePhase(req); n > 0 {
+			notes["message phase"] = fmt.Sprintf(
+				"dropped the responses message phase (commentary/final_answer) on %d assistant message(s): the target protocol has no phase slot, the model cannot tell commentary from the final answer", n)
+		}
+	}
 	// responses 的 typed tool_choice（mcp/file_search/computer_use 等无 name
 	// 变体，IR 的 Raw 不透明槽、Mode 留零值）：外族的 tool_choice 形状只有
 	// auto/any/none/具名函数四档，托管工具指名变体整条编不出，出站缺省后
@@ -1754,6 +1764,19 @@ func countItemIDs(req *ir.Request) int {
 			if b.Thinking != nil && b.Thinking.ItemID != "" {
 				n++
 			}
+		}
+	}
+	return n
+}
+
+// countMessagePhase 数携带 responses message phase（commentary|final_answer）
+// 的助手消息条数。该维度只由 responses 解码器落进 IR、只由 responses 编码器
+// 回写，跨族丢弃后上游无从区分旁白与最终答复（官方要求 preserve-and-resend）。
+func countMessagePhase(req *ir.Request) int {
+	n := 0
+	for _, m := range req.Messages {
+		if m.ResponsesPhase != "" {
+			n++
 		}
 	}
 	return n

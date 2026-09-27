@@ -235,6 +235,13 @@ func appendItem(out *ir.Request, item wireItem, raw json.RawMessage) error {
 			out.System = append(out.System, blocks...)
 		case roleAssistant:
 			appendBlocks(out, ir.RoleAssistant, blocks, item.ID)
+			// phase 是 assistant message 条目的阶段标记（commentary|final_answer），
+			// 官方要求后续请求 preserve-and-resend。appendBlocks 刚把 blocks 并进/
+			// 新建末尾消息，这里补挂 phase；blocks 为空时 appendBlocks 不动消息
+			// （早返回），故同样以 len(blocks)>0 为门，避免误挂到上一条消息。
+			if item.Phase != "" && len(blocks) > 0 {
+				out.Messages[len(out.Messages)-1].ResponsesPhase = item.Phase
+			}
 		case roleUser, "":
 			// 同理：落到 user 消息的 refusal 会被 chat 编码器静默丢弃（refusal
 			// 只在 m.Role==assistant 时回写），且不留任何注记。解码期就拒。

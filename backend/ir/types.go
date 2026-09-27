@@ -442,6 +442,14 @@ type Message struct {
 	// ItemID 是 Responses message 条目的 item id（msg_…），同族往返原样
 	// 带回，理由同 ToolUse.ItemID。
 	ItemID string `json:"item_id,omitempty"`
+	// ResponsesPhase 是 Responses assistant message 条目的阶段标记
+	// （官方 response_output_message.phase，枚举 commentary | final_answer）。
+	// 官方 docstring 明确要求「后续请求 preserve 并在所有 assistant 消息上
+	// resend phase」——客户端把上一轮助手消息当历史回传时要原样带回，上游据此
+	// 区分旁白与最终答复。只有 responses 一族有槽位：同族逐字往返无损，跨族
+	// 整维丢弃由有损诊断报出。与 ItemID 同款「仅消息级、仅请求侧承载」——
+	// 响应侧 ir.Response.Content 是扁平块列表、无消息级槽位（ItemID 亦然）。
+	ResponsesPhase string `json:"responses_phase,omitempty"`
 }
 
 type Tool struct {
@@ -1009,7 +1017,7 @@ func cloneMessages(in []Message) []Message {
 	out := make([]Message, len(in))
 	for i, m := range in {
 		out[i] = Message{Role: m.Role, Content: cloneBlocks(m.Content),
-			AudioID: m.AudioID, Name: m.Name, ItemID: m.ItemID}
+			AudioID: m.AudioID, Name: m.Name, ItemID: m.ItemID, ResponsesPhase: m.ResponsesPhase}
 	}
 	return out
 }

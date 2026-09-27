@@ -124,6 +124,10 @@ type wireItem struct {
 	// Content 可以是字符串或 part 数组。
 	Content json.RawMessage `json:"content,omitempty"`
 	Status  string          `json:"status,omitempty"`
+	// Phase 是 message 条目的阶段标记（官方 response_output_message.phase，
+	// commentary | final_answer）。同族 preserve-and-resend：客户端回传助手历史
+	// 时原样带回。仅 message 条目有此键，omitempty 保证其余条目不写。
+	Phase string `json:"phase,omitempty"`
 
 	// function_call / custom_tool_call
 	CallID    string `json:"call_id,omitempty"`
