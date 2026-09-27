@@ -589,6 +589,7 @@ func (d *streamDecoder) complete(ev wireStreamEvent) []ir.Event {
 	// 对象里，收到后挂在 EvMessageDelta 上交给聚合器。
 	var completedAt int64
 	var cacheDiag, moderation json.RawMessage
+	var metadata map[string]string
 	if ev.Response != nil {
 		if ev.Response.Usage != nil {
 			u := convertUsage(*ev.Response.Usage)
@@ -607,6 +608,10 @@ func (d *streamDecoder) complete(ev wireStreamEvent) []ir.Event {
 		if len(ev.Response.Moderation) > 0 && string(ev.Response.Moderation) != "null" {
 			moderation = ev.Response.Moderation
 		}
+		// response.metadata 回显客户端关联键值，同族往返要带回。
+		if len(ev.Response.Metadata) > 0 {
+			metadata = ev.Response.Metadata
+		}
 	}
 	// 流里见过拒答就改判，除非收尾帧已经给出一个非正常结束的原因——
 	// 那是上游更明确的表态（比如同时被截断）。
@@ -615,7 +620,7 @@ func (d *streamDecoder) complete(ev wireStreamEvent) []ir.Event {
 	}
 	delta := ir.Event{Type: ir.EvMessageDelta, StopReason: d.stopReason, Usage: d.usage,
 		ServiceTier: d.serviceTier, CompletedAt: completedAt,
-		PromptCacheDiagnostics: cacheDiag, Moderation: moderation}
+		PromptCacheDiagnostics: cacheDiag, Moderation: moderation, Metadata: metadata}
 	if delta.StopReason == "" {
 		delta.StopReason = ir.StopEndTurn
 	}
@@ -886,6 +891,11 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	}
 	if len(w.Moderation) > 0 && string(w.Moderation) != "null" {
 		out.ResponsesModeration = w.Moderation
+	}
+	// response.metadata 是客户端关联键值的回显（与请求侧同源），同族往返要
+	// 原值带回；空 map 等同没给，不占位。
+	if len(w.Metadata) > 0 {
+		out.ClientMetadata = w.Metadata
 	}
 	if w.Usage != nil {
 		out.Usage = convertUsage(*w.Usage)

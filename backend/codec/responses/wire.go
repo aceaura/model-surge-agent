@@ -396,6 +396,9 @@ type wireResponse struct {
 	PromptCacheDiagnostics json.RawMessage `json:"prompt_cache_diagnostics,omitempty"`
 	// Moderation 审核结果回执（官方 response.moderation，nullable）。原文透传。
 	Moderation json.RawMessage `json:"moderation,omitempty"`
+	// Metadata 是 response 对象回显的客户端关联键值（官方 response.metadata）。
+	// 同族往返原值带回；上游没给则 omitempty 不写。
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 type wireIncomplete struct {

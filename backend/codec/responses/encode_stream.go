@@ -32,6 +32,9 @@ type streamEncoder struct {
 	completedAt int64
 	cacheDiag   json.RawMessage
 	moderation  json.RawMessage
+	// metadata 是 response 对象回显的客户端关联键值（response.metadata），
+	// 同族往返原值带回；上游没给则 omitempty 不写。
+	metadata map[string]string
 
 	// items 是已开启的条目，按 IR 块索引定位。
 	items map[int]*openItem
@@ -220,6 +223,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		}
 		if len(ev.Moderation) > 0 {
 			e.moderation = ev.Moderation
+		}
+		if len(ev.Metadata) > 0 {
+			e.metadata = ev.Metadata
 		}
 		// Anthropic 上游在这一帧给 input_tokens，而本协议只在终止帧报用量，
 		// 不在这里收下就永远丢了。
@@ -458,6 +464,9 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		}
 		if len(ev.Moderation) > 0 {
 			e.moderation = ev.Moderation
+		}
+		if len(ev.Metadata) > 0 {
+			e.metadata = ev.Metadata
 		}
 		if ev.Usage != nil {
 			ir.MergeUsage(&e.usage, *ev.Usage)
@@ -771,6 +780,7 @@ func (e *streamEncoder) snapshot(status string) *wireResponse {
 		CompletedAt:            e.completedAt,
 		PromptCacheDiagnostics: e.cacheDiag,
 		Moderation:             e.moderation,
+		Metadata:               e.metadata,
 	}
 	for _, index := range e.order {
 		if item := e.items[index]; item != nil {
@@ -907,6 +917,7 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 		CompletedAt:            resp.CompletedAt,
 		PromptCacheDiagnostics: resp.ResponsesPromptCacheDiagnostics,
 		Moderation:             resp.ResponsesModeration,
+		Metadata:               resp.ClientMetadata,
 	}
 	// 实际执行档位回显：跨族按回显值集翻译，装不下的（anthropic 的
 	// batch）丢弃，由 DescribeResponseTierLoss 报出。

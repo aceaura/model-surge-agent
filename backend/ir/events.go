@@ -85,7 +85,12 @@ type Event struct {
 	CompletedAt            int64           `json:"completed_at,omitempty"`
 	PromptCacheDiagnostics json.RawMessage `json:"prompt_cache_diagnostics,omitempty"`
 	Moderation             json.RawMessage `json:"moderation,omitempty"`
-	Err                    *Error          `json:"error,omitempty"`
+	// Metadata 是 responses 响应对象回显的客户端关联键值（response.metadata），
+	// 语义同 ir.Response.ClientMetadata。口径与 CompletedAt/Moderation 完全一致：
+	// 整份响应投影随 EvMessageStart 抵达、真流式随终止帧的 EvMessageDelta 抵达，
+	// 两处都收；仅 responses 有槽位，跨族出站不投影。
+	Metadata map[string]string `json:"metadata,omitempty"`
+	Err      *Error            `json:"error,omitempty"`
 	// Citations 仅在 EvCitation 出现，携带本次新增的来源标注。
 	Citations []Citation `json:"citations,omitempty"`
 }

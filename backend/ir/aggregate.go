@@ -126,6 +126,9 @@ func (a *Aggregator) Add(ev Event) {
 		if len(ev.Moderation) > 0 {
 			a.resp.ResponsesModeration = ev.Moderation
 		}
+		if len(ev.Metadata) > 0 {
+			a.resp.ClientMetadata = ev.Metadata
+		}
 		if ev.Usage != nil {
 			a.mergeUsage(*ev.Usage)
 		}
@@ -245,6 +248,9 @@ func (a *Aggregator) Add(ev Event) {
 		}
 		if len(ev.Moderation) > 0 {
 			a.resp.ResponsesModeration = ev.Moderation
+		}
+		if len(ev.Metadata) > 0 {
+			a.resp.ClientMetadata = ev.Metadata
 		}
 		if ev.Usage != nil {
 			a.mergeUsage(*ev.Usage)

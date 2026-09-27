@@ -24,7 +24,8 @@ func ResponseEvents(resp *Response) []Event {
 		// 漏掉它们整份响应路径会把完成时间/缓存诊断/审核回执全丢。
 		CompletedAt:            resp.CompletedAt,
 		PromptCacheDiagnostics: resp.ResponsesPromptCacheDiagnostics,
-		Moderation:             resp.ResponsesModeration}}
+		Moderation:             resp.ResponsesModeration,
+		Metadata:               resp.ClientMetadata}}
 	for i, b := range resp.Content {
 		out = append(out, blockEvents(i, b)...)
 	}

@@ -201,4 +201,11 @@ type Response struct {
 	// 输入/输出审核结果。chat 族对同名字段是「丢弃+注记」，responses 这里
 	// 同族原样带回复原保真；跨族无槽位不投影。
 	ResponsesModeration json.RawMessage `json:"responses_moderation,omitempty"`
+	// ClientMetadata 上游在 response 对象里回显的客户端自定义关联键值
+	//（官方 response.metadata，与请求侧 ClientMetadata 同源回显）。仅
+	// responses 一族有响应级 metadata 槽位：同族往返原值带回（口径同
+	// created / completed_at，客户端按它做异步关联/幂等），跨族无槽位不
+	// 投影——目标协议没有响应级 metadata 概念，与 completed_at / moderation
+	// 同属「仅本族有槽位、跨族不投影」的响应侧回执。
+	ClientMetadata map[string]string `json:"client_metadata,omitempty"`
 }
