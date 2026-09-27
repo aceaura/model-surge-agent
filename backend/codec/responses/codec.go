@@ -139,10 +139,12 @@ func (outboundCodec) Caps() codec.Capabilities {
 		SafetyIdentifier:   true,
 		Moderation:         true,
 		PromptCacheOptions: true,
-		ResponseFormat:     true,
-		ResponseSchema:     true,
-		Verbosity:          true,
-		Include:            true,
+		// prompt_cache_retention（in_memory|24h，ZDR 合规相关）有原生槽位。
+		PromptCacheRetention: true,
+		ResponseFormat:       true,
+		ResponseSchema:       true,
+		Verbosity:            true,
+		Include:              true,
 		// background 是本协议独有的后台运行模式槽位。槽位存在但本服务兑现
 		// 不了（对上游一律流式 + store:false），注记措辞由此位区分。
 		Background: true,

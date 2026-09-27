@@ -95,6 +95,7 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	w.SafetyIdentifier = req.SafetyIdentifier
 	w.Moderation = req.Moderation
 	w.PromptCacheOptions = req.PromptCacheOptions
+	w.PromptCacheRetention = req.PromptCacheRetention
 	w.ResponseFormat = encodeResponseFormat(req.ResponseFormat)
 
 	// chat 一族专属四维原样回写（外族编码器不读它们，跨族损耗由

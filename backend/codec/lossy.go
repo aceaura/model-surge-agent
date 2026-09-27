@@ -851,6 +851,15 @@ func describeParamsLossy(req *ir.Request, name string, caps Capabilities, note, 
 	if len(req.PromptCacheOptions) > 0 && !caps.PromptCacheOptions {
 		note("prompt_cache_options", "no explicit cache breakpoint control, caching follows the upstream default policy")
 	}
+	// prompt_cache_retention（in_memory|24h）是 OpenAI 两系的缓存最大留存策略，
+	// 与 prompt_cache_options.ttl（最小生命周期）独立。anthropic 走 cache_control、
+	// gemini 没有，二者都无对应槽位。丢了上游按组织默认留存——对 ZDR（零数据留存）
+	// 合规敏感：客户端选 in_memory 是要「别久留我的 prompt 缓存」，静默丢掉可能让
+	// 上游按 24h 默认留存得比客户端意图更久。值是官方枚举非敏感串，但为与
+	// prompt_cache_key/options 同款保持键稳定，不回显具体档位。
+	if req.PromptCacheRetention != "" && !caps.PromptCacheRetention {
+		note("prompt_cache_retention", "no cache retention policy field, the client's maximum-retention choice (in_memory vs 24h, e.g. for zero-data-retention compliance) is dropped and the upstream applies its own default retention")
+	}
 	if req.ParallelToolCalls != nil && !caps.ParallelToolCalls {
 		note("parallel_tool_calls", "no parallel tool call switch")
 	}

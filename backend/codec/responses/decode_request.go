@@ -103,6 +103,8 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	if string(w.PromptCacheOptions) != "null" {
 		out.PromptCacheOptions = w.PromptCacheOptions
 	}
+	// prompt_cache_retention 是 string 标量，JSON null 自动归零（同 chat）。
+	out.PromptCacheRetention = w.PromptCacheRetention
 	out.ParallelToolCalls = w.ParallelToolCalls
 	out.TopLogProbs = w.TopLogProbs
 	if w.Text != nil {

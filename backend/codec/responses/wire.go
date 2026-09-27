@@ -53,6 +53,9 @@ type wireRequest struct {
 	Moderation json.RawMessage `json:"moderation,omitempty"`
 	// PromptCacheOptions 显式缓存断点控制 {mode, ttl, ...}，原文透传。
 	PromptCacheOptions json.RawMessage `json:"prompt_cache_options,omitempty"`
+	// PromptCacheRetention 缓存最大留存策略 in_memory|24h（与 prompt_cache_options
+	// 独立，关乎 ZDR 合规）。string 标量，JSON null 自动归零。
+	PromptCacheRetention string `json:"prompt_cache_retention,omitempty"`
 
 	// 以下四个字段把对话状态托管在上游那一侧，本服务表达不了：请求会被
 	// 分发到任意一个目标账号，那里没有这条 id 指向的历史。收下再忽略等于

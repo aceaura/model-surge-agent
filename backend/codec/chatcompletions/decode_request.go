@@ -133,6 +133,9 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	if string(w.PromptCacheOptions) != "null" {
 		out.PromptCacheOptions = w.PromptCacheOptions
 	}
+	// prompt_cache_retention 是 string 标量，JSON null 由 encoding/json 自动归零，
+	// 无需上面 RawMessage 那种显式 null 判定。
+	out.PromptCacheRetention = w.PromptCacheRetention
 	respFormat, err := decodeResponseFormat(w.ResponseFormat)
 	if err != nil {
 		return nil, badRequest(fmt.Sprintf("response_format: %v", err))

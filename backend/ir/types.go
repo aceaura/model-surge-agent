@@ -681,6 +681,12 @@ type Request struct {
 	// PromptCacheOptions 显式缓存断点控制（OpenAI 两系 {mode, ttl, ...}）。
 	// 不透明原文透传，共享惯例同 Moderation。
 	PromptCacheOptions json.RawMessage `json:"prompt_cache_options,omitempty"`
+	// PromptCacheRetention 缓存最大留存策略（OpenAI 两系 in_memory|24h），与
+	// prompt_cache_options.ttl（最小生命周期）相互独立、不交互。关乎零数据留存
+	//（ZDR）合规：客户端选 in_memory 是表达「别久留我的 prompt 缓存」，丢了上游
+	// 会按组织默认（非 ZDR 默认 24h）留存，可能比客户端意图留得更久。string 标量
+	//（官方枚举），JSON null 自动归零；值类型，Clone 随 out:=*r 拷贝无需单独处理。
+	PromptCacheRetention string `json:"prompt_cache_retention,omitempty"`
 
 	// 以下两维只有 Anthropic 一族有，外族没有任何对应物。收进 IR 只为
 	// 同协议回写 + 跨协议诊断，不作映射尝试。

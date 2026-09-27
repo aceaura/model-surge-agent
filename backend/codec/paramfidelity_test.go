@@ -183,6 +183,7 @@ func TestUnsupportedParamsAreReportedLossy(t *testing.T) {
 		{"safety_identifier", func(r *ir.Request) { r.SafetyIdentifier = "si" }},
 		{"moderation", func(r *ir.Request) { r.Moderation = []byte(`{"model":"m"}`) }},
 		{"prompt_cache_options", func(r *ir.Request) { r.PromptCacheOptions = []byte(`{"mode":"auto"}`) }},
+		{"prompt_cache_retention", func(r *ir.Request) { r.PromptCacheRetention = "24h" }},
 		{"parallel_tool_calls", func(r *ir.Request) { v := true; r.ParallelToolCalls = &v }},
 		{"response_format", func(r *ir.Request) { r.ResponseFormat = &ir.ResponseFormat{Kind: ir.ResponseFormatJSON} }},
 		{"verbosity", func(r *ir.Request) { r.Verbosity = "low" }},
@@ -252,6 +253,8 @@ func supportsField(t *testing.T, proto, field string) bool {
 		return caps.Moderation
 	case "prompt_cache_options":
 		return caps.PromptCacheOptions
+	case "prompt_cache_retention":
+		return caps.PromptCacheRetention
 	case "parallel_tool_calls":
 		return caps.ParallelToolCalls
 	case "response_format":

@@ -137,6 +137,8 @@ func (outboundCodec) Caps() codec.Capabilities {
 		SafetyIdentifier:   true,
 		Moderation:         true,
 		PromptCacheOptions: true,
+		// prompt_cache_retention（in_memory|24h，ZDR 合规相关）有原生槽位。
+		PromptCacheRetention: true,
 		// stream_options.include_obfuscation 是本协议的流混淆开关
 		//（官方为防流量分析在 SSE 帧间插入噪声帧）。
 		StreamObfuscation: true,

@@ -179,7 +179,11 @@ type Capabilities struct {
 	// prompt_cache_options）。anthropic 的缓存走 cache_control 断点、
 	// 形状不同不构成等价物；gemini 没有。
 	PromptCacheOptions bool
-	ParallelToolCalls  bool
+	// PromptCacheRetention 有缓存最大留存策略槽位（OpenAI 两系的
+	// prompt_cache_retention，in_memory|24h，关乎 ZDR 合规）。anthropic 走
+	// cache_control、gemini 没有，二者都无对应物。
+	PromptCacheRetention bool
+	ParallelToolCalls    bool
 	// ResponseFormat 为真表示支持「输出必须是合法 JSON」这一档（纯 JSON 模式）；
 	// ResponseSchema 为真表示支持按 JSON Schema 约束结构。
 	//

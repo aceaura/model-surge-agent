@@ -83,6 +83,7 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	w.SafetyIdentifier = req.SafetyIdentifier
 	w.Moderation = req.Moderation
 	w.PromptCacheOptions = req.PromptCacheOptions
+	w.PromptCacheRetention = req.PromptCacheRetention
 	w.ParallelToolCalls = req.ParallelToolCalls
 	w.TopLogProbs = req.TopLogProbs
 	// 本协议没有独立的 logprobs 开关，top_logprobs 兼任开关与档位。

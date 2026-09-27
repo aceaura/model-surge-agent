@@ -53,8 +53,11 @@ type wireRequest struct {
 	// 上游产品语义，代理不解析，原文透传。
 	Moderation json.RawMessage `json:"moderation,omitempty"`
 	// PromptCacheOptions 显式缓存断点控制 {mode, ttl, ...}。同样原文透传。
-	PromptCacheOptions json.RawMessage     `json:"prompt_cache_options,omitempty"`
-	ResponseFormat     *wireResponseFormat `json:"response_format,omitempty"`
+	PromptCacheOptions json.RawMessage `json:"prompt_cache_options,omitempty"`
+	// PromptCacheRetention 缓存最大留存策略 in_memory|24h（与 prompt_cache_options
+	// 独立，关乎 ZDR 合规）。string 标量，JSON null 自动归零。
+	PromptCacheRetention string              `json:"prompt_cache_retention,omitempty"`
+	ResponseFormat       *wireResponseFormat `json:"response_format,omitempty"`
 
 	// Modalities 输出模态（"text"/"audio"），chat 一族专属。
 	Modalities []string `json:"modalities,omitempty"`
