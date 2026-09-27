@@ -82,6 +82,14 @@ type streamDecoder struct {
 	// 跳过续流（SSE 以事件边界自同步，坏一帧不污染后续帧），经 Notes() 报出。
 	// 与 droppedUnknown 分账——那是「认识帧但类型不认识」，这是「帧根本解不开」。
 	droppedBadFrames int
+	// contentChannel 记「这个 reasoning 块的正文来自 content 通道
+	// （reasoning_text，模型内部推理原文）而非 summary 通道
+	// （reasoning_summary_text，给用户看的摘要）」。非流式路径用
+	// Thinking.ContentChannel 标记并原样回吐；流式的事件模型没有这个槽位——
+	// 增量帧不带通道标记，编码端一律渲染成 summary 通道，于是同族流式往返把
+	// content 通道的推理塌缩进 summary：正文保留、通道语义丢失。按块键去重
+	// （同一块的 delta/done/itemDone 多帧只计一次），经 Notes() 报出。
+	contentChannel map[string]struct{}
 }
 
 // slot 把「两级序号构成的键」绑到分配给它的 IR 块索引。
@@ -98,7 +106,8 @@ type slot struct {
 }
 
 func newStreamDecoder() *streamDecoder {
-	return &streamDecoder{closed: map[string]struct{}{}, customKinds: map[int]bool{}}
+	return &streamDecoder{closed: map[string]struct{}{}, customKinds: map[int]bool{},
+		contentChannel: map[string]struct{}{}}
 }
 
 // Notes 实现 codec.StreamNotes。
@@ -134,6 +143,11 @@ func (d *streamDecoder) Notes() []string {
 	if d.droppedBadFrames > 0 {
 		notes = append(notes, codec.BadFrameSkipNote(d.droppedBadFrames))
 		d.droppedBadFrames = 0
+	}
+	if n := len(d.contentChannel); n > 0 {
+		notes = append(notes, fmt.Sprintf(
+			"re-labeled %d content-channel reasoning block(s) (reasoning_text, the model's internal reasoning) as summary-channel in streaming: the text is preserved, but the channel distinction the non-streaming path keeps via Thinking.ContentChannel has no slot in the streaming event model", n))
+		d.contentChannel = map[string]struct{}{}
 	}
 	return codec.DedupeNotes(notes)
 }
@@ -286,6 +300,10 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		if kind == evReasoningSummaryText && ev.SummaryIndex > 0 {
 			d.mergedSummary++
 		}
+		if kind == evReasoningTextDelta {
+			// content 通道增量：本块正文是 reasoning_text 而非摘要，记一次。
+			d.contentChannel[reasoningKey(ev.OutputIndex)] = struct{}{}
+		}
 		idx, opened := d.slot(reasoningKey(ev.OutputIndex), ir.BlockThinking)
 		out := append(d.start(ev), opened...)
 		d.accText(idx, ev.Delta)
@@ -331,6 +349,9 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		// 提前关会丢签名（判据同 donesignature_test）。
 		if kind == evReasoningSummaryTextDone && ev.SummaryIndex > 0 {
 			d.mergedSummary++
+		}
+		if kind == evReasoningTextDone {
+			d.contentChannel[reasoningKey(ev.OutputIndex)] = struct{}{}
 		}
 		return d.backfill(reasoningKey(ev.OutputIndex), ir.BlockThinking,
 			ev.Text, ir.EvThinkingDelta), nil
@@ -503,6 +524,10 @@ func (d *streamDecoder) itemDone(ev wireStreamEvent) []ir.Event {
 			text := joinSummary(ev.Item.Summary)
 			if text == "" {
 				text = decodeReasoningContent(ev.Item.Content)
+				if text != "" {
+					// 正文只在 content 数组（reasoning_text）里：content 通道，记一次。
+					d.contentChannel[reasoning] = struct{}{}
+				}
 			}
 			out = append(out, d.backfill(reasoning, ir.BlockThinking,
 				text, ir.EvThinkingDelta)...)
