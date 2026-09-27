@@ -223,6 +223,11 @@ func (t wireTool) MarshalJSON() ([]byte, error) {
 type wireToolChoice struct {
 	Type string `json:"type"`
 	Name string `json:"name,omitempty"`
+	// DisableParallelToolUse 禁止模型在一轮里并行调用多个工具（官方稳定字段，
+	// 与 OpenAI 两系顶层的 parallel_tool_calls 同维反相）。三态指针：nil = 没提
+	//（上游默认允许并行）；显式 true 才写。入站归一进 ir.Request.ParallelToolCalls，
+	// 出站由 ParallelToolCalls=false 还原，同族原样往返、跨族与 parallel_tool_calls 互转。
+	DisableParallelToolUse *bool `json:"disable_parallel_tool_use,omitempty"`
 }
 
 type wireThinking struct {

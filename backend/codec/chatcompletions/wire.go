@@ -66,6 +66,11 @@ type wireRequest struct {
 	// WebSearchOptions 联网搜索选项 {search_context_size,user_location}，
 	// 原文透传。
 	WebSearchOptions json.RawMessage `json:"web_search_options,omitempty"`
+	// Store 上游侧留存开关（官方 store：留存这次补全供模型蒸馏与评测）。
+	// 三态指针：nil = 没提；显式 false 等同默认。本服务对上游一律不留存，
+	// 出站不回写，客户端显式 store:true 的留存意图由 DescribeLossy 报出
+	//（与 responses 的 store 同一维度，共用 ir.Request.Store）。
+	Store *bool `json:"store,omitempty"`
 }
 
 // wireAudioOut 音频输出配置。Voice 两形态（string / {"id":...}）解码侧

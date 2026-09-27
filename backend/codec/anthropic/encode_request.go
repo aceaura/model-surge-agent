@@ -114,6 +114,17 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 		w.Tools = append(w.Tools, tool)
 	}
 	w.ToolChoice = encodeToolChoice(req.ToolChoice)
+	// 禁止并行工具调用：anthropic 把这一维嵌在 tool_choice 里（disable_parallel_tool_use），
+	// 与顶层 parallel_tool_calls 反相。只在客户端明确禁止（ParallelToolCalls=false）且确有
+	// 工具时写——没有工具时 tool_choice 无意义，合成一个会被上游拒。客户端没给 tool_choice
+	// 时合成 auto：有工具而缺省 tool_choice 本就是 auto，补上禁止位不改变调用自由度，只关掉并行。
+	if req.ParallelToolCalls != nil && !*req.ParallelToolCalls && len(w.Tools) > 0 {
+		if w.ToolChoice == nil {
+			w.ToolChoice = &wireToolChoice{Type: "auto"}
+		}
+		forbid := true
+		w.ToolChoice.DisableParallelToolUse = &forbid
+	}
 
 	switch {
 	case req.Thinking.Off():

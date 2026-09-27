@@ -921,6 +921,14 @@ func describeParamsLossy(req *ir.Request, name string, caps Capabilities, note, 
 			note("background", "no background mode, the request runs synchronously and the client expecting an async job gets a blocking response")
 		}
 	}
+	if req.Store != nil && *req.Store {
+		// 显式 false 等同默认（本服务对上游一律不留存），不报。true 则无论
+		// 目标是哪一族都必须报：本服务自己记流水、对上游恒不留存（responses
+		// 出站强制写 store:false，其余三族连槽位都没有），客户端期待「这次响应
+		// 存在上游、稍后可按 id 取回或链式引用」在这里一律落空。与 background
+		// 同款判据——不可兑现的留存意图静默吞掉，客户端会对着一个取不回的 id 等。
+		note("store", "the response will not be stored server-side: this service relays without retaining upstream state (responses requests are always sent with store:false, the other protocols have no store parameter), a client expecting to fetch or reference this response by id later cannot")
+	}
 	if req.Truncation != "" && !caps.Truncation {
 		note("truncation", "no upstream-side truncation parameter")
 	}

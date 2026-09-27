@@ -84,6 +84,9 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	// 永不回写（写回与强制的 stream:true + store:false 矛盾），丢弃由
 	// DescribeLossy 报出。
 	out.Background = w.Background
+	// store 同款：收进 IR 只为可见与可报。出站恒 store:false（本服务不留存
+	// 上游状态），客户端显式 store:true 的留存意图由 DescribeLossy 报出。
+	out.Store = w.Store
 	out.Truncation = w.Truncation
 	out.MaxToolCalls = w.MaxToolCalls
 	if w.StreamOptions != nil {

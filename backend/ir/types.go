@@ -721,6 +721,14 @@ type Request struct {
 	// 流式中继（对上游一律 stream + store:false），兑现不了任何协议的
 	// background，出站一律不回写并由诊断报出。收进 IR 只为可见与可报。
 	Background *bool `json:"background,omitempty"`
+	// Store 是上游侧留存开关（OpenAI 两系的 store：responses 留存对话供
+	// 按 id 取回/链式引用，chat 留存补全供蒸馏与评测）。三态指针：nil =
+	// 客户端没提；显式 false 等同默认（本服务对上游一律不留存），都不算
+	// 表态。显式 true 时客户端期待「这次响应在上游存着、稍后可取回」，
+	// 而本服务自己记流水、对上游恒 store:false（responses 出站强制写
+	// false，其余三族连槽位都没有），留存一律落空且不可兑现，出站不回写
+	// 并由诊断报出。与 Background 同款判据：收进 IR 只为可见与可报。
+	Store *bool `json:"store,omitempty"`
 	// Truncation 是上游侧的历史截断策略（responses 的 truncation）。
 	Truncation string `json:"truncation,omitempty"`
 	// MaxToolCalls 单轮响应允许的工具调用总上限（responses 一族的
@@ -883,6 +891,7 @@ func (r *Request) Clone() *Request {
 	out.LogProbs = cloneBool(r.LogProbs)
 	out.ParallelToolCalls = cloneBool(r.ParallelToolCalls)
 	out.Background = cloneBool(r.Background)
+	out.Store = cloneBool(r.Store)
 	if r.LogitBias != nil {
 		out.LogitBias = make(map[string]float64, len(r.LogitBias))
 		for k, v := range r.LogitBias {

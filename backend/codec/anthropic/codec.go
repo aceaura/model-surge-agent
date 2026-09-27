@@ -152,11 +152,15 @@ func (outboundCodec) Caps() codec.Capabilities {
 		// 槽空着时出站编码映进去（被 user_id 占了才丢，丢由诊断单独报）。
 		// verbosity / moderation / prompt_cache_options 一个都没有。
 		SafetyIdentifier: true,
+		// parallel_tool_calls 有等价槽位，只是位不在顶层：本协议把「禁止并行
+		// 工具调用」嵌在 tool_choice.disable_parallel_tool_use（官方稳定字段，
+		// 与 OpenAI 两系顶层 parallel_tool_calls 同维反相）。出站按
+		// ParallelToolCalls=false 还原该位（无 tool_choice 时合成 auto），故能力位为真。
+		ParallelToolCalls: true,
 		// 调参能力位大多留假：本协议的请求体只有 model/messages/system/
 		// max_tokens/metadata/stop_sequences/stream/temperature/top_k/top_p/
 		// tools/tool_choice/thinking/output_config/service_tier，没有承载
-		// penalty、seed、n、logprobs、logit_bias、prompt_cache_key、
-		// parallel_tool_calls 的字段。
+		// penalty、seed、n、logprobs、logit_bias、prompt_cache_key 的字段。
 		// 结构化输出走 output_config.format，但只接 schema 约束形态（见上）。
 		// 这是照官方请求体核实的结果，不是没填。
 		// SchemaDialect 留零值：本协议接受完整 JSON Schema。

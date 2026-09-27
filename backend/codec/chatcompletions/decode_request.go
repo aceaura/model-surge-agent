@@ -120,6 +120,9 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	out.ServiceTier = w.ServiceTier
 	out.PromptCacheKey = w.PromptCacheKey
 	out.ParallelToolCalls = w.ParallelToolCalls
+	// store 收进 IR 只为可见与可报：本服务对上游一律不留存，出站不回写，
+	// 客户端显式 store:true 的留存意图由 DescribeLossy 报出（同 responses）。
+	out.Store = w.Store
 	out.Verbosity = w.Verbosity
 	out.SafetyIdentifier = w.SafetyIdentifier
 	// 显式 null 等同没给：不归一的话出站会多一个上游解不动的 null 键，

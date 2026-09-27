@@ -529,25 +529,41 @@ func TestMaxTokensAbsent(t *testing.T) {
 
 // TestParallelToolCallsThreeState：没给就不写，给了 false 要写 false。
 // 坍缩成两态会替客户端表态——同第十四轮推理开关的判据。
+//
+// 线上拼写按协议分形：OpenAI 两系是顶层 parallel_tool_calls:false；anthropic
+// 把同一维嵌在 tool_choice.disable_parallel_tool_use:true（反相），且只在确有
+// 工具时才写（没有工具时 tool_choice 无意义、合成会被上游拒）。断言各按其形。
 func TestParallelToolCallsThreeState(t *testing.T) {
 	for _, out := range outboundNames() {
 		oc, _ := codec.Outbound(out)
 		if !oc.Caps().ParallelToolCalls {
 			continue
 		}
+		anthropic := out == codec.ProtocolAnthropic
+		// anthropic 要带工具才测得到这一维（disable 位嵌在 tool_choice 里）。
+		withTools := func(r *ir.Request) *ir.Request {
+			if anthropic {
+				r.Tools = []ir.Tool{{Name: "t", Schema: `{"type":"object"}`}}
+			}
+			return r
+		}
 		t.Run(out+"/absent", func(t *testing.T) {
-			body := string(encodeOut(t, out, paramBase()))
-			if strings.Contains(body, "parallel_tool_calls") {
-				t.Errorf("客户端没给却写出了 parallel_tool_calls: %s", body)
+			body := string(encodeOut(t, out, withTools(paramBase())))
+			if strings.Contains(body, "parallel_tool_calls") || strings.Contains(body, "disable_parallel_tool_use") {
+				t.Errorf("客户端没给却写出了并行工具调用键: %s", body)
 			}
 		})
 		t.Run(out+"/explicit false", func(t *testing.T) {
-			req := paramBase()
+			req := withTools(paramBase())
 			v := false
 			req.ParallelToolCalls = &v
 			body := string(encodeOut(t, out, req))
-			if !strings.Contains(body, `"parallel_tool_calls":false`) {
-				t.Errorf("明确 false 必须写出: %s", body)
+			want := `"parallel_tool_calls":false`
+			if anthropic {
+				want = `"disable_parallel_tool_use":true`
+			}
+			if !strings.Contains(body, want) {
+				t.Errorf("明确 false 必须写出 %s: %s", want, body)
 			}
 		})
 	}

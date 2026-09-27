@@ -98,6 +98,14 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 		return nil, wrapField("tool_choice", err)
 	}
 	out.ToolChoice = toolChoice
+	// anthropic 把「禁止并行工具调用」嵌在 tool_choice 里（disable_parallel_tool_use），
+	// 与 OpenAI 两系顶层的 parallel_tool_calls 是同一维度、反相极性。归一进 IR 的
+	// ParallelToolCalls：同族原样回写，跨族经既有机制与 parallel_tool_calls 互转。
+	// 只认显式 true（禁止）；false 与缺席都是上游默认（允许并行），不替客户端表态。
+	if w.ToolChoice != nil && w.ToolChoice.DisableParallelToolUse != nil && *w.ToolChoice.DisableParallelToolUse {
+		forbid := false
+		out.ParallelToolCalls = &forbid
+	}
 
 	if w.Thinking != nil {
 		// type 有 enabled / disabled / adaptive 三种取值，都是客户端的明确
