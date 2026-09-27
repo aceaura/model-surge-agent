@@ -162,6 +162,21 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 		}
 	}
 
+	// 工具结果内容里的非文本子块（拒绝、不透明块）：responses 与 gemini 的出站把
+	// 整段工具结果用 joinText 折成一个纯文本串，只留 text 子块，折掉的子块此前无人
+	// 报。与顶层不透明块的处置不同——顶层跨族会硬报错（见各编码器 BlockOpaque 分支），
+	// 嵌在工具结果里却被 joinText 静默吞掉，故这里补一条说明（rule a：丢弃必须有注记）。
+	// 只数 responses/gemini 两族：anthropic（encodeBlocks）与 chat（encodeContent）
+	// 递归编码工具结果子块，跨族不透明块硬报错、拒绝另有处置，都不经 joinText 折平；
+	// 媒体子块由 shape.go 的 moveToolResultMedia 抽出并单独报，也不在此列，故只数
+	// refusal/opaque 两种确会出现且确被折掉的类型，避免与那两条重叠。
+	if name == ProtocolResponses || name == ProtocolGemini {
+		if n := countToolResultFlattenedContent(req); n > 0 {
+			notes["tool_result non-text content"] = fmt.Sprintf(
+				"dropped %d non-text part(s) nested in tool_result content (refusal/opaque): this protocol flattens tool output to a plain string, so only the text survives", n)
+		}
+	}
+
 	// 顶层 cache_control 便捷糖官方语义=自动一个缓存断点，与块级断点同维度，
 	// 共用同一条说明（notes 按字段去重，两者并存也只报一条）。
 	if req.TopCacheCtl != "" && !caps.CacheControl {
@@ -178,6 +193,25 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	// 报了就是谎报。
 	if req.Container != nil && name != ProtocolAnthropic {
 		note("container", "no code-execution container reuse or skill declaration, the upstream starts with a fresh container and no skills loaded")
+	}
+	// 消息级发送者名（chat 的 message.name）：只有 chat_completions 解码器落进
+	// IR、只有 chat_completions 编码器回写，其余族没有逐消息作者名字段，跨族整条
+	// 丢失（rule a）。同族 chat→chat 原样保留，故报了就是谎报，排除之。
+	if name != ProtocolChatCompletions {
+		if n := countMessageNames(req); n > 0 {
+			notes["message sender name"] = fmt.Sprintf(
+				"dropped the sender name on %d message(s): the target protocol has no per-message author-name field, the model cannot tell which participant sent them", n)
+		}
+	}
+	// responses 条目原号（item id）：只有 responses 解码器落进 IR、只有 responses
+	// 编码器回写，其余族没有条目 id 槽位。跨族丢弃后，客户端稍后凭 store=true 发来的
+	// item_reference 无处解析（ir.ToolUse.ItemID 注释已明确承诺此丢弃由有损诊断报出，
+	// 此前却无人兑现）。同族 responses→responses 原样回写，排除之。
+	if name != ProtocolResponses {
+		if n := countItemIDs(req); n > 0 {
+			notes["item id"] = fmt.Sprintf(
+				"dropped the responses item id on %d item(s): the target protocol has no item-id slot, a stored-item reference the client sends later will not resolve", n)
+		}
 	}
 	// responses 的 typed tool_choice（mcp/file_search/computer_use 等无 name
 	// 变体，IR 的 Raw 不透明槽、Mode 留零值）：外族的 tool_choice 形状只有
@@ -1533,6 +1567,62 @@ func countRequestRefusals(req *ir.Request) int {
 	for _, m := range req.Messages {
 		for _, b := range m.Content {
 			if b.Type == ir.BlockRefusal {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// countToolResultFlattenedContent 数出会被 joinText 折平丢掉的工具结果非文本
+// 子块（拒绝、不透明块）条数。只数这两种：媒体子块由 shape.go 的
+// moveToolResultMedia 抽出并单独报（见 describeImageLossy），text 子块本就
+// 保留，都不在此列，避免与那两条重叠计数。
+func countToolResultFlattenedContent(req *ir.Request) int {
+	n := 0
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			if b.Type != ir.BlockToolResult || b.ToolResult == nil {
+				continue
+			}
+			for _, c := range b.ToolResult.Content {
+				if c.Type == ir.BlockRefusal || c.Type == ir.BlockOpaque {
+					n++
+				}
+			}
+		}
+	}
+	return n
+}
+
+// countMessageNames 数携带发送者名（message.name）的消息条数。
+// 该字段只由 chat_completions 解码器落进 IR、只由 chat_completions 编码器
+// 回写，故跨到其余族时整条丢失。
+func countMessageNames(req *ir.Request) int {
+	n := 0
+	for _, m := range req.Messages {
+		if m.Name != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// countItemIDs 数携带 responses 条目原号（item id）的项数：消息级 ItemID 与
+// 块级 ToolUse/Thinking.ItemID 都算。该维度只由 responses 解码器落进 IR、
+// 只由 responses 编码器回写，跨族丢弃后客户端稍后发来的 store=true 条目引用
+// 无处解析（ir.ToolUse.ItemID 注释明确承诺此丢弃由有损诊断报出）。
+func countItemIDs(req *ir.Request) int {
+	n := 0
+	for _, m := range req.Messages {
+		if m.ItemID != "" {
+			n++
+		}
+		for _, b := range m.Content {
+			if b.ToolUse != nil && b.ToolUse.ItemID != "" {
+				n++
+			}
+			if b.Thinking != nil && b.Thinking.ItemID != "" {
 				n++
 			}
 		}
