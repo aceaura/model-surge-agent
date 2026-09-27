@@ -1854,6 +1854,16 @@ func LogProbsDropNote(n int) string {
 		"dropped %d logprobs payload(s): per-token log probabilities have no representation in the internal response model, only the generated content is preserved", n)
 }
 
+// ModalityUsageDropNote gemini 上游 usageMetadata 里无法归一的按模态 token 明细
+// 丢弃注记。IR 有输入 TEXT/IMAGE/AUDIO 与输出 TEXT/AUDIO 的模态槽位（已保全），
+// 但没有视频（两侧）、输出侧图片、以及缓存/工具用量的模态细分槽位——这些明细
+// 是对已捕获总量的再细分（聚合 token 总量不丢），只损多模态成本归因的可观测性。
+// 与 LogProbsDropNote 同款「上游给了、IR 无槽位」处置。
+func ModalityUsageDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped %d per-modality token breakdown(s) from the upstream usage metadata: the internal model has no slot for video, output-image, or cache/tool modality splits; aggregate token totals remain preserved", n)
+}
+
 // UsageDetailDropNote usage 细分维度跨族丢弃注记（聚合 token 总量不丢）。
 func UsageDetailDropNote(dims []string) string {
 	return "dropped usage detail(s) (" + strings.Join(dims, ", ") +

@@ -70,6 +70,10 @@ type streamDecoder struct {
 	// droppedLogprobs 计携带 logprobsResult 的候选数：逐 token 对数概率没有 IR
 	// 槽位，与 chat/responses 解码器同款处置（探测存在性→计数→LogProbsDropNote）。
 	droppedLogprobs int
+	// droppedModalityDetails 计 usageMetadata 里无法归一进 IR 模态槽位的按模态
+	// token 明细条数（VIDEO 两侧、输出侧 IMAGE、缓存与工具用量的模态细分），
+	// 经 Notes() 报出——与 droppedLogprobs 同款「给了但 IR 无槽位」处置。
+	droppedModalityDetails int
 }
 
 type openBlock struct {
@@ -121,6 +125,10 @@ func (d *streamDecoder) Notes() []string {
 		notes = append(notes, codec.LogProbsDropNote(d.droppedLogprobs))
 		d.droppedLogprobs = 0
 	}
+	if d.droppedModalityDetails > 0 {
+		notes = append(notes, codec.ModalityUsageDropNote(d.droppedModalityDetails))
+		d.droppedModalityDetails = 0
+	}
 	return codec.DedupeNotes(notes)
 }
 
@@ -162,7 +170,8 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 	out = append(out, d.start(frame)...)
 
 	if frame.UsageMetadata != nil {
-		u := convertUsage(*frame.UsageMetadata)
+		u, droppedModality := convertUsage(*frame.UsageMetadata)
+		d.droppedModalityDetails += droppedModality
 		if d.usage == nil {
 			d.usage = &u
 		} else {
@@ -544,7 +553,11 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	unknownKinds := map[string]bool{}
 	out := &ir.Response{ID: w.ResponseID, Model: w.ModelVersion, Content: []ir.Block{}}
 	if w.UsageMetadata != nil {
-		out.Usage = convertUsage(*w.UsageMetadata)
+		var droppedModality int
+		out.Usage, droppedModality = convertUsage(*w.UsageMetadata)
+		if droppedModality > 0 {
+			notes = append(notes, codec.ModalityUsageDropNote(droppedModality))
+		}
 		// 档位回声随 usageMetadata 到达：此前不读→gemini 上游的实际执行档位
 		// 静默丢失、客户端看不到也无注记。归一后原值进 IR，跨族由入站编码器
 		// 的 MapServiceTierEcho/TierEchoDropNote 处理。
@@ -743,7 +756,7 @@ func normalizeServiceTier(s string) string {
 	return s
 }
 
-func convertUsage(u wireUsage) ir.Usage {
+func convertUsage(u wireUsage) (ir.Usage, int) {
 	out := ir.Usage{
 		InputTokens: u.PromptTokenCount,
 		// 推理消耗与工具调用消耗都不含在 candidatesTokenCount 里，但计费上
@@ -761,7 +774,50 @@ func convertUsage(u wireUsage) ir.Usage {
 	if out.InputTokens < 0 {
 		out.InputTokens = 0
 	}
-	return out
+	// 模态明细：把 gemini 按 TEXT/IMAGE/AUDIO/VIDEO 拆分的 token 归一进 IR 既有
+	// 的模态槽位（与 chat prompt_tokens_details.image_tokens/text_tokens 同维，
+	// 轮次41 已建槽位与持久化链）。IR 无对应槽位的（VIDEO 两侧、输出侧 IMAGE、
+	// 缓存与工具用量的模态细分）计入第二返回值，由调用方经注记报出，不静默丢弃。
+	var unmappable int
+	for _, m := range u.PromptTokensDetails {
+		switch m.Modality {
+		case "TEXT":
+			out.PromptTextTokens += m.TokenCount
+		case "IMAGE":
+			out.PromptImageTokens += m.TokenCount
+		case "AUDIO":
+			out.PromptAudioTokens += m.TokenCount
+		default: // VIDEO / MODALITY_UNSPECIFIED / 未识别：IR 无输入视频槽位。
+			unmappable++
+		}
+	}
+	// 输出侧：Gemini API 用 responseTokensDetails、Vertex 用 candidatesTokensDetails
+	// 指同一份输出明细，同一响应只会给其一，两者都读。
+	for _, m := range u.CandidatesTokensDetails {
+		unmappable += mapOutputModality(&out, m)
+	}
+	for _, m := range u.ResponseTokensDetails {
+		unmappable += mapOutputModality(&out, m)
+	}
+	// 缓存与工具用量的模态细分：IR 只有缓存读取总量与并入输出的工具消耗总量，
+	// 没有按模态的缓存/工具细分槽位，整组计数报出。
+	unmappable += len(u.CacheTokensDetails) + len(u.ToolUsePromptTokensDetails)
+	return out, unmappable
+}
+
+// mapOutputModality 把一条输出侧模态明细归一进 IR，返回无法归一的条数（0 或 1）。
+// 输出侧 IR 只有文本与音频槽位；图片/视频输出（如 gemini 图像生成）无处安放。
+func mapOutputModality(out *ir.Usage, m wireModalityTokenCount) int {
+	switch m.Modality {
+	case "TEXT":
+		out.CompletionTextTokens += m.TokenCount
+		return 0
+	case "AUDIO":
+		out.CompletionAudioTokens += m.TokenCount
+		return 0
+	default: // IMAGE / VIDEO / MODALITY_UNSPECIFIED / 未识别。
+		return 1
+	}
 }
 
 func convertFinishReason(s string) ir.StopReason {

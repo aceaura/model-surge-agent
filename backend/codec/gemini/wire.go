@@ -292,6 +292,26 @@ type wireUsage struct {
 	// 计费/优先级档位、也没有任何注记，与 anthropic/chat/responses 三族都捕获
 	// tier echo 不对称。归一与透传见 decode_stream.go normalizeServiceTier。
 	ServiceTier string `json:"serviceTier,omitempty"`
+	// 以下五个 *TokensDetails 是官方 UsageMetadata 按模态（TEXT/IMAGE/AUDIO/
+	// VIDEO）拆分的 token 明细，元素为 ModalityTokenCount{modality,tokenCount}。
+	// 此前全未建模→多模态 gemini 上游返回时被 json.Unmarshal 静默吞掉，与已保全
+	// 的 chat prompt_tokens_details.image_tokens/text_tokens（轮次41）同一类缺口。
+	// 能归一进 IR 既有模态槽位的（输入 TEXT/IMAGE/AUDIO、输出 TEXT/AUDIO）保全；
+	// IR 无槽位的（VIDEO 两侧、输出侧 IMAGE、缓存与工具用量的模态细分）计数后经
+	// 注记报出，不静默丢弃。Gemini API 用 responseTokensDetails、Vertex 用
+	// candidatesTokensDetails 指同一份输出明细，两者都收。
+	PromptTokensDetails        []wireModalityTokenCount `json:"promptTokensDetails,omitempty"`
+	CandidatesTokensDetails    []wireModalityTokenCount `json:"candidatesTokensDetails,omitempty"`
+	ResponseTokensDetails      []wireModalityTokenCount `json:"responseTokensDetails,omitempty"`
+	CacheTokensDetails         []wireModalityTokenCount `json:"cacheTokensDetails,omitempty"`
+	ToolUsePromptTokensDetails []wireModalityTokenCount `json:"toolUsePromptTokensDetails,omitempty"`
+}
+
+// wireModalityTokenCount 是官方 ModalityTokenCount：一种模态消耗了多少 token。
+// modality 取值 TEXT/IMAGE/AUDIO/VIDEO（及 MODALITY_UNSPECIFIED）。
+type wireModalityTokenCount struct {
+	Modality   string `json:"modality,omitempty"`
+	TokenCount int64  `json:"tokenCount,omitempty"`
 }
 
 type wireError struct {

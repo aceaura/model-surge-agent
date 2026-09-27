@@ -70,11 +70,12 @@ type Usage struct {
 	// 同为输出总量的子集。
 	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens,omitempty"`
 	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens,omitempty"`
-	// PromptImageTokens / PromptTextTokens / CompletionTextTokens 是 Chat 的
-	// 模态明细（prompt_tokens_details 的 image_tokens/text_tokens 与
-	// completion_tokens_details 的 text_tokens）。各自是所在总量的子集而非
-	// 另一项，不参与合计；文本与图片单价不同，看不见就无法对账多模态成本。
-	// 仅 chat 上游给得出，跨族投影时丢弃由 UsageDropDims 报出。
+	// PromptImageTokens / PromptTextTokens / CompletionTextTokens 是
+	// 模态明细（chat 的 prompt_tokens_details 的 image_tokens/text_tokens 与
+	// completion_tokens_details 的 text_tokens；gemini 上游则来自 usageMetadata
+	// 的 promptTokensDetails/candidatesTokensDetails 按模态拆分）。各自是所在
+	// 总量的子集而非另一项，不参与合计；文本与图片单价不同，看不见就无法对账
+	// 多模态成本。chat 与 gemini 上游给得出，跨族投影时丢弃由 UsageDropDims 报出。
 	PromptImageTokens    int64 `json:"prompt_image_tokens,omitempty"`
 	PromptTextTokens     int64 `json:"prompt_text_tokens,omitempty"`
 	CompletionTextTokens int64 `json:"completion_text_tokens,omitempty"`
