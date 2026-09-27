@@ -421,6 +421,17 @@ func candidateCitations(c wireCandidate) []ir.Citation {
 			}
 		}
 	}
+	// url_context 工具的检索确认：只有 SUCCESS（或 UNSPECIFIED/空，即上游
+	// 没给状态时默认成功）的 URL 才是模型实际用到的来源，映进 Citation；
+	// ERROR/PAYWALL/UNSAFE 的 URL 模型没读到内容，不算引用、不采集。
+	if c.UrlContextMetadata != nil {
+		for _, um := range c.UrlContextMetadata.UrlMetadata {
+			switch um.UrlRetrievalStatus {
+			case "", "UNSPECIFIED", "SUCCESS":
+				add(um.RetrievedUrl, "", "")
+			}
+		}
+	}
 	return out
 }
 

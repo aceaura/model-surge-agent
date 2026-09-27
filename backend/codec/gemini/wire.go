@@ -205,6 +205,12 @@ type wireCandidate struct {
 	// 概率槽位，只探测存在性并计数报出——与 chat/responses 解码器同款处置
 	// （LogProbsDropNote）。不建模内部结构：只需知道「有没有」，不需解析内容。
 	LogprobsResult json.RawMessage `json:"logprobsResult,omitempty"`
+	// UrlContextMetadata 是 url_context 工具的检索确认（Output only）：上游
+	// 成功取回的 URL 是来源归属（与 groundingChunks.web 同维），此前未建模→
+	// json.Unmarshal 静默吞掉，与 Round 33 对 citationMetadata/groundingMetadata
+	// 的保全纪律不一致。只采 SUCCESS/UNSPECIFIED 状态的 retrievedUrl 映进
+	// ir.Citation；非成功状态（ERROR/PAYWALL/UNSAFE）的 URL 模型没用到，不是引用。
+	UrlContextMetadata *wireUrlContextMetadata `json:"urlContextMetadata,omitempty"`
 }
 
 // wireCitationMetadata 是候选级引用集合（官方 CitationMetadata.citationSources）。
@@ -246,6 +252,19 @@ type wireRetrievedCtx struct {
 	URI   string `json:"uri,omitempty"`
 	Title string `json:"title,omitempty"`
 	Text  string `json:"text,omitempty"`
+}
+
+// wireUrlContextMetadata 是 url_context 工具的检索结果集合（官方
+// UrlContextMetadata.urlMetadata[]）。只建模 retrievedUrl 与
+// urlRetrievalStatus：前者是来源归属（映进 ir.Citation），后者门控
+// 是否采集（非 SUCCESS 的 URL 模型没用到，不算引用）。
+type wireUrlContextMetadata struct {
+	UrlMetadata []wireUrlMetadata `json:"urlMetadata,omitempty"`
+}
+
+type wireUrlMetadata struct {
+	RetrievedUrl       string `json:"retrievedUrl,omitempty"`
+	UrlRetrievalStatus string `json:"urlRetrievalStatus,omitempty"`
 }
 
 // wireFeedback 的 BlockReason 表示整个请求被安全策略拒了，
