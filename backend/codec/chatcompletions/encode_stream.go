@@ -48,6 +48,9 @@ type streamEncoder struct {
 	// badToolArgs 是关块时判定畸形的工具调用数，Notes() 报出。
 	badToolArgs int
 	stopReason  ir.StopReason
+	// stopSequence 是上游在 stop_sequence 终止时回传的、被命中的那条序列原文。
+	// 本协议 chunk 只有 finish_reason、无字段回显它，Notes() 报出跨族丢弃。
+	stopSequence string
 	// serviceTier 是已映射待回显的执行档位（codec.MapServiceTierEcho），
 	// 一旦收到就挂在此后的每个 chunk 上——chat 的晚到回显补得上。
 	// 不回填已发出的帧——发出去的改不了。
@@ -148,6 +151,9 @@ func (e *streamEncoder) Notes() []string {
 	// 无对应值，renderFinishReason 一律塌进 length，成因与补救方向丢失。
 	// 判据与非流式 EncodeResponseLossy 同源。
 	notes = append(notes, codec.DescribeResponseStopReasonLoss(e.stopReason, Name)...)
+	// 命中的停止序列原文：本协议 chunk 只有 finish_reason、无字段回显具体哪条序列。
+	// 判据与非流式 EncodeResponseLossy 同源。
+	notes = append(notes, codec.DescribeResponseStopSequenceLoss(e.stopReason, e.stopSequence, Name)...)
 	return codec.DedupeNotes(notes)
 }
 
@@ -363,6 +369,10 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 	case ir.EvMessageDelta:
 		if ev.StopReason != "" {
 			e.stopReason = ev.StopReason
+		}
+		// 命中的停止序列随收尾帧抵达（真流式与整份响应投影都落在 EvMessageDelta）。
+		if ev.StopSequence != "" && e.stopSequence == "" {
+			e.stopSequence = ev.StopSequence
 		}
 		// 上游可能只在收尾帧给档位（非流式响应投影成事件时就是这样）。
 		e.mapTier(ev.ServiceTier)

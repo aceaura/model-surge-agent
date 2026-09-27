@@ -139,6 +139,9 @@ func (e *streamEncoder) Notes() []string {
 	// renderStatus 塌进 max_output_tokens（max_messages / steered 是本族原值，
 	// 不折）。判据与非流式 EncodeResponseLossy 同源。
 	notes = append(notes, codec.DescribeResponseStopReasonLoss(e.stopReason, Name)...)
+	// 命中的停止序列原文刻意不在此报：本协议无 stop_sequences 输入字段，responses
+	// 入站请求带不出停止序列，上游无从命中，终止原因恒不为 stop_sequence——与非流式
+	// codec.go 同一裁定（结构性死代码，A2-1 同款）。
 	return codec.DedupeNotes(notes)
 }
 

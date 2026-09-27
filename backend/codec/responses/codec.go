@@ -97,6 +97,11 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	// 塌进 max_output_tokens（max_messages / steered 是本族原值，不折）。
 	// 判据与流式 Notes() 同源。
 	notes = append(notes, codec.DescribeResponseStopReasonLoss(resp.StopReason, Name)...)
+	// 命中的停止序列原文（StopSequence）刻意不在此报：本协议没有 stop_sequences
+	// 输入字段（caps.StopSequences=false），responses 入站请求永远带不出停止序列，
+	// 上游也就无从命中，IR.StopReason 对本协议客户端恒不为 stop_sequence——
+	// DescribeResponseStopSequenceLoss 在此是结构性死代码（A2-1 同款：不加死注记）。
+	// 只有 chat_completions 入站（可发 ≤4 条 stop）配 anthropic 上游才真实可触达。
 	return body, codec.DedupeNotes(notes), nil
 }
 

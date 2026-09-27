@@ -1819,6 +1819,28 @@ func DescribeResponseStopReasonLoss(reason ir.StopReason, name string) []string 
 	return nil
 }
 
+// StopSequenceEchoDropNote 报告「命中了哪条停止序列」这一回显值的跨族丢弃。
+// 措辞与 StopReasonFoldNote 分账：终止原因本身（stop_sequence）折进目标的通用
+// 「stop/completed」是良性改写、不误导补救方向；真正丢的是那条被命中的序列原文，
+// 目标协议根本没有回显它的字段（chat 只有 finish_reason、responses 只有 status）。
+func StopSequenceEchoDropNote() string {
+	return "dropped the matched stop sequence: the upstream reported which stop sequence ended the turn, but this protocol's response has no field to echo it (only the generic finish/status survives); a client that supplied several stop sequences cannot tell which one matched"
+}
+
+// DescribeResponseStopSequenceLoss 报跨族「命中停止序列回显值」的丢弃。
+// ir.Response.StopSequence 只在终止原因确为 stop_sequence 时携带那条序列原文
+// （见 anthropic adoptStopSequence），而只有 anthropic 出站协议有 stop_sequence
+// 字段能原样回吐；chat_completions / responses 都没有对应槽位，值整条蒸发且此前
+// 静默。谓词与编码侧同源：原因非 stop_sequence、或上游没给序列原文时无值可丢，
+// 不报（避免假阳性）；anthropic 出站原样保留，也不报。gemini 仅出站、无响应侧
+// 编码点，不涉及。三条路径共用：非流式 EncodeResponseLossy 与流式 Notes()。
+func DescribeResponseStopSequenceLoss(reason ir.StopReason, seq, name string) []string {
+	if reason == ir.StopStopSequence && seq != "" && name != ProtocolAnthropic {
+		return []string{StopSequenceEchoDropNote()}
+	}
+	return nil
+}
+
 // ServerToolDropNote 服务端托管工具块丢失注记。server_tool_use 与
 // web_search_tool_result 是**有 IR 块型**的，三个外族编码器都没有为它们
 // 输出任何对应形态：整块消失且不计数时，接收端既看不到网关代执行了哪次
