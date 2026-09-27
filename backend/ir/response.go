@@ -70,6 +70,14 @@ type Usage struct {
 	// 同为输出总量的子集。
 	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens,omitempty"`
 	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens,omitempty"`
+	// PromptImageTokens / PromptTextTokens / CompletionTextTokens 是 Chat 的
+	// 模态明细（prompt_tokens_details 的 image_tokens/text_tokens 与
+	// completion_tokens_details 的 text_tokens）。各自是所在总量的子集而非
+	// 另一项，不参与合计；文本与图片单价不同，看不见就无法对账多模态成本。
+	// 仅 chat 上游给得出，跨族投影时丢弃由 UsageDropDims 报出。
+	PromptImageTokens    int64 `json:"prompt_image_tokens,omitempty"`
+	PromptTextTokens     int64 `json:"prompt_text_tokens,omitempty"`
+	CompletionTextTokens int64 `json:"completion_text_tokens,omitempty"`
 	// InferenceGeo Anthropic 响应侧回显的实际推理区域（usage.inference_geo）。
 	// 请求侧的同名偏好字段在 Request 上；这里只是回执，不参与调度，
 	// 也仅同族出站写得回去。
@@ -119,6 +127,16 @@ func MergeUsage(into *Usage, u Usage) {
 	}
 	if u.RejectedPredictionTokens > 0 {
 		into.RejectedPredictionTokens = u.RejectedPredictionTokens
+	}
+	// 模态明细（图片/文本）同为只在收尾帧出现一次的输出/输入细分数，非零后到覆盖。
+	if u.PromptImageTokens > 0 {
+		into.PromptImageTokens = u.PromptImageTokens
+	}
+	if u.PromptTextTokens > 0 {
+		into.PromptTextTokens = u.PromptTextTokens
+	}
+	if u.CompletionTextTokens > 0 {
+		into.CompletionTextTokens = u.CompletionTextTokens
 	}
 	if u.InferenceGeo != "" {
 		into.InferenceGeo = u.InferenceGeo

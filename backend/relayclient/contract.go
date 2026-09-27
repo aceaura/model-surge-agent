@@ -142,6 +142,12 @@ type Usage struct {
 	CompletionAudioTokens    int64 `json:"completion_audio_tokens,omitempty"`
 	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens,omitempty"`
 	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens,omitempty"`
+	// PromptImage/PromptText/CompletionText 是 chat 的模态明细（各自是所在
+	// 总量的子集）。同音频/预测口径：如实交出去，调度层不认识这些键也无妨，
+	// runstate 只累计前三位，多出来的键被忽略，本服务的 request_log 照记。
+	PromptImageTokens    int64 `json:"prompt_image_tokens,omitempty"`
+	PromptTextTokens     int64 `json:"prompt_text_tokens,omitempty"`
+	CompletionTextTokens int64 `json:"completion_text_tokens,omitempty"`
 }
 
 // Outcome 决定调度层如何更新运行态，语义由 relay 的 runstate 定义。

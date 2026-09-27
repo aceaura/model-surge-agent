@@ -8,13 +8,13 @@ import (
 	"github.com/aceaura/model-surge-agent/backend/relayclient"
 )
 
-// usageAllThirteen 是十三位各不相同的一组用量。
+// usageAllSixteen 是十六位各不相同的一组用量。
 //
-// 十三个值刻意互不相同且都非零：同为 BIGINT 的列在列序与 Scan 序错位后照样扫得成功，
+// 十六个值刻意互不相同且都非零：同为 BIGINT 的列在列序与 Scan 序错位后照样扫得成功，
 // 只是值互换；给相同的值或留零值就测不出错位，而错位的症状是运维看到的成本
 // 归因整个错位。5m/1h 两位还要与合计位（4004）不同：明细恰好等于合计时
 // 「搬错到合计列」也测不出来。
-func usageAllThirteen() relayclient.Usage {
+func usageAllSixteen() relayclient.Usage {
 	return relayclient.Usage{
 		InputTokens:              1001,
 		OutputTokens:             2002,
@@ -29,12 +29,15 @@ func usageAllThirteen() relayclient.Usage {
 		CompletionAudioTokens:    11011,
 		AcceptedPredictionTokens: 12012,
 		RejectedPredictionTokens: 13013,
+		PromptImageTokens:        14014,
+		PromptTextTokens:         15015,
+		CompletionTextTokens:     16016,
 	}
 }
 
 func assertUsage(t *testing.T, got relayclient.Usage) {
 	t.Helper()
-	want := usageAllThirteen()
+	want := usageAllSixteen()
 	if got.CacheWriteTokens != want.CacheWriteTokens {
 		t.Errorf("cache_write_tokens = %d，want %d；记零意味着缓存写入的成本"+
 			"完全不入账，而客户端那侧确实收到了这个数字",
@@ -48,8 +51,8 @@ func assertUsage(t *testing.T, got relayclient.Usage) {
 	}
 }
 
-// 判据 3：十三位用量的落库往返。
-func TestUsageThirteenDimensionsRoundTrip(t *testing.T) {
+// 判据 3：十六位用量的落库往返。
+func TestUsageSixteenDimensionsRoundTrip(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
 	log := NewRequestLog(s.Pool())
@@ -59,7 +62,7 @@ func TestUsageThirteenDimensionsRoundTrip(t *testing.T) {
 		InboundProtocol: "anthropic",
 		UserModel:       "kimi-k3",
 		Outcome:         "normal",
-		Usage:           usageAllThirteen(),
+		Usage:           usageAllSixteen(),
 	}
 	if err := log.Insert(ctx, in); err != nil {
 		t.Fatalf("insert: %v", err)
@@ -76,7 +79,7 @@ func TestUsageThirteenDimensionsRoundTrip(t *testing.T) {
 // 单独一条而不是并进上面：DO UPDATE 的列清单与 INSERT 的列清单是两处，
 // 漏掉其中一处时首次插入正确、重写后那两位粘住旧值。一次请求的终态上报
 // 走的正是重写这条路（受理面与终态可能两次写同一个 request_id）。
-func TestUsageThirteenDimensionsSurviveUpsert(t *testing.T) {
+func TestUsageSixteenDimensionsSurviveUpsert(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
 	log := NewRequestLog(s.Pool())
@@ -93,7 +96,7 @@ func TestUsageThirteenDimensionsSurviveUpsert(t *testing.T) {
 	}
 	// 终态重写：用量到了。
 	base.Outcome = "normal"
-	base.Usage = usageAllThirteen()
+	base.Usage = usageAllSixteen()
 	if err := log.Insert(ctx, base); err != nil {
 		t.Fatalf("重写 insert: %v", err)
 	}
@@ -117,7 +120,8 @@ func TestUsageColumnsAreAddedToOlderTables(t *testing.T) {
 		"cache_write_5m_tokens", "cache_write_1h_tokens",
 		"web_search_requests", "web_fetch_requests",
 		"prompt_audio_tokens", "completion_audio_tokens",
-		"accepted_prediction_tokens", "rejected_prediction_tokens"} {
+		"accepted_prediction_tokens", "rejected_prediction_tokens",
+		"prompt_image_tokens", "prompt_text_tokens", "completion_text_tokens"} {
 		if _, err := s.Pool().Exec(ctx,
 			"ALTER TABLE request_log DROP COLUMN IF EXISTS "+col); err != nil {
 			t.Fatalf("drop %s: %v", col, err)
@@ -133,7 +137,7 @@ func TestUsageColumnsAreAddedToOlderTables(t *testing.T) {
 		InboundProtocol: "anthropic",
 		UserModel:       "kimi-k3",
 		Outcome:         "normal",
-		Usage:           usageAllThirteen(),
+		Usage:           usageAllSixteen(),
 	}
 	if err := log.Insert(ctx, in); err != nil {
 		t.Fatalf("补列后 insert: %v", err)

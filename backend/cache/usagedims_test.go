@@ -35,6 +35,9 @@ func TestLiveEntryCarriesEveryUsageDimension(t *testing.T) {
 		CompletionAudioTokens:    222,
 		AcceptedPredictionTokens: 333,
 		RejectedPredictionTokens: 444,
+		PromptImageTokens:        555,
+		PromptTextTokens:         666,
+		CompletionTextTokens:     777,
 	}
 	c.PushLive(ctx, want)
 
@@ -56,6 +59,10 @@ func TestLiveEntryCarriesEveryUsageDimension(t *testing.T) {
 		got[0].AcceptedPredictionTokens != 333 || got[0].RejectedPredictionTokens != 444 {
 		t.Errorf("六维新增往返丢了：%+v", got[0])
 	}
+	if got[0].PromptImageTokens != 555 || got[0].PromptTextTokens != 666 ||
+		got[0].CompletionTextTokens != 777 {
+		t.Errorf("模态明细三维往返丢了：%+v", got[0])
+	}
 	if got[0].InputTokens != 11 || got[0].OutputTokens != 22 {
 		t.Errorf("原有两维被改坏了：入 %d 出 %d", got[0].InputTokens, got[0].OutputTokens)
 	}
@@ -73,6 +80,7 @@ func TestBucketAccumulatesEveryUsageDimension(t *testing.T) {
 		WebSearchRequests: 80, WebFetchRequests: 90,
 		PromptAudioTokens: 100, CompletionAudioTokens: 110,
 		AcceptedPredictionTokens: 120, RejectedPredictionTokens: 130,
+		PromptImageTokens: 140, PromptTextTokens: 150, CompletionTextTokens: 160,
 	}, 100)
 	c.Incr(ctx, now, "normal", relayclient.Usage{
 		InputTokens: 1, OutputTokens: 2,
@@ -81,6 +89,7 @@ func TestBucketAccumulatesEveryUsageDimension(t *testing.T) {
 		WebSearchRequests: 8, WebFetchRequests: 9,
 		PromptAudioTokens: 10, CompletionAudioTokens: 11,
 		AcceptedPredictionTokens: 12, RejectedPredictionTokens: 13,
+		PromptImageTokens: 14, PromptTextTokens: 15, CompletionTextTokens: 16,
 	}, 10)
 
 	buckets := c.Buckets(ctx, now, time.Minute)
@@ -106,6 +115,9 @@ func TestBucketAccumulatesEveryUsageDimension(t *testing.T) {
 		{"completion_audio", b.CompletionAudioTokens, 121},
 		{"accepted_pred", b.AcceptedPredictionTokens, 132},
 		{"rejected_pred", b.RejectedPredictionTokens, 143},
+		{"prompt_image", b.PromptImageTokens, 154},
+		{"prompt_text", b.PromptTextTokens, 165},
+		{"completion_text", b.CompletionTextTokens, 176},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %d，想要 %d", tc.name, tc.got, tc.want)
@@ -141,6 +153,9 @@ func TestSummaryWithoutNewFieldsStillDecodes(t *testing.T) {
 		e.PromptAudioTokens != 0 || e.CompletionAudioTokens != 0 ||
 		e.AcceptedPredictionTokens != 0 || e.RejectedPredictionTokens != 0 {
 		t.Errorf("缺失的六维新增该读作零：%+v", e)
+	}
+	if e.PromptImageTokens != 0 || e.PromptTextTokens != 0 || e.CompletionTextTokens != 0 {
+		t.Errorf("缺失的模态明细三维该读作零：%+v", e)
 	}
 	// 三态的零值必须是「未知」而不是「落库失败」。
 	if e.LogPersisted != nil {
@@ -179,5 +194,8 @@ func TestBucketWithoutNewFieldsReadsAsZero(t *testing.T) {
 		b.PromptAudioTokens != 0 || b.CompletionAudioTokens != 0 ||
 		b.AcceptedPredictionTokens != 0 || b.RejectedPredictionTokens != 0 {
 		t.Errorf("缺失的六维新增键该读作零：%+v", b)
+	}
+	if b.PromptImageTokens != 0 || b.PromptTextTokens != 0 || b.CompletionTextTokens != 0 {
+		t.Errorf("缺失的模态明细三维键该读作零：%+v", b)
 	}
 }

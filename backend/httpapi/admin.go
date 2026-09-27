@@ -188,6 +188,9 @@ func (a *Admin) stats(w http.ResponseWriter, r *http.Request) {
 			CompletionAudioTokens:    b.CompletionAudioTokens,
 			AcceptedPredictionTokens: b.AcceptedPredictionTokens,
 			RejectedPredictionTokens: b.RejectedPredictionTokens,
+			PromptImageTokens:        b.PromptImageTokens,
+			PromptTextTokens:         b.PromptTextTokens,
+			CompletionTextTokens:     b.CompletionTextTokens,
 			AvgLatencyMS:             avg(b.LatencySumMS, b.Total),
 		})
 		totals.Total += b.Total
@@ -204,6 +207,9 @@ func (a *Admin) stats(w http.ResponseWriter, r *http.Request) {
 		totals.CompletionAudioTokens += b.CompletionAudioTokens
 		totals.AcceptedPredictionTokens += b.AcceptedPredictionTokens
 		totals.RejectedPredictionTokens += b.RejectedPredictionTokens
+		totals.PromptImageTokens += b.PromptImageTokens
+		totals.PromptTextTokens += b.PromptTextTokens
+		totals.CompletionTextTokens += b.CompletionTextTokens
 		for k, v := range b.Outcomes {
 			totals.Outcomes[k] += v
 		}
@@ -339,6 +345,9 @@ func summaryOf(rec pipeline.Record) agentv1.RequestSummary {
 		CompletionAudioTokens:    rec.Usage.CompletionAudioTokens,
 		AcceptedPredictionTokens: rec.Usage.AcceptedPredictionTokens,
 		RejectedPredictionTokens: rec.Usage.RejectedPredictionTokens,
+		PromptImageTokens:        rec.Usage.PromptImageTokens,
+		PromptTextTokens:         rec.Usage.PromptTextTokens,
+		CompletionTextTokens:     rec.Usage.CompletionTextTokens,
 		LatencyMS:                rec.LatencyMS,
 		FirstTokenMS:             rec.FirstTokenMS,
 		DispatchMS:               rec.DispatchMS,

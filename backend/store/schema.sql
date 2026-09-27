@@ -36,6 +36,11 @@ CREATE TABLE IF NOT EXISTS request_log (
   completion_audio_tokens     BIGINT NOT NULL DEFAULT 0,
   accepted_prediction_tokens  BIGINT NOT NULL DEFAULT 0,
   rejected_prediction_tokens  BIGINT NOT NULL DEFAULT 0,
+  -- chat 的模态明细（prompt_tokens_details 的 image/text、
+  -- completion_tokens_details 的 text，各自是所在总量的子集）。非 chat 上游恒为 0。
+  prompt_image_tokens         BIGINT NOT NULL DEFAULT 0,
+  prompt_text_tokens          BIGINT NOT NULL DEFAULT 0,
+  completion_text_tokens      BIGINT NOT NULL DEFAULT 0,
   latency_ms        INT NOT NULL DEFAULT 0,
   first_token_ms    INT NOT NULL DEFAULT 0,
   -- 两段跨进程耗时的累计值（含全部重试）。latency_ms 减去两段
@@ -71,6 +76,9 @@ ALTER TABLE request_log ADD COLUMN IF NOT EXISTS prompt_audio_tokens BIGINT NOT 
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS completion_audio_tokens BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS accepted_prediction_tokens BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE request_log ADD COLUMN IF NOT EXISTS rejected_prediction_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS prompt_image_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS prompt_text_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE request_log ADD COLUMN IF NOT EXISTS completion_text_tokens BIGINT NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS request_log_at_idx ON request_log(at DESC);
 CREATE INDEX IF NOT EXISTS request_log_model_idx ON request_log(model_id, at DESC);

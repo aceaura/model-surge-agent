@@ -56,8 +56,9 @@ func (l *RequestLog) Insert(ctx context.Context, rec pipeline.Record) error {
 			prompt_audio_tokens, completion_audio_tokens,
 			accepted_prediction_tokens, rejected_prediction_tokens,
 			latency_ms, first_token_ms, error_code, error_message, sanitized, lossy,
-			retry_after, dispatch_ms, upstream_ms, attempts_trail)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38)
+			retry_after, dispatch_ms, upstream_ms, attempts_trail,
+			prompt_image_tokens, prompt_text_tokens, completion_text_tokens)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41)
 		ON CONFLICT (request_id) DO UPDATE SET
 			at = EXCLUDED.at, outbound_protocol = EXCLUDED.outbound_protocol,
 			model_id = EXCLUDED.model_id, account = EXCLUDED.account,
@@ -81,7 +82,10 @@ func (l *RequestLog) Insert(ctx context.Context, rec pipeline.Record) error {
 			sanitized = EXCLUDED.sanitized, lossy = EXCLUDED.lossy,
 			retry_after = EXCLUDED.retry_after,
 			dispatch_ms = EXCLUDED.dispatch_ms, upstream_ms = EXCLUDED.upstream_ms,
-			attempts_trail = EXCLUDED.attempts_trail`,
+			attempts_trail = EXCLUDED.attempts_trail,
+			prompt_image_tokens = EXCLUDED.prompt_image_tokens,
+			prompt_text_tokens = EXCLUDED.prompt_text_tokens,
+			completion_text_tokens = EXCLUDED.completion_text_tokens`,
 		rec.RequestID, at, rec.InboundProtocol, rec.Path, rec.UserModel, rec.OutboundProtocol,
 		rec.ModelID, rec.Account, rec.Outcome, rec.StatusCode, rec.Attempts, tried,
 		rec.Committed, rec.Stream, rec.UsageEstimated,
@@ -93,7 +97,8 @@ func (l *RequestLog) Insert(ctx context.Context, rec pipeline.Record) error {
 		rec.Usage.AcceptedPredictionTokens, rec.Usage.RejectedPredictionTokens,
 		rec.LatencyMS, rec.FirstTokenMS,
 		textsafe.Clean(rec.ErrorCode), textsafe.Clean(rec.ErrorMessage), sanitized, lossy,
-		zeroTimeAsNull(rec.RetryAfter), rec.DispatchMS, rec.UpstreamMS, trail)
+		zeroTimeAsNull(rec.RetryAfter), rec.DispatchMS, rec.UpstreamMS, trail,
+		rec.Usage.PromptImageTokens, rec.Usage.PromptTextTokens, rec.Usage.CompletionTextTokens)
 	return err
 }
 
@@ -233,7 +238,8 @@ const recordColumns = `request_id, at, inbound_protocol, path, user_model, outbo
 	prompt_audio_tokens, completion_audio_tokens,
 	accepted_prediction_tokens, rejected_prediction_tokens,
 	latency_ms, first_token_ms, error_code, error_message, sanitized, lossy, retry_after,
-	dispatch_ms, upstream_ms, attempts_trail`
+	dispatch_ms, upstream_ms, attempts_trail,
+	prompt_image_tokens, prompt_text_tokens, completion_text_tokens`
 
 func scanRecord(rows pgx.Rows) (pipeline.Record, error) {
 	var (
@@ -256,7 +262,8 @@ func scanRecord(rows pgx.Rows) (pipeline.Record, error) {
 		&rec.Usage.PromptAudioTokens, &rec.Usage.CompletionAudioTokens,
 		&rec.Usage.AcceptedPredictionTokens, &rec.Usage.RejectedPredictionTokens,
 		&rec.LatencyMS, &rec.FirstTokenMS, &rec.ErrorCode, &rec.ErrorMessage,
-		&sanitized, &lossy, &retryAfter, &rec.DispatchMS, &rec.UpstreamMS, &trail); err != nil {
+		&sanitized, &lossy, &retryAfter, &rec.DispatchMS, &rec.UpstreamMS, &trail,
+		&rec.Usage.PromptImageTokens, &rec.Usage.PromptTextTokens, &rec.Usage.CompletionTextTokens); err != nil {
 		return rec, err
 	}
 	if retryAfter != nil {

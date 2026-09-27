@@ -1865,8 +1865,9 @@ func UsageDetailDropNote(dims []string) string {
 // 同一响应按 stream=true/false 请求报出的损耗一致。
 //
 // 细分维度的原生槽位：服务端托管工具执行次数、推理区域与迭代用量细分只有
-// anthropic 有；音频与预测加速 token 只有 chat 有。与 CacheWriteDetailsKnown
-// 的门控不同，这几位不需要「明细已知」标记：非零值本身就是上游给过的证据。
+// anthropic 有；音频、预测加速与图片/文本模态 token 只有 chat 有。与
+// CacheWriteDetailsKnown 的门控不同，这几位不需要「明细已知」标记：非零值本身
+// 就是上游给过的证据。
 func UsageDropDims(u *ir.Usage, protoName string) []string {
 	if u == nil {
 		return nil
@@ -1895,6 +1896,15 @@ func UsageDropDims(u *ir.Usage, protoName string) []string {
 		}
 		if u.AcceptedPredictionTokens > 0 || u.RejectedPredictionTokens > 0 {
 			dims = append(dims, "prediction tokens")
+		}
+		if u.PromptImageTokens > 0 {
+			dims = append(dims, "prompt image tokens")
+		}
+		if u.PromptTextTokens > 0 {
+			dims = append(dims, "prompt text tokens")
+		}
+		if u.CompletionTextTokens > 0 {
+			dims = append(dims, "completion text tokens")
 		}
 	}
 	return dims

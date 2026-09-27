@@ -660,6 +660,9 @@ func convertUsage(u wireUsage) ir.Usage {
 		out.PromptAudioTokens = u.PromptTokensDetails.AudioTokens
 		// 缓存写入量的官方位置在嵌套位，优先于下面的顶层兼容别名。
 		out.CacheWriteTokens = u.PromptTokensDetails.CacheWriteTokens
+		// 输入按模态的细分：图片与文本单价不同，读进来才能对账多模态成本。
+		out.PromptImageTokens = u.PromptTokensDetails.ImageTokens
+		out.PromptTextTokens = u.PromptTokensDetails.TextTokens
 	}
 	if out.CacheReadTokens == 0 {
 		out.CacheReadTokens = u.PromptCacheHitTokens
@@ -680,6 +683,8 @@ func convertUsage(u wireUsage) ir.Usage {
 		out.CompletionAudioTokens = u.CompletionTokensDetails.AudioTokens
 		out.AcceptedPredictionTokens = u.CompletionTokensDetails.AcceptedPredictionTokens
 		out.RejectedPredictionTokens = u.CompletionTokensDetails.RejectedPredictionTokens
+		// 输出文本细分：与推理/音频并列的 completion_tokens 子集。
+		out.CompletionTextTokens = u.CompletionTokensDetails.TextTokens
 	}
 	// 本协议的 prompt_tokens 含缓存命中，而 IR 的 InputTokens 定义为
 	// 不含缓存的新鲜输入，故减去。上游数字不自洽时钳到 0，不出负数。
@@ -698,11 +703,14 @@ func renderUsage(u ir.Usage) wireUsage {
 		CompletionTokens: u.OutputTokens,
 		TotalTokens:      prompt + u.OutputTokens,
 	}
-	if u.CacheReadTokens > 0 || u.PromptAudioTokens > 0 || u.CacheWriteTokens > 0 {
+	if u.CacheReadTokens > 0 || u.PromptAudioTokens > 0 || u.CacheWriteTokens > 0 ||
+		u.PromptImageTokens > 0 || u.PromptTextTokens > 0 {
 		out.PromptTokensDetails = &wirePromptDetails{
 			CachedTokens:     u.CacheReadTokens,
 			AudioTokens:      u.PromptAudioTokens,
 			CacheWriteTokens: u.CacheWriteTokens,
+			ImageTokens:      u.PromptImageTokens,
+			TextTokens:       u.PromptTextTokens,
 		}
 	}
 	// 缓存写入量两处都写：官方嵌套位（prompt_tokens_details.cache_write_tokens，
@@ -712,14 +720,16 @@ func renderUsage(u ir.Usage) wireUsage {
 		out.CacheWriteTokens = u.CacheWriteTokens
 	}
 	// 本协议表达得了推理维度，如实写出，让客户端看得见推理占比。
-	// 音频与预测加速明细同为输出侧细分，有值就一并带出。
+	// 音频、预测加速与输出文本明细同为输出侧细分，有值就一并带出。
 	if u.ReasoningTokens > 0 || u.CompletionAudioTokens > 0 ||
-		u.AcceptedPredictionTokens > 0 || u.RejectedPredictionTokens > 0 {
+		u.AcceptedPredictionTokens > 0 || u.RejectedPredictionTokens > 0 ||
+		u.CompletionTextTokens > 0 {
 		out.CompletionTokensDetails = &wireCompletionDetails{
 			ReasoningTokens:          u.ReasoningTokens,
 			AudioTokens:              u.CompletionAudioTokens,
 			AcceptedPredictionTokens: u.AcceptedPredictionTokens,
 			RejectedPredictionTokens: u.RejectedPredictionTokens,
+			TextTokens:               u.CompletionTextTokens,
 		}
 	}
 	return out

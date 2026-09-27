@@ -479,5 +479,9 @@ func usageOf(agg *ir.Aggregator) relayclient.Usage {
 		CompletionAudioTokens:    u.CompletionAudioTokens,
 		AcceptedPredictionTokens: u.AcceptedPredictionTokens,
 		RejectedPredictionTokens: u.RejectedPredictionTokens,
+		// 模态明细三位（图片/文本输入、文本输出）同理照搬。
+		PromptImageTokens:    u.PromptImageTokens,
+		PromptTextTokens:     u.PromptTextTokens,
+		CompletionTextTokens: u.CompletionTextTokens,
 	}
 }

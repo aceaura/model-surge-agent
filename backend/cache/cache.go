@@ -149,13 +149,18 @@ type LiveEntry struct {
 	CacheWrite1hTokens int64 `json:"cache_write_1h_tokens,omitempty"`
 	// 托管工具次数（按次计费）与音频/预测明细四位：同为「客户端收到了
 	// 而摘要里没有就对不上账」的维度，口径与上面五位一致。
-	WebSearchRequests        int64  `json:"web_search_requests,omitempty"`
-	WebFetchRequests         int64  `json:"web_fetch_requests,omitempty"`
-	PromptAudioTokens        int64  `json:"prompt_audio_tokens,omitempty"`
-	CompletionAudioTokens    int64  `json:"completion_audio_tokens,omitempty"`
-	AcceptedPredictionTokens int64  `json:"accepted_prediction_tokens,omitempty"`
-	RejectedPredictionTokens int64  `json:"rejected_prediction_tokens,omitempty"`
-	ErrorCode                string `json:"error_code,omitempty"`
+	WebSearchRequests        int64 `json:"web_search_requests,omitempty"`
+	WebFetchRequests         int64 `json:"web_fetch_requests,omitempty"`
+	PromptAudioTokens        int64 `json:"prompt_audio_tokens,omitempty"`
+	CompletionAudioTokens    int64 `json:"completion_audio_tokens,omitempty"`
+	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens,omitempty"`
+	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens,omitempty"`
+	// 模态明细三位（图片/文本输入、文本输出）：同为「客户端收到了而摘要里
+	// 没有就对不上账」的维度，口径与上面一致。
+	PromptImageTokens    int64  `json:"prompt_image_tokens,omitempty"`
+	PromptTextTokens     int64  `json:"prompt_text_tokens,omitempty"`
+	CompletionTextTokens int64  `json:"completion_text_tokens,omitempty"`
+	ErrorCode            string `json:"error_code,omitempty"`
 	// LogPersisted 是三态：nil 表示没配 PG（未尝试落库），false 表示尝试过
 	// 且失败——这条记录不在 /admin/requests 里，true 表示成功。
 	//
@@ -230,7 +235,11 @@ type Bucket struct {
 	CompletionAudioTokens    int64 `json:"completion_audio_tokens"`
 	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens"`
 	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens"`
-	LatencySumMS             int64 `json:"latency_sum_ms"`
+	// 模态明细三位：各占一个 hash 字段，独立累计不加权。
+	PromptImageTokens    int64 `json:"prompt_image_tokens"`
+	PromptTextTokens     int64 `json:"prompt_text_tokens"`
+	CompletionTextTokens int64 `json:"completion_text_tokens"`
+	LatencySumMS         int64 `json:"latency_sum_ms"`
 }
 
 // 分钟桶里的固定字段名。outcome 的计数键加前缀区分，
@@ -253,6 +262,10 @@ const (
 	fieldCompAudio   = "completion_audio"
 	fieldAccPred     = "accepted_pred"
 	fieldRejPred     = "rejected_pred"
+	// 模态明细三位同理各占一个字段。
+	fieldPromptImage = "prompt_image"
+	fieldPromptText  = "prompt_text"
+	fieldCompText    = "completion_text"
 	fieldLatency     = "latency"
 	outcomeAffix     = "o:"
 )
@@ -289,6 +302,9 @@ func (c *Cache) Incr(ctx context.Context, at time.Time, outcome string,
 	pipe.HIncrBy(ctx, key, fieldCompAudio, usage.CompletionAudioTokens)
 	pipe.HIncrBy(ctx, key, fieldAccPred, usage.AcceptedPredictionTokens)
 	pipe.HIncrBy(ctx, key, fieldRejPred, usage.RejectedPredictionTokens)
+	pipe.HIncrBy(ctx, key, fieldPromptImage, usage.PromptImageTokens)
+	pipe.HIncrBy(ctx, key, fieldPromptText, usage.PromptTextTokens)
+	pipe.HIncrBy(ctx, key, fieldCompText, usage.CompletionTextTokens)
 	pipe.HIncrBy(ctx, key, fieldLatency, int64(latencyMS))
 	// TTL 每次刷新：桶写完就不再动，靠过期自行清理，不需要额外的清扫任务。
 	pipe.Expire(ctx, key, statTTL)
@@ -368,6 +384,12 @@ func bucketFrom(minute time.Time, fields map[string]string) Bucket {
 			b.AcceptedPredictionTokens = n
 		case fieldRejPred:
 			b.RejectedPredictionTokens = n
+		case fieldPromptImage:
+			b.PromptImageTokens = n
+		case fieldPromptText:
+			b.PromptTextTokens = n
+		case fieldCompText:
+			b.CompletionTextTokens = n
 		case fieldLatency:
 			b.LatencySumMS = n
 		default:

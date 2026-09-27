@@ -78,8 +78,12 @@ func (r *Recorder) Record(rec pipeline.Record) {
 		CompletionAudioTokens:    rec.Usage.CompletionAudioTokens,
 		AcceptedPredictionTokens: rec.Usage.AcceptedPredictionTokens,
 		RejectedPredictionTokens: rec.Usage.RejectedPredictionTokens,
-		ErrorCode:                rec.ErrorCode,
-		LogPersisted:             persisted,
+		// 模态明细三位：与明细列一一对应，缺一位就多一处两视图对不上的账。
+		PromptImageTokens:    rec.Usage.PromptImageTokens,
+		PromptTextTokens:     rec.Usage.PromptTextTokens,
+		CompletionTextTokens: rec.Usage.CompletionTextTokens,
+		ErrorCode:            rec.ErrorCode,
+		LogPersisted:         persisted,
 	})
 	r.Cache.Incr(ctx, rec.At, rec.Outcome, rec.Usage, rec.LatencyMS)
 }

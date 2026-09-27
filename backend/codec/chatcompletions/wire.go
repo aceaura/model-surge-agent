@@ -341,6 +341,11 @@ type wirePromptDetails struct {
 	// 与 anthropic 的 cache_creation_input_tokens、responses 的
 	// input_tokens_details.cache_write_tokens 同一位。不读就把对账凭证弄丢。
 	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+	// ImageTokens / TextTokens 是输入按模态的细分（官方 prompt_tokens_details
+	// 的 image_tokens / text_tokens）。图片与文本单价不同，不读就把多模态
+	// 成本归因弄丢，而客户端那侧本来收得到这两个数。
+	ImageTokens int64 `json:"image_tokens,omitempty"`
+	TextTokens  int64 `json:"text_tokens,omitempty"`
 }
 
 // wireCompletionDetails 的 reasoning_tokens 已含在 completion_tokens 内。
@@ -352,6 +357,9 @@ type wireCompletionDetails struct {
 	//（speculative decoding）的命中与拒绝数，同为输出总量的子集。
 	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens,omitempty"`
 	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens,omitempty"`
+	// TextTokens 输出文本的 token 量（官方 completion_tokens_details 的
+	// text_tokens），是 completion_tokens 的子集，与推理/音频并列。
+	TextTokens int64 `json:"text_tokens,omitempty"`
 }
 
 type wireError struct {
