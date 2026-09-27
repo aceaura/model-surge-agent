@@ -324,7 +324,9 @@ type wireUsage struct {
 	PromptCacheHitTokens int64 `json:"prompt_cache_hit_tokens,omitempty"`
 	// CacheReadInputTokens 是照搬 Anthropic 命名的兼容层写法，同为缓存读取量。
 	CacheReadInputTokens int64 `json:"cache_read_input_tokens,omitempty"`
-	// 缓存写入量在本协议里没有官方字段，两个别名都是兼容层自造的。
+	// 缓存写入量：官方位置是 prompt_tokens_details.cache_write_tokens（见
+	// wirePromptDetails），下面两个顶层别名是兼容层自造的写法。解码优先取官方
+	// 嵌套位，回落到别名；编码两处都写，兼容只认顶层别名的客户端。
 	CacheWriteTokens    int64 `json:"cache_write_tokens,omitempty"`
 	CacheCreationTokens int64 `json:"cache_creation_tokens,omitempty"`
 	// CompletionTokensDetails 是本协议报推理消耗的位置。
@@ -335,6 +337,10 @@ type wirePromptDetails struct {
 	CachedTokens int64 `json:"cached_tokens,omitempty"`
 	// AudioTokens 输入音频的 token 量，是 prompt_tokens 的子集。
 	AudioTokens int64 `json:"audio_tokens,omitempty"`
+	// CacheWriteTokens 缓存写入量的官方位置（prompt_tokens_details 的细分键），
+	// 与 anthropic 的 cache_creation_input_tokens、responses 的
+	// input_tokens_details.cache_write_tokens 同一位。不读就把对账凭证弄丢。
+	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
 }
 
 // wireCompletionDetails 的 reasoning_tokens 已含在 completion_tokens 内。

@@ -658,6 +658,8 @@ func convertUsage(u wireUsage) ir.Usage {
 	if u.PromptTokensDetails != nil {
 		out.CacheReadTokens = u.PromptTokensDetails.CachedTokens
 		out.PromptAudioTokens = u.PromptTokensDetails.AudioTokens
+		// 缓存写入量的官方位置在嵌套位，优先于下面的顶层兼容别名。
+		out.CacheWriteTokens = u.PromptTokensDetails.CacheWriteTokens
 	}
 	if out.CacheReadTokens == 0 {
 		out.CacheReadTokens = u.PromptCacheHitTokens
@@ -665,7 +667,10 @@ func convertUsage(u wireUsage) ir.Usage {
 	if out.CacheReadTokens == 0 {
 		out.CacheReadTokens = u.CacheReadInputTokens
 	}
-	out.CacheWriteTokens = u.CacheWriteTokens
+	// 官方嵌套位没给时，回落到兼容层的两个顶层别名。
+	if out.CacheWriteTokens == 0 {
+		out.CacheWriteTokens = u.CacheWriteTokens
+	}
 	if out.CacheWriteTokens == 0 {
 		out.CacheWriteTokens = u.CacheCreationTokens
 	}
@@ -693,13 +698,16 @@ func renderUsage(u ir.Usage) wireUsage {
 		CompletionTokens: u.OutputTokens,
 		TotalTokens:      prompt + u.OutputTokens,
 	}
-	if u.CacheReadTokens > 0 || u.PromptAudioTokens > 0 {
+	if u.CacheReadTokens > 0 || u.PromptAudioTokens > 0 || u.CacheWriteTokens > 0 {
 		out.PromptTokensDetails = &wirePromptDetails{
-			CachedTokens: u.CacheReadTokens,
-			AudioTokens:  u.PromptAudioTokens,
+			CachedTokens:     u.CacheReadTokens,
+			AudioTokens:      u.PromptAudioTokens,
+			CacheWriteTokens: u.CacheWriteTokens,
 		}
 	}
-	// 本协议没有官方的缓存写入字段，用兼容层通行的别名给出。
+	// 缓存写入量两处都写：官方嵌套位（prompt_tokens_details.cache_write_tokens，
+	// 上面已随明细对象给出）供 OpenAI SDK 客户端读取，顶层别名供只认别名的
+	// 兼容层客户端读取，二者同值，避免回归。
 	if u.CacheWriteTokens > 0 {
 		out.CacheWriteTokens = u.CacheWriteTokens
 	}
