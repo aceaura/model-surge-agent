@@ -92,6 +92,9 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	// usage 其余细分维度（托管工具执行次数、推理区域）同理：本协议没有
 	// 槽位，聚合总量不丢，细分蒸发要报出。判据与流式 Notes() 同源。
 	notes = append(notes, codec.DescribeResponseUsageDetailsLoss(resp, Name)...)
+	// 跨族终止原因折叠：context_window / max_messages / steered 三档本协议
+	// 都无对应值，一律塌进 length，具体成因与补救方向丢失。判据与流式 Notes() 同源。
+	notes = append(notes, codec.DescribeResponseStopReasonLoss(resp.StopReason, Name)...)
 	return body, codec.DedupeNotes(notes), nil
 }
 

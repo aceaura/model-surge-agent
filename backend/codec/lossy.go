@@ -1782,6 +1782,43 @@ func DescribeResponseUsageDetailsLoss(resp *ir.Response, name string) []string {
 	return nil
 }
 
+// StopReasonFoldNote 跨族终止原因折叠注记。cause 是被折叠掉的具体成因描述。
+// 措辞落在「本服务改写了终止原因、具体成因与它暗示的补救动作丢失」上——
+// 目标协议确实没有对应取值，但客户端看到的通用「输出不完整」档会误导补救方向。
+func StopReasonFoldNote(cause string) string {
+	return "rewrote the stop reason: the upstream reported " + cause +
+		`, but this protocol has no matching stop value and folded it into its generic "output incomplete" reason; the specific cause — and the different remediation it implies — is lost`
+}
+
+// DescribeResponseStopReasonLoss 报跨族终止原因折叠损耗。三档特殊原因
+// （context_window_exceeded / max_messages / steered）IR 单列，因为客户端的补救
+// 动作各不相同：context_window 要压缩输入、max_messages 与输出预算无关、steered
+// 是用户已在安全边界转向（加大预算毫无意义）。但每档只有母协议能原样表达
+// （context_window 属 anthropic，另两档属 responses），跨族出站只能塌进目标协议
+// 的通用「输出不完整」档（chat 的 length / anthropic 的 max_tokens / responses 的
+// max_output_tokens），成因丢失。同族往返或母协议出站返回 nil。
+// 三条路径共用：流式编码器 Notes() 与非流式 EncodeResponseLossy。
+func DescribeResponseStopReasonLoss(reason ir.StopReason, name string) []string {
+	switch reason {
+	case ir.StopContextWindow:
+		if name != ProtocolAnthropic {
+			return []string{StopReasonFoldNote(
+				"context-window-exceeded (the input filled the model's context window and squeezed the output short, compress the input rather than raise the output budget)")}
+		}
+	case ir.StopMaxMessages:
+		if name != ProtocolResponses {
+			return []string{StopReasonFoldNote(
+				"max-messages (a message-count cap, not an output-length cap, truncated the turn; raising the token budget will not help)")}
+		}
+	case ir.StopSteered:
+		if name != ProtocolResponses {
+			return []string{StopReasonFoldNote(
+				"steered (the user redirected generation mid-stream at a safety boundary; raising the output budget is meaningless)")}
+		}
+	}
+	return nil
+}
+
 // ServerToolDropNote 服务端托管工具块丢失注记。server_tool_use 与
 // web_search_tool_result 是**有 IR 块型**的，三个外族编码器都没有为它们
 // 输出任何对应形态：整块消失且不计数时，接收端既看不到网关代执行了哪次

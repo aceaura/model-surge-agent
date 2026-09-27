@@ -78,6 +78,9 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	// usage 细分维度：chat 专属的音频/预测四位本协议 usage 没有槽位，
 	// 聚合总量不丢，细分蒸发要报出。判据与流式编码器 Notes() 同源。
 	notes = append(notes, codec.DescribeResponseUsageDetailsLoss(resp, Name)...)
+	// 跨族终止原因折叠：responses 的 max_messages / steered 本协议无对应值，
+	// 塌进 max_tokens，具体成因与补救方向丢失。判据与流式 Notes() 同源。
+	notes = append(notes, codec.DescribeResponseStopReasonLoss(resp.StopReason, Name)...)
 	// 跨协议投影来、无 Raw 又反推不出 cited_text 的引用被 encodeBlock 整条
 	// 丢弃（带空 cited_text 上游 400）。与文档类引用的 CitationDropNote 分账，
 	// 判据与流式侧同源，非流式响应不因走另一条编码路就漏报。

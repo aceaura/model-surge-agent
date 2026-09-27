@@ -93,6 +93,10 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	// usage 其余细分维度（托管工具执行次数、推理区域、音频/预测 token）
 	// 同理：本协议没有槽位，聚合总量不丢，细分蒸发要报出。
 	notes = append(notes, codec.DescribeResponseUsageDetailsLoss(resp, Name)...)
+	// 跨族终止原因折叠：anthropic 的 context_window_exceeded 本协议无对应值，
+	// 塌进 max_output_tokens（max_messages / steered 是本族原值，不折）。
+	// 判据与流式 Notes() 同源。
+	notes = append(notes, codec.DescribeResponseStopReasonLoss(resp.StopReason, Name)...)
 	return body, codec.DedupeNotes(notes), nil
 }
 

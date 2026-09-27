@@ -144,6 +144,10 @@ func (e *streamEncoder) Notes() []string {
 		notes = append(notes, codec.TierEchoDropNote(e.droppedTier))
 		e.droppedTier = ""
 	}
+	// 跨族终止原因折叠：context_window / max_messages / steered 三档本协议都
+	// 无对应值，renderFinishReason 一律塌进 length，成因与补救方向丢失。
+	// 判据与非流式 EncodeResponseLossy 同源。
+	notes = append(notes, codec.DescribeResponseStopReasonLoss(e.stopReason, Name)...)
 	return codec.DedupeNotes(notes)
 }
 

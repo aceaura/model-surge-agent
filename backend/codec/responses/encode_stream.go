@@ -135,6 +135,10 @@ func (e *streamEncoder) Notes() []string {
 		notes = append(notes, codec.UsageDetailDropNote(dims))
 		e.usage = ir.Usage{}
 	}
+	// 跨族终止原因折叠：anthropic 的 context_window_exceeded 本协议无对应值，
+	// renderStatus 塌进 max_output_tokens（max_messages / steered 是本族原值，
+	// 不折）。判据与非流式 EncodeResponseLossy 同源。
+	notes = append(notes, codec.DescribeResponseStopReasonLoss(e.stopReason, Name)...)
 	return codec.DedupeNotes(notes)
 }
 

@@ -73,6 +73,11 @@ type streamEncoder struct {
 	// 起始帧没兜住时报出，真流式不误报。
 	startDeliveredCacheDetails bool
 	startDeliveredGeo          bool
+	// stopReason 记下本流交付过的 IR 终止原因（首个非空者为准，避免收尾兜底
+	// 合成的 end_turn 覆盖真值）。只服务 Notes() 的跨族折叠判据：responses 的
+	// max_messages / steered 本协议无对应值，renderStopReason 塌进 max_tokens，
+	// 成因丢失要报出。帧渲染仍按事件原值下发，不读这份记录。
+	stopReason ir.StopReason
 }
 
 // Notes 实现 codec.StreamNotes。
@@ -114,6 +119,10 @@ func (e *streamEncoder) Notes() []string {
 		e.usage.CacheWriteDetailsKnown = false
 		e.usage.InferenceGeo = ""
 	}
+	// 跨族终止原因折叠：responses 的 max_messages / steered 本协议无对应值，
+	// renderStopReason 塌进 max_tokens，成因与补救方向丢失。判据与非流式
+	// EncodeResponseLossy 同源。
+	notes = append(notes, codec.DescribeResponseStopReasonLoss(e.stopReason, Name)...)
 	// usage 细分维度：chat 专属的音频/预测四位本协议没有槽位，聚合
 	// 总量不丢，细分蒸发要报出，判据与非流式 EncodeResponseLossy 同源。
 	if dims := codec.UsageDropDims(&e.usage, Name); len(dims) > 0 {
@@ -450,6 +459,11 @@ func blockTypeForDelta(t ir.EventType) ir.BlockType {
 }
 
 func (e *streamEncoder) messageDelta(ev ir.Event) ([]byte, error) {
+	// 首个非空终止原因为准：真值随 EvMessageDelta 到达一次，收尾兜底合成的
+	// end_turn（ensureStopped 那一支）不该覆盖它。
+	if ev.StopReason != "" && e.stopReason == "" {
+		e.stopReason = ev.StopReason
+	}
 	out := messageDeltaEvent{
 		Type: evMessageDelta,
 		Delta: &streamDelta{
