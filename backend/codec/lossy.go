@@ -1689,6 +1689,21 @@ func CacheCreationDetailsDropNote() string {
 	return "dropped Anthropic cache-creation TTL details: this response format has no 5-minute/1-hour cache-write usage fields; aggregate input token totals remain preserved"
 }
 
+// StreamUsageDetailFrameNote 报一类流式专有的用量明细损耗：明细只挂在协议
+// 的「起始帧完整 usage」上，而它偏偏随「收尾帧」到达，于是没有可承载它的帧。
+// 具体是 anthropic 的缓存写入 TTL 明细与 inference_geo——官方只允许它们出现在
+// message_start 的完整 Usage 里，message_delta 的 MessageDeltaUsage 没有这两个
+// 槽位（renderDeltaUsage 不编，编了就是写官方 schema 没有的键）。真流式里它们
+// 随 message_start 到达、已下发；但当上游忽略 stream:true 回一整份 JSON 时，
+// 投影（ir.ResponseEvents）把全部用量压在 EvMessageDelta、message_start 不带
+// 用量，明细与地理就送不出去——与非流式（renderUsage 照写）分叉。dims 列出
+// 送不出去的维度名。措辞与 CacheCreationDetailsDropNote / UsageDetailDropNote
+// 区分开：那两条说「目标格式没有槽位」，本协议其实有，只是这一帧装不下。
+func StreamUsageDetailFrameNote(dims []string) string {
+	return "dropped usage detail(s) (" + strings.Join(dims, ", ") +
+		"): they arrived on the stream's closing usage frame, but this protocol carries them only on the opening frame, which the whole-response replay left empty; the non-streaming path delivers them, and aggregate token totals remain preserved here"
+}
+
 // DescribeResponseCacheDetailsLoss 非流式 EncodeResponseLossy 报缓存写入
 // TTL 明细损耗：5m/1h 细分只有 anthropic 的响应有槽位，其余协议收到
 // 明细已知的用量只能丢掉细分（合计不受影响）。流式路径由各编码器在

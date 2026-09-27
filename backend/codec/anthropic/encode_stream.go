@@ -64,6 +64,15 @@ type streamEncoder struct {
 	//（音频/预测四位是 chat 专属维度，本协议 usage 没有槽位），
 	// 帧渲染仍按事件原值下发，不读这份累计。
 	usage ir.Usage
+	// startDeliveredCacheDetails / startDeliveredGeo 记「缓存写入 TTL 明细 /
+	// inference_geo 是否已随 message_start 的完整 usage 下发」。这两项官方只
+	// 允许出现在 message_start（renderUsage 写），message_delta 的
+	// MessageDeltaUsage 没有槽位（renderDeltaUsage 不写）。真流式它们随起始帧
+	// 到达、已下发；但整份响应投影（ir.ResponseEvents）把全部用量压在
+	// EvMessageDelta、起始帧不带用量，明细与地理就没有出口。Notes() 据此只在
+	// 起始帧没兜住时报出，真流式不误报。
+	startDeliveredCacheDetails bool
+	startDeliveredGeo          bool
 }
 
 // Notes 实现 codec.StreamNotes。
@@ -87,6 +96,23 @@ func (e *streamEncoder) Notes() []string {
 	if e.droppedTier != "" {
 		notes = append(notes, codec.TierEchoDropNote(e.droppedTier))
 		e.droppedTier = ""
+	}
+	// 缓存 TTL 明细与 inference_geo 只能随 message_start 的完整 usage 下发；
+	// message_delta 的官方 schema 没有这两个槽位。真流式它们随起始帧到达、已
+	// 下发（startDelivered* 为真），不报；但整份响应投影把全部用量压在收尾帧、
+	// 起始帧不带用量时，明细与地理就没有出口——与非流式分叉，按维度报出。
+	var lateDims []string
+	if e.usage.CacheWriteDetailsKnown && !e.startDeliveredCacheDetails {
+		lateDims = append(lateDims, "cache-creation TTL details")
+	}
+	if e.usage.InferenceGeo != "" && !e.startDeliveredGeo {
+		lateDims = append(lateDims, "inference geo")
+	}
+	if len(lateDims) > 0 {
+		notes = append(notes, codec.StreamUsageDetailFrameNote(lateDims))
+		// 抽干：报出即清，Notes() 二次调用不重复。
+		e.usage.CacheWriteDetailsKnown = false
+		e.usage.InferenceGeo = ""
 	}
 	// usage 细分维度：chat 专属的音频/预测四位本协议没有槽位，聚合
 	// 总量不丢，细分蒸发要报出，判据与非流式 EncodeResponseLossy 同源。
@@ -359,6 +385,15 @@ func (e *streamEncoder) encodeStart(ev ir.Event) ([][]byte, error) {
 	if ev.Usage != nil {
 		ir.MergeUsage(&e.usage, *ev.Usage)
 		msg.Usage = renderUsage(*ev.Usage)
+		// renderUsage 把缓存 TTL 明细（仅明细已知时）与 inference_geo 写进
+		// message_start：记下它们是否已在这里落地，Notes() 据此判断收尾帧
+		// 带来的同类明细是否还有别的出口。
+		if ev.Usage.CacheWriteDetailsKnown {
+			e.startDeliveredCacheDetails = true
+		}
+		if ev.Usage.InferenceGeo != "" {
+			e.startDeliveredGeo = true
+		}
 	}
 	frame, err := marshalFrame(evMessageStart, streamEvent{Type: evMessageStart, Message: msg})
 	if err != nil {
