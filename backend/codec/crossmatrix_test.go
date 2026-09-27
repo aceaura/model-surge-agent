@@ -1457,13 +1457,36 @@ func TestUsageConservationAcrossMatrix(t *testing.T) {
 	}
 }
 
-// reasoningUsageFixture 是带推理用量的一段流。三家的写法不同：
-// chat_completions 与 responses 的输出总量已含推理（20 含 8），
+// reasoningUsageFixture 是带推理用量的一段流。四家的写法不同：
+// chat_completions、responses 与 anthropic 的输出总量已含推理（20 含 8），
 // gemini 的 thoughtsTokenCount 不含在 candidatesTokenCount 里（12+8=20）。
-// 三份都描述同一次调用：输出 20，其中推理 8。
+// 四份都描述同一次调用：输出 20，其中推理 8。
 //
-// anthropic 不在此表：它没有推理用量字段，作为上游给不出这一维。
+// anthropic 的 output_tokens_details.thinking_tokens 是官方 usage 的只读分解
+// （SDK messages.ts：OutputTokensDetails.thinking_tokens，恒 ≤ output_tokens），
+// 累计值随 message_delta 的 usage 抵达。
 var reasoningUsageFixture = map[string]string{
+	codec.ProtocolAnthropic: strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_u","model":"native","role":"assistant","usage":{"input_tokens":100,"output_tokens":0}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":20,"output_tokens_details":{"thinking_tokens":8}}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n"),
+
 	codec.ProtocolChatCompletions: strings.Join([]string{
 		`data: {"id":"msg_u","object":"chat.completion.chunk","model":"native","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`,
 		``,
@@ -1500,7 +1523,8 @@ func TestReasoningTokensSurviveWhereExpressible(t *testing.T) {
 	expressible := map[string]bool{
 		codec.ProtocolChatCompletions: true,
 		codec.ProtocolResponses:       true,
-		codec.ProtocolAnthropic:       false,
+		// anthropic 用官方 usage.output_tokens_details.thinking_tokens 表达这一维。
+		codec.ProtocolAnthropic: true,
 	}
 	for up, raw := range reasoningUsageFixture {
 		for client, canExpress := range expressible {
@@ -2594,11 +2618,6 @@ func protocolLimitations() []protocolLimitation {
 			matrix: "termination", protocol: codec.ProtocolGemini, feature: "truncated tool args",
 			reason: "同上：args 不分片，断流断不出半截入参",
 			absent: func() bool { return !hasTerminationCase("truncated-tool-args", codec.ProtocolGemini) },
-		},
-		{
-			matrix: "usage-reasoning", protocol: codec.ProtocolAnthropic, feature: "reasoning tokens",
-			reason: "usage 结构无推理计量字段",
-			absent: func() bool { _, ok := reasoningUsageFixture[codec.ProtocolAnthropic]; return !ok },
 		},
 		{
 			matrix: "usage-cache-write", protocol: codec.ProtocolResponses, feature: "cache write tokens",

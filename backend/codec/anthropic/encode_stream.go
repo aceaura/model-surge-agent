@@ -710,6 +710,11 @@ func renderUsage(u ir.Usage) wireUsage {
 			WebFetchRequests:  u.WebFetchRequests,
 		}
 	}
+	// 推理分解仅在 IR 有非零值时写出：异族来源给不出（chat/responses 解码
+	// 填了 ReasoningTokens，同族 anthropic 解码也填），无值时不伪造全零对象。
+	if u.ReasoningTokens > 0 {
+		out.OutputTokensDetails = &wireOutputTokensDetails{ThinkingTokens: u.ReasoningTokens}
+	}
 	out.InferenceGeo = u.InferenceGeo
 	// beta 迭代用量细分原文回写：同族往返逐字带回，异族来源给不出非空值，
 	// omitempty 自然不写。
@@ -734,6 +739,12 @@ func renderDeltaUsage(u ir.Usage) wireMessageDeltaUsage {
 			WebSearchRequests: u.WebSearchRequests,
 			WebFetchRequests:  u.WebFetchRequests,
 		}
+	}
+	// output_tokens_details 是官方 MessageDeltaUsage 也带的键（与完整 Usage
+	// 同形），故 delta 帧同样写出：同族非流式→流式聚合路径把推理分解整体落进
+	// EvMessageDelta 时，收尾帧要能带回，否则客户端流式拿不到推理占比。
+	if u.ReasoningTokens > 0 {
+		out.OutputTokensDetails = &wireOutputTokensDetails{ThinkingTokens: u.ReasoningTokens}
 	}
 	// iterations 是「delta 帧不写完整 Usage 专属键」的例外：官方 beta
 	// MessageDeltaUsage 与完整 usage 同形也带它，原文回写。

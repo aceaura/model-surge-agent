@@ -320,6 +320,13 @@ func convertUsage(u wireUsage) ir.Usage {
 		out.WebSearchRequests = u.ServerToolUse.WebSearchRequests
 		out.WebFetchRequests = u.ServerToolUse.WebFetchRequests
 	}
+	// 推理 token 分解（官方 usage.output_tokens_details.thinking_tokens）：
+	// 已含在 output_tokens 内，单收只为成本归因。chat/responses 早就填了
+	// IR.ReasoningTokens，anthropic 此前漏填→推理占比静默丢弃。message_start /
+	// message_delta / 非流式响应三处都经这里解码（delta 帧按 wireUsage 宽松读）。
+	if u.OutputTokensDetails != nil {
+		out.ReasoningTokens = u.OutputTokensDetails.ThinkingTokens
+	}
 	out.InferenceGeo = u.InferenceGeo
 	// beta 迭代用量细分原文透传：message_start / message_delta / 非流式响应
 	// 三处都经这里解码，判别式值域在演进不建模。

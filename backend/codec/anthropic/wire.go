@@ -265,8 +265,11 @@ type wireResponse struct {
 	Container *container `json:"container,omitempty"`
 }
 
-// wireUsage 没有推理 token 维度：本协议把推理消耗直接算进 output_tokens。
-// 转成本协议时该维度只是看不见，数值仍含在输出总量里，故不报有损。
+// wireUsage 建模官方 Usage（message_start 与非流式响应的完整用量）。
+// output_tokens 是含推理在内的权威计费总量；output_tokens_details.thinking_tokens
+// 是只读的可观测分解（输出里多少是内部推理），不另计费。此前未建模该分解→
+// anthropic 解码不填 IR.Usage.ReasoningTokens（chat/responses 都填了，唯 anthropic
+// 漏），推理占比这一成本归因维度静默丢弃。总量始终保留，故只损可观测性、不损计费。
 type wireUsage struct {
 	// input_tokens / output_tokens 不带 omitempty：官方 Usage 模型里这两个键
 	// 必填（SDK 反序列化按 required 校验），message_start 帧即使输出还没
@@ -283,6 +286,11 @@ type wireUsage struct {
 	// ServerToolUse 服务端托管工具执行次数（官方 usage.server_tool_use）。
 	// 按次计费，看不见就无法对账托管搜索的成本。
 	ServerToolUse *wireServerToolUsage `json:"server_tool_use,omitempty"`
+	// OutputTokensDetails 输出 token 的只读分解（官方 usage.output_tokens_details，
+	// 可显式 null）。thinking_tokens 已含在 output_tokens 内，单列只为成本归因。
+	// 指针 + omitempty：缺席/null 解成 nil，编码侧仅在 IR.ReasoningTokens>0 时写出，
+	// 异族来源给不出非零值自然不写（不伪造一个全零分解对象）。
+	OutputTokensDetails *wireOutputTokensDetails `json:"output_tokens_details,omitempty"`
 	// InferenceGeo 实际推理区域回显（官方 usage.inference_geo）。
 	InferenceGeo string `json:"inference_geo,omitempty"`
 	// ServiceTier 实际执行档位回显（standard/priority/batch）。**官方把它
@@ -297,6 +305,13 @@ type wireUsage struct {
 	// 细分的用量。判别式值域仍在演进，原文透传不建模；stable Usage 无此键，
 	// 仅 beta 往返带得回。
 	Iterations json.RawMessage `json:"iterations,omitempty"`
+}
+
+// wireOutputTokensDetails 是 output_tokens_details 的分解对象。内层键不带
+// omitempty：官方回这个对象时 thinking_tokens 总在（required），且本编码器
+// 仅在 ReasoningTokens>0 时才写出整个对象，不会出现「有对象、零分解」的残缺形。
+type wireOutputTokensDetails struct {
+	ThinkingTokens int64 `json:"thinking_tokens"`
 }
 
 // wireServerToolUsage 内层两键与 cache_creation 同理不带 omitempty：
@@ -314,17 +329,19 @@ type wireCacheCreationUsage struct {
 }
 
 // wireMessageDeltaUsage message_delta 帧的专用 usage（官方 MessageDeltaUsage）：
-// 没有 cache_creation 对象、inference_geo——那两个只属于 message_start 与
-// 非流式响应的完整 Usage。message_delta 复用完整 wireUsage 会把官方 schema
-// 没有的键写进帧里（同族「上游非流式→客户端流式」路径必然触发：聚合
-// usage 带着明细整体落进 EvMessageDelta）。解码侧仍按 wireUsage 宽松读：
+// 没有 cache_creation 对象、inference_geo、service_tier——那几个只属于 message_start
+// 与非流式响应的完整 Usage。但官方 MessageDeltaUsage **有** output_tokens_details
+// （与完整 Usage 同形），故这里也建模：同族「上游非流式→客户端流式」路径把聚合
+// usage 整体落进 EvMessageDelta 时，推理分解要能随收尾帧送达。message_delta 复用
+// 完整 wireUsage 会把官方 schema 没有的键写进帧里。解码侧仍按 wireUsage 宽松读：
 // 官方 delta 帧的键是它的子集，多出来的 IR 维度保持零值。
 type wireMessageDeltaUsage struct {
-	InputTokens              int64                `json:"input_tokens,omitempty"`
-	OutputTokens             int64                `json:"output_tokens"`
-	CacheReadInputTokens     int64                `json:"cache_read_input_tokens,omitempty"`
-	CacheCreationInputTokens int64                `json:"cache_creation_input_tokens,omitempty"`
-	ServerToolUse            *wireServerToolUsage `json:"server_tool_use,omitempty"`
+	InputTokens              int64                    `json:"input_tokens,omitempty"`
+	OutputTokens             int64                    `json:"output_tokens"`
+	CacheReadInputTokens     int64                    `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int64                    `json:"cache_creation_input_tokens,omitempty"`
+	ServerToolUse            *wireServerToolUsage     `json:"server_tool_use,omitempty"`
+	OutputTokensDetails      *wireOutputTokensDetails `json:"output_tokens_details,omitempty"`
 	// Iterations 是上面「delta 帧不写完整 Usage 专属键」规矩的例外：官方
 	// beta MessageDeltaUsage 与完整 usage 同形，也带 iterations。原文透传，
 	// omitempty 保证非 beta 往返不会凭空写出。
