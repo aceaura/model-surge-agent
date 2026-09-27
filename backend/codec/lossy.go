@@ -1134,6 +1134,15 @@ func DroppedUnknownPartsNote(kinds []string, n int) string {
 		n, strings.Join(kinds, ", "))
 }
 
+// DroppedCitationsNote 是响应带了来源标注（gemini 的 grounding/citation
+// metadata）却无处安放的说明：ir.Block.Citations 绑在文本块上，候选没产出
+// 任何文本块时引用挂不上去，只能丢弃并报出。n 是丢弃的引用数。带 URI 的
+// 引用在候选有文本块时正常保全（见 gemini.candidateCitations），这里只覆盖
+// 「有来源、无正文可挂」这一种真实丢弃。
+func DroppedCitationsNote(n int) string {
+	return fmt.Sprintf("dropped %d response citation(s): the candidate carried no text block to attach them to", n)
+}
+
 // maxFinishDetail 是上游收尾原因原文的保留字节数。
 // 说明会落库进流水，而原文长度不受本服务控制。
 const maxFinishDetail = 200

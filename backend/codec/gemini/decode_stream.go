@@ -60,6 +60,13 @@ type streamDecoder struct {
 	// 分不出「模型没产这类内容」与「产了被丢了」。
 	droppedUnknownParts int
 	unknownPartKinds    map[string]bool
+	// textIndex/sawText 记最近一个文本块的索引：来源标注（grounding/citation）
+	// 在候选级到达，要挂到已开的文本块上（ir.Block.Citations 绑块），聚合器按
+	// EvCitation 的 Index 找块累加。没开过文本块时挂不上，计入 droppedCitations。
+	textIndex int
+	sawText   bool
+	// droppedCitations 计无处安放（候选无文本块）的来源标注数，经 Notes() 报出。
+	droppedCitations int
 }
 
 type openBlock struct {
@@ -102,6 +109,10 @@ func (d *streamDecoder) Notes() []string {
 		notes = append(notes, codec.DroppedUnknownPartsNote(kinds, d.droppedUnknownParts))
 		d.droppedUnknownParts = 0
 		d.unknownPartKinds = nil
+	}
+	if d.droppedCitations > 0 {
+		notes = append(notes, codec.DroppedCitationsNote(d.droppedCitations))
+		d.droppedCitations = 0
 	}
 	return codec.DedupeNotes(notes)
 }
@@ -180,6 +191,16 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 			}
 			out = append(out, events...)
 		}
+		// 来源标注随候选到达（grounding 通常在收尾帧带一次）。挂到已开的文本块
+		// 上：聚合器按 EvCitation 的 Index 找块累加，块即使已闭合也仍在表里。
+		// 没有文本块可挂（纯函数调用候选）时计数经 Notes() 报出，不静默。
+		if cits := candidateCitations(cand); len(cits) > 0 {
+			if d.sawText {
+				out = append(out, ir.Event{Type: ir.EvCitation, Index: d.textIndex, Citations: cits})
+			} else {
+				d.droppedCitations += len(cits)
+			}
+		}
 		if cand.FinishReason != "" {
 			d.stopReason = convertFinishReason(cand.FinishReason)
 		}
@@ -246,6 +267,10 @@ func (d *streamDecoder) decodeParts(parts []wirePart) ([]ir.Event, error) {
 				continue
 			}
 			out = append(out, d.switchTo(ir.BlockText)...)
+			// 记下文本块索引：随后到达的来源标注（候选级 grounding/citation）
+			// 要挂到这个块上。switchTo 后 d.current 必为文本块（本就开着或刚开）。
+			d.textIndex = d.current.index
+			d.sawText = true
 			out = append(out, ir.Event{Type: ir.EvTextDelta, Index: d.current.index, Text: delta})
 
 		case p.InlineData != nil || p.FileData != nil:
@@ -346,6 +371,45 @@ func droppedResponseMediaNote(p wirePart) string {
 	return "dropped a " + media + " part from the response (" + Name +
 		" is the only protocol expressing it and the neutral representation " +
 		"carries media only in the request direction)"
+}
+
+// candidateCitations 从 gemini 候选的来源标注里抽出可移植的 URL 引用，按 URL
+// 去重。citationMetadata.citationSources 与 groundingMetadata 的 web /
+// retrievedContext 块都带 URI，合并成 ir.Citation——chat 的 annotations、
+// anthropic 的 citations 填的是同一个槽位，gemini 上游此前整路静默丢弃。
+//
+// 只保全来源身份（URL+标题+被引原文），不携带数字范围：gemini 的
+// startIndex/endIndex 是相对候选**全文**的**字节**偏移，而 ir.Citation.Start/End
+// 是单个文本块内的 **rune** 偏移，且流式正文按累计/回退帧下发（见
+// classifyText），字节→rune 换算在这条路径上不可靠——错位的引用会把来源挂到
+// 错误的文字段上，比不带范围更糟。范围缺席时 HasRange 为假，下游编码器照常
+// 按「只有 URL 的引用」处置，Portable 仍为真，来源身份不丢。
+func candidateCitations(c wireCandidate) []ir.Citation {
+	var out []ir.Citation
+	seen := map[string]bool{}
+	add := func(url, title, cited string) {
+		if url == "" || seen[url] {
+			return
+		}
+		seen[url] = true
+		out = append(out, ir.Citation{URL: url, Title: title, CitedText: cited})
+	}
+	if c.CitationMetadata != nil {
+		for _, s := range c.CitationMetadata.CitationSources {
+			add(s.URI, "", "")
+		}
+	}
+	if c.GroundingMetadata != nil {
+		for _, ch := range c.GroundingMetadata.GroundingChunks {
+			if ch.Web != nil {
+				add(ch.Web.URI, ch.Web.Title, "")
+			}
+			if ch.RetrievedContext != nil {
+				add(ch.RetrievedContext.URI, ch.RetrievedContext.Title, ch.RetrievedContext.Text)
+			}
+		}
+	}
+	return out
 }
 
 // switchTo 保证当前开着的块是指定种类：种类变了就先闭合旧块再开新块。
@@ -470,6 +534,7 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	}
 
 	var calls int
+	var droppedCitations int
 	for _, cand := range w.Candidates {
 		if cand.Index != 0 {
 			if cand.Index > maxCandidate {
@@ -483,9 +548,14 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 		if cand.FinishReason != "" {
 			out.StopReason = convertFinishReason(cand.FinishReason)
 		}
+		// 来源标注（grounding/citation metadata）在候选级到达，映射成 ir.Citation
+		// 后挂到本候选的文本块上；候选没有正文块可挂时计入丢弃、经注记报出。
+		cits := candidateCitations(cand)
 		if cand.Content == nil {
+			droppedCitations += len(cits)
 			continue
 		}
+		textBlockIdx := -1
 		for _, p := range cand.Content.Parts {
 			switch {
 			case p.FunctionCall != nil:
@@ -519,6 +589,9 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 				if text == "" {
 					continue
 				}
+				if textBlockIdx < 0 {
+					textBlockIdx = len(out.Content)
+				}
 				out.Content = append(out.Content, ir.Block{Type: ir.BlockText, Text: text})
 			case p.InlineData != nil || p.FileData != nil:
 				// 与流式同一处置、同一措辞。这个分支此前不存在，媒体 part
@@ -532,6 +605,13 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 						unknownKinds[k] = true
 					}
 				}
+			}
+		}
+		if len(cits) > 0 {
+			if textBlockIdx >= 0 {
+				out.Content[textBlockIdx].Citations = append(out.Content[textBlockIdx].Citations, cits...)
+			} else {
+				droppedCitations += len(cits)
 			}
 		}
 	}
@@ -551,6 +631,9 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 		}
 		sort.Strings(kinds)
 		notes = append(notes, codec.DroppedUnknownPartsNote(kinds, unknownParts))
+	}
+	if droppedCitations > 0 {
+		notes = append(notes, codec.DroppedCitationsNote(droppedCitations))
 	}
 	return out, codec.DedupeNotes(notes), nil
 }

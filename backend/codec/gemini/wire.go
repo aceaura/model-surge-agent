@@ -192,6 +192,55 @@ type wireCandidate struct {
 	// 所以只报说明、不改枚举——枚举已由 finishReason 决定，拿这里的
 	// 文本去改会让两个来源打架。
 	FinishMessage string `json:"finishMessage,omitempty"`
+	// CitationMetadata / GroundingMetadata 是 gemini 的来源标注：开了 Google
+	// Search grounding（或代码引用）的上游会在候选上带出引用来源。此前二者都
+	// 没建模→json.Unmarshal 静默吞掉，IR 的 Citation 槽位（chat 的 annotations、
+	// anthropic 的 citations 都填它）在 gemini 上游这一路恒空、且无任何注记，
+	// 与 wirePart 显式收未知键并报出的自我纪律相矛盾。只抽带 URI 的条目映进
+	// ir.Citation（Portable 以 URL 为身份）；字节偏移的取舍见 candidateCitations。
+	CitationMetadata  *wireCitationMetadata  `json:"citationMetadata,omitempty"`
+	GroundingMetadata *wireGroundingMetadata `json:"groundingMetadata,omitempty"`
+}
+
+// wireCitationMetadata 是候选级引用集合（官方 CitationMetadata.citationSources）。
+type wireCitationMetadata struct {
+	CitationSources []wireCitationSource `json:"citationSources,omitempty"`
+}
+
+// wireCitationSource 单条引用来源（官方 CitationSource：uri/startIndex/endIndex/
+// license）。只 URI 进 IR；startIndex/endIndex 是相对候选全文的**字节**偏移，
+// 与 IR 的 rune 口径不符，换算不可靠，故不携带（见 candidateCitations）。
+type wireCitationSource struct {
+	URI        string `json:"uri,omitempty"`
+	StartIndex int    `json:"startIndex,omitempty"`
+	EndIndex   int    `json:"endIndex,omitempty"`
+	License    string `json:"license,omitempty"`
+}
+
+// wireGroundingMetadata 是检索接地元数据。只取 groundingChunks 里带 URI 的
+// 来源（web / retrievedContext）；searchEntryPoint、webSearchQueries、
+// groundingSupports 等是展示/查询/分段侧信息，IR 无对应槽位、也不属于「正文
+// 来源标注」的身份维，不在此保全。
+type wireGroundingMetadata struct {
+	GroundingChunks []wireGroundingChunk `json:"groundingChunks,omitempty"`
+}
+
+// wireGroundingChunk 一个接地来源块。web 是网页检索结果，retrievedContext 是
+// 文件检索工具的结果，二者都带 URI（+标题）。
+type wireGroundingChunk struct {
+	Web              *wireWebSource    `json:"web,omitempty"`
+	RetrievedContext *wireRetrievedCtx `json:"retrievedContext,omitempty"`
+}
+
+type wireWebSource struct {
+	URI   string `json:"uri,omitempty"`
+	Title string `json:"title,omitempty"`
+}
+
+type wireRetrievedCtx struct {
+	URI   string `json:"uri,omitempty"`
+	Title string `json:"title,omitempty"`
+	Text  string `json:"text,omitempty"`
 }
 
 // wireFeedback 的 BlockReason 表示整个请求被安全策略拒了，
