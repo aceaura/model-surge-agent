@@ -144,7 +144,7 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	if req.Thinking.On() && !caps.Thinking {
 		note("thinking", "no reasoning mode")
 	}
-	describeThinkingModernLossy(req, name, caps, note)
+	describeThinkingModernLossy(req, name, caps, note, filled, rewrote)
 	describeParamsLossy(req, name, caps, note, filled, unreturned)
 
 	describeBlocksLossy(req.System, name, caps, note)
@@ -825,6 +825,13 @@ func describeParamsLossy(req *ir.Request, name string, caps Capabilities, note, 
 			note("safety_identifier", "the request already carries a user id and the target keeps a single abuse-tracking slot, only the user id reaches the upstream")
 		}
 	}
+	// 端用户标识（Metadata["user_id"]，与 safety_identifier 不同维度）：anthropic
+	// 映进 metadata.user_id、chat/responses 落顶层 user 字段，唯独 gemini 没有任何
+	// 用户标识槽位，整条丢弃且此前无人报（rule a）。值是用户标识，不回显（与本函数
+	// 其它用户标识同款纪律）。四家出站里只 gemini 缺槽，故按协议名判定。
+	if req.Metadata["user_id"] != "" && name == ProtocolGemini {
+		note("user id", "no end-user identifier slot, the upstream's abuse detection and per-user attribution will not see it")
+	}
 	if len(req.Moderation) > 0 && !caps.Moderation {
 		note("moderation", "no request-level moderation parameter, moderation falls back to the upstream default")
 	}
@@ -958,10 +965,34 @@ func describeParamsLossy(req *ir.Request, name string, caps Capabilities, note, 
 // effort 值集诊断只管 anthropic 本族：它的 effort 是封闭五值
 // （low/medium/high/xhigh/max），minimal 与未知值 provably 装不下；
 // "none" 与未开思考同义，静默。其余协议 effort 直通或走自己的维度，不报。
-func describeThinkingModernLossy(req *ir.Request, name string, caps Capabilities, note func(field, why string)) {
+//
+// 预算↔档位折叠（轮次14）：思考强度有两种表达——anthropic/gemini 用 token
+// 预算（BudgetTokens），chat/responses 用粗档位（Effort）。跨这两组时编码器
+// 会互折，此前无人报：
+//   - budget→effort（chat/responses）：客户端给的精确 token 数被 effortForBudget
+//     折成 low/medium/high，精确预算送不到上游——是改写（rewrote），不是丢弃。
+//   - effort→budget（anthropic 非 adaptive / gemini）：目标用 token 数表达强度、
+//     缺预算会被拒，编码器用 budgetForEffort 合成一个——是兜底（filled）。
+//
+// 两个谓词与各编码器的折叠/兜底分支严格同条件，避免假阳性。
+func describeThinkingModernLossy(req *ir.Request, name string, caps Capabilities, note, filled, rewrote func(field, why string)) {
 	t := req.Thinking
 	if t == nil {
 		return
+	}
+	// budget→effort：只在「开了思考、给了精确预算、没给档位」且目标是 chat/
+	// responses 时发生（与 chatcompletions/encode_request.go、responses/
+	// encode_request.go 的 effortForBudget 折叠分支同条件）。
+	if t.On() && t.Effort == "" && t.BudgetTokens > 0 &&
+		(name == ProtocolChatCompletions || name == ProtocolResponses) {
+		rewrote("thinking budget", "the target protocol takes only a coarse effort level, the exact token budget was folded into an effort tier and does not reach the upstream verbatim")
+	}
+	// effort→budget：目标用 token 预算表达强度、缺预算会被拒，编码器合成一个。
+	// gemini 恒用预算；anthropic 仅非 adaptive 的 enabled 档需要预算（adaptive
+	// 由模型自主决定思考量、不带预算）。与两编码器的 budgetForEffort 兜底同条件。
+	if t.On() && t.BudgetTokens <= 0 &&
+		(name == ProtocolGemini || (name == ProtocolAnthropic && !t.Adaptive)) {
+		filled("thinking budget", "the target protocol expresses reasoning depth as a token budget, so one was synthesized because the request carried none")
 	}
 	// reasoning 子参数三维（summary / context / mode）只有 responses 族有
 	// 线格：chat 的 reasoning_effort 是裸字符串，anthropic/gemini 的思考
