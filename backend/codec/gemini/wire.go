@@ -213,6 +213,12 @@ type wireUsage struct {
 	// 全仓无人接收，工具调用回合的输出被系统性少计（少计的正是最贵的那部分）。
 	ToolUsePromptTokenCount int64 `json:"toolUsePromptTokenCount,omitempty"`
 	TotalTokenCount         int64 `json:"totalTokenCount,omitempty"`
+	// ServiceTier 是上游回显的实际执行档位（Output only，enum
+	// unspecified/standard/flex/priority）。此前未建模→gemini 上游时档位回声被
+	// json.Unmarshal 静默吞掉，IR.Response.ServiceTier 恒空：客户端拿不到实际
+	// 计费/优先级档位、也没有任何注记，与 anthropic/chat/responses 三族都捕获
+	// tier echo 不对称。归一与透传见 decode_stream.go normalizeServiceTier。
+	ServiceTier string `json:"serviceTier,omitempty"`
 }
 
 type wireError struct {

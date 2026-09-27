@@ -36,6 +36,9 @@ type streamDecoder struct {
 
 	stopReason ir.StopReason
 	usage      *ir.Usage
+	// serviceTier 记上游回显的实际执行档位（随 usageMetadata 到达，通常只在
+	// 收尾帧带一次）。非空覆盖，经终止 EvMessageDelta 带回，与非流式同口径。
+	serviceTier string
 	// notes 记录改写说明，走响应侧诊断通道。
 	notes []string
 	// maxCandidate 是见过的最大候选索引。只记最大值不逐帧记说明：
@@ -146,6 +149,9 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 			d.usage = &u
 		} else {
 			ir.MergeUsage(d.usage, u)
+		}
+		if t := normalizeServiceTier(frame.UsageMetadata.ServiceTier); t != "" {
+			d.serviceTier = t
 		}
 	}
 	// 整个请求被安全策略拒了：candidates 为空，只能从 promptFeedback 读出原因。
@@ -420,7 +426,7 @@ func (d *streamDecoder) Finish() []ir.Event {
 	}
 	d.done = true
 	out := d.closeCurrent()
-	delta := ir.Event{Type: ir.EvMessageDelta, StopReason: d.stopReason, Usage: d.usage}
+	delta := ir.Event{Type: ir.EvMessageDelta, StopReason: d.stopReason, Usage: d.usage, ServiceTier: d.serviceTier}
 	if delta.StopReason == "" {
 		delta.StopReason = ir.StopEndTurn
 	}
@@ -452,6 +458,10 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	out := &ir.Response{ID: w.ResponseID, Model: w.ModelVersion, Content: []ir.Block{}}
 	if w.UsageMetadata != nil {
 		out.Usage = convertUsage(*w.UsageMetadata)
+		// 档位回声随 usageMetadata 到达：此前不读→gemini 上游的实际执行档位
+		// 静默丢失、客户端看不到也无注记。归一后原值进 IR，跨族由入站编码器
+		// 的 MapServiceTierEcho/TierEchoDropNote 处理。
+		out.ServiceTier = normalizeServiceTier(w.UsageMetadata.ServiceTier)
 	}
 	if w.PromptFeedback != nil && w.PromptFeedback.BlockReason != "" {
 		out.StopReason = ir.StopContentFilter
@@ -605,6 +615,19 @@ func convertError(status int, e *wireError) *ir.Error {
 	// 状态串（RESOURCE_EXHAUSTED 之类）是流内错误帧唯一的分类依据：
 	// 那里没有 HTTP 状态码，不看它限流就会被归成目标故障去冷却。
 	return ir.NewError(codec.KindFor(status, e.Status, msg), status, e.Status, msg)
+}
+
+// normalizeServiceTier 把 gemini 的档位回声归一进 IR 的原值口径。
+// unspecified 是 enum 的零值（官方注「Default service tier, which is standard」），
+// 与「上游没给这个字段」不可分，且不是任何客户端能识别的标准枚举值，故归零为
+// 缺席，避免把陌生值原样透传给客户端；standard/flex/priority 原值保留，跨族映射
+// 与「装不下就丢弃+注记」交由既有 codec.MapServiceTierEcho / TierEchoDropNote
+// 处理（gemini 只出站、无面向客户端的响应编码器，故本族不再二次映射）。
+func normalizeServiceTier(s string) string {
+	if s == "unspecified" {
+		return ""
+	}
+	return s
 }
 
 func convertUsage(u wireUsage) ir.Usage {
