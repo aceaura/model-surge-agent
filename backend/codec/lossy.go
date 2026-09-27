@@ -444,6 +444,15 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 				// 而不是静默蒸发。
 				note("tool call caller/toolset_name", toolCallerWhy)
 			}
+			if b.ToolUse != nil && name != ProtocolResponses &&
+				(len(b.ToolUse.ResponsesCaller) > 0 || b.ToolUse.ResponsesNamespace != "" ||
+					b.ToolUse.ResponsesAsync != nil) {
+				// caller / namespace / async 是 responses function_call/custom_tool_call
+				// 条目独有的发起方/命名空间/异步标记，纯 provenance。同族逐字往返
+				// 无损；投给外族没有对应槽位，整维丢弃——与 anthropic caller、
+				// ToolUse.ItemID 同一处置口径，报一条而不是静默蒸发。
+				note("tool call caller/namespace/async", respCallerWhy)
+			}
 			if b.ToolResult != nil {
 				describeBlocksLossy(b.ToolResult.Content, name, caps, note)
 			}
@@ -468,6 +477,14 @@ const emptyMediaWhy = "the part carries no payload the target protocol can expre
 // 发起，toolset_name 是 beta toolsets 归属名——都是纯 provenance/可观测信息，
 // 外族没有对应槽位。tool_use 与 server_tool_use 共用此串以免两处漂移。
 const toolCallerWhy = "the tool call carries an anthropic-only caller/toolset_name provenance marker that the target protocol has no field for; it is dropped"
+
+// respCallerWhy 是「responses function_call/custom_tool_call 条目的 caller /
+// namespace / async 投给外族被丢」的统一措辞。caller 是发起方标记（union
+// direct{caller_id}|program）、namespace 是命名空间、async 是异步标记——都是
+// responses 一族独有的纯 provenance/可观测信息，外族没有对应槽位。与
+// toolCallerWhy 分立：anthropic 的 caller 形状不同（DirectCaller|ServerToolCaller），
+// 两族标记互不通用，措辞各表其族以免误导。
+const respCallerWhy = "the tool call carries a responses-only caller/namespace/async provenance marker that the target protocol has no field for; it is dropped"
 
 // imageFilenameWhy 是「带载荷图片块的文件名投给无图片文件名槽位的目标被丢」的
 // 措辞。文件名不影响图片字节的投递，只是少了「这本来叫什么文件」的旁注，故措辞

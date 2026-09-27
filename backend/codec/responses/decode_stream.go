@@ -452,9 +452,12 @@ func (d *streamDecoder) itemAdded(ev wireStreamEvent) ([]ir.Event, error) {
 			Type:  ir.EvBlockStart,
 			Index: idx,
 			Block: &ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
-				ID:     ev.Item.CallID,
-				Name:   ev.Item.Name,
-				ItemID: ev.Item.ID,
+				ID:                 ev.Item.CallID,
+				Name:               ev.Item.Name,
+				ItemID:             ev.Item.ID,
+				ResponsesCaller:    ev.Item.Caller,
+				ResponsesNamespace: ev.Item.Namespace,
+				ResponsesAsync:     ev.Item.Async,
 			}},
 		})
 		// 有实现在开启帧就给出完整 arguments 且不再发增量，当一次 delta 发出。
@@ -476,10 +479,13 @@ func (d *streamDecoder) itemAdded(ev wireStreamEvent) ([]ir.Event, error) {
 			Type:  ir.EvBlockStart,
 			Index: idx,
 			Block: &ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
-				ID:     ev.Item.CallID,
-				Name:   ev.Item.Name,
-				Kind:   ir.ToolCustom,
-				ItemID: ev.Item.ID,
+				ID:                 ev.Item.CallID,
+				Name:               ev.Item.Name,
+				Kind:               ir.ToolCustom,
+				ItemID:             ev.Item.ID,
+				ResponsesCaller:    ev.Item.Caller,
+				ResponsesNamespace: ev.Item.Namespace,
+				ResponsesAsync:     ev.Item.Async,
 			}},
 		})
 		// 开启帧直接带全量 input 的实现同 function_call：当一次 delta 发出。
@@ -934,21 +940,27 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 			out.Content = append(out.Content, blocks...)
 		case itemFunctionCall:
 			out.Content = append(out.Content, ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
-				ID:     item.CallID,
-				Name:   item.Name,
-				Input:  item.Arguments,
-				ItemID: item.ID,
+				ID:                 item.CallID,
+				Name:               item.Name,
+				Input:              item.Arguments,
+				ItemID:             item.ID,
+				ResponsesCaller:    item.Caller,
+				ResponsesNamespace: item.Namespace,
+				ResponsesAsync:     item.Async,
 			}})
 		case itemCustomToolCall:
 			// 自由文本入参原文进 InputText，Input 放 {"input":…} 投影，
 			// 口径与请求侧 appendItem 相同。
 			out.Content = append(out.Content, ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
-				ID:        item.CallID,
-				Name:      item.Name,
-				Kind:      ir.ToolCustom,
-				InputText: item.Input,
-				Input:     string(ir.MarshalCustomInput(item.Input)),
-				ItemID:    item.ID,
+				ID:                 item.CallID,
+				Name:               item.Name,
+				Kind:               ir.ToolCustom,
+				InputText:          item.Input,
+				Input:              string(ir.MarshalCustomInput(item.Input)),
+				ItemID:             item.ID,
+				ResponsesCaller:    item.Caller,
+				ResponsesNamespace: item.Namespace,
+				ResponsesAsync:     item.Async,
 			}})
 		case itemReasoning:
 			text := joinSummary(item.Summary)

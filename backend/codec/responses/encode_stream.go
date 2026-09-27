@@ -184,6 +184,13 @@ type openItem struct {
 	toolKind  ir.ToolKind
 	args      string
 	signature string
+	// caller/namespace/async 是同族上游 function_call/custom_tool_call 条目
+	// 的发起方/命名空间/异步标记（ToolUse.Responses*）。EvBlockStart 时捕获，
+	// wire() 里逐字带回：store=true 链上上游按它们归属/索引调用，丢了会让
+	// responses→responses 流式往返改变语义。外族没给则为空，照常缺席。
+	caller    json.RawMessage
+	namespace string
+	async     *bool
 	closed    bool
 	// annCount 本条目已发的 annotation.added 帧数：annotation_index 的
 	// per-part 序号源（本编码器 content_index 恒 0，条目即 part）。
@@ -515,6 +522,9 @@ func (e *streamEncoder) openBlock(index int, kind ir.BlockType, block *ir.Block)
 		item.name = block.ToolUse.Name
 		item.toolKind = block.ToolUse.Kind
 		item.itemID = block.ToolUse.ItemID
+		item.caller = block.ToolUse.ResponsesCaller
+		item.namespace = block.ToolUse.ResponsesNamespace
+		item.async = block.ToolUse.ResponsesAsync
 	}
 	if block != nil && block.Thinking != nil {
 		item.itemID = block.Thinking.ItemID
@@ -859,12 +869,18 @@ func (i *openItem) wire(status string) *wireRespItem {
 			out.CallID = i.callID
 			out.Name = i.name
 			out.Input = i.args
+			out.Caller = i.caller
+			out.Namespace = i.namespace
+			out.Async = i.async
 			break
 		}
 		out.Type = itemFunctionCall
 		out.CallID = i.callID
 		out.Name = i.name
 		out.Arguments = i.args
+		out.Caller = i.caller
+		out.Namespace = i.namespace
+		out.Async = i.async
 	case ir.BlockThinking:
 		out.Type = itemReasoning
 		out.EncryptedContent = i.signature
@@ -1000,7 +1016,9 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 				out.Output = append(out.Output, wireRespItem{
 					Type: itemCustomToolCall, Status: "completed",
 					ID: b.ToolUse.ItemID, CallID: b.ToolUse.ID, Name: b.ToolUse.Name,
-					Input: b.ToolUse.InputText,
+					Input:  b.ToolUse.InputText,
+					Caller: b.ToolUse.ResponsesCaller, Namespace: b.ToolUse.ResponsesNamespace,
+					Async: b.ToolUse.ResponsesAsync,
 				})
 				continue
 			}
@@ -1011,6 +1029,8 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 			out.Output = append(out.Output, wireRespItem{
 				Type: itemFunctionCall, Status: "completed",
 				ID: b.ToolUse.ItemID, CallID: b.ToolUse.ID, Name: b.ToolUse.Name, Arguments: args,
+				Caller: b.ToolUse.ResponsesCaller, Namespace: b.ToolUse.ResponsesNamespace,
+				Async: b.ToolUse.ResponsesAsync,
 			})
 		case ir.BlockImage, ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
 			// 助手回合的 output 条目没有附件形态：整块跳过，损耗由

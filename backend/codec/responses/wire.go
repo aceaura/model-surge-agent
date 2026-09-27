@@ -132,6 +132,15 @@ type wireItem struct {
 	// Input 是 custom_tool_call 条目的自由文本入参（与 function_call 的
 	// arguments 互斥：自定义工具没有 JSON 参数概念）。
 	Input string `json:"input,omitempty"`
+	// caller/namespace/async 是 function_call/custom_tool_call 条目上的发起方
+	// 标记、命名空间与异步标记（官方 response_input_item 同款三维）。同族逐字
+	// 往返：store=true 链上上游按它们归属/索引调用。不建模则 Unmarshal 静默丢，
+	// responses→responses 往返一次即蒸发。caller 用 RawMessage 原样透传（union
+	// direct{caller_id}|program，本网关不据其分支）；async 用 *bool 区分缺席与
+	// 显式 false。跨族丢弃由有损诊断报出。
+	Caller    json.RawMessage `json:"caller,omitempty"`
+	Namespace string          `json:"namespace,omitempty"`
+	Async     *bool           `json:"async,omitempty"`
 
 	// function_call_output / custom_tool_call_output
 	//
@@ -222,6 +231,11 @@ type wireRespItem struct {
 	Arguments string `json:"arguments,omitempty"`
 	// Input 是 custom_tool_call 的自由文本入参终态，与 arguments 互斥。
 	Input string `json:"input,omitempty"`
+	// caller/namespace/async 同 wireItem：function_call/custom_tool_call 条目
+	// 的发起方/命名空间/异步标记，同族逐字往返，跨族丢弃由有损诊断报出。
+	Caller    json.RawMessage `json:"caller,omitempty"`
+	Namespace string          `json:"namespace,omitempty"`
+	Async     *bool           `json:"async,omitempty"`
 
 	// reasoning
 	Summary          []wireSummary `json:"summary,omitempty"`

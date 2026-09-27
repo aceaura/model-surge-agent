@@ -338,6 +338,18 @@ type ToolUse struct {
 	// ToolsetName 是 Anthropic tool_use 块上的 beta toolsets 归属名（可选）。
 	// 与 Caller 同规矩：同族逐字往返、跨族丢弃由有损诊断报出。
 	ToolsetName string `json:"toolset_name,omitempty"`
+	// ResponsesCaller / ResponsesNamespace / ResponsesAsync 是 Responses 一族
+	// function_call/custom_tool_call 条目上的发起方标记、命名空间与异步标记
+	// （官方 response_function_tool_call：caller 是 union direct{caller_id}|program、
+	// namespace 是 string、async 是 bool）。与 Anthropic 的 Caller 形状不同（那是
+	// DirectCaller|ServerToolCaller union），故独立三位、不复用——把 responses 的
+	// caller 字节写进 anthropic tool_use 块会编出非法形状。caller 用 RawMessage
+	// 原样透传：纯 provenance，本网关不据其分支。同族逐字往返无损；外族没有
+	// 对应槽位，跨族整维丢弃由有损诊断报出。async 用 *bool 区分「缺席」与
+	// 「显式 false」——bool+omitempty 会把 false 当缺席丢掉，往返一次就改了语义。
+	ResponsesCaller    json.RawMessage `json:"responses_caller,omitempty"`
+	ResponsesNamespace string          `json:"responses_namespace,omitempty"`
+	ResponsesAsync     *bool           `json:"responses_async,omitempty"`
 }
 
 // ToolKind 工具调用形态。零值等同 function，保持既有构造与黄金文件兼容。

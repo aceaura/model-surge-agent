@@ -204,11 +204,14 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 				// 同族回写走自由文本原文：custom_tool_call 的 input 不是
 				// JSON 槽位，把 {"input":…} 投影写回去会多包一层。
 				callItems = append(callItems, wireItem{
-					Type:   itemCustomToolCall,
-					ID:     b.ToolUse.ItemID,
-					CallID: b.ToolUse.ID,
-					Name:   b.ToolUse.Name,
-					Input:  b.ToolUse.InputText,
+					Type:      itemCustomToolCall,
+					ID:        b.ToolUse.ItemID,
+					CallID:    b.ToolUse.ID,
+					Name:      b.ToolUse.Name,
+					Input:     b.ToolUse.InputText,
+					Caller:    b.ToolUse.ResponsesCaller,
+					Namespace: b.ToolUse.ResponsesNamespace,
+					Async:     b.ToolUse.ResponsesAsync,
 				})
 				continue
 			}
@@ -223,6 +226,9 @@ func encodeMessage(m ir.Message) ([]wireItem, error) {
 				CallID:    b.ToolUse.ID,
 				Name:      b.ToolUse.Name,
 				Arguments: args,
+				Caller:    b.ToolUse.ResponsesCaller,
+				Namespace: b.ToolUse.ResponsesNamespace,
+				Async:     b.ToolUse.ResponsesAsync,
 			})
 		case ir.BlockToolResult:
 			if b.ToolResult == nil {

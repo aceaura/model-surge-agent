@@ -254,10 +254,13 @@ func appendItem(out *ir.Request, item wireItem, raw json.RawMessage) error {
 		appendBlocks(out, ir.RoleAssistant, []ir.Block{{
 			Type: ir.BlockToolUse,
 			ToolUse: &ir.ToolUse{
-				ID:     item.CallID,
-				Name:   item.Name,
-				Input:  item.Arguments,
-				ItemID: item.ID,
+				ID:                 item.CallID,
+				Name:               item.Name,
+				Input:              item.Arguments,
+				ItemID:             item.ID,
+				ResponsesCaller:    item.Caller,
+				ResponsesNamespace: item.Namespace,
+				ResponsesAsync:     item.Async,
 			},
 		}}, "")
 		return nil
@@ -269,12 +272,15 @@ func appendItem(out *ir.Request, item wireItem, raw json.RawMessage) error {
 		appendBlocks(out, ir.RoleAssistant, []ir.Block{{
 			Type: ir.BlockToolUse,
 			ToolUse: &ir.ToolUse{
-				ID:        item.CallID,
-				Name:      item.Name,
-				Kind:      ir.ToolCustom,
-				InputText: item.Input,
-				Input:     string(ir.MarshalCustomInput(item.Input)),
-				ItemID:    item.ID,
+				ID:                 item.CallID,
+				Name:               item.Name,
+				Kind:               ir.ToolCustom,
+				InputText:          item.Input,
+				Input:              string(ir.MarshalCustomInput(item.Input)),
+				ItemID:             item.ID,
+				ResponsesCaller:    item.Caller,
+				ResponsesNamespace: item.Namespace,
+				ResponsesAsync:     item.Async,
 			},
 		}}, "")
 		return nil
