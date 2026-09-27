@@ -1464,6 +1464,17 @@ func CitationDropNote(n int) string {
 		"dropped %d document citation(s): this protocol identifies an annotation source by URL, and these citations point at a document index with page/block/character offsets instead, so the client cannot see which passage was cited", n)
 }
 
+// NonURLCitationDropNote 解码侧「非 url_citation 标注」丢失注记：responses 上游
+// 发来的 file_citation / container_file_citation / file_path 等标注，来源身份是
+// 文件/容器下标而非 URL，IR.Citation 只有 URL/Title/偏移量，装不下这类形态，解码器
+// 逐条跳过。与编码侧的 CitationDropNote 分账——那是「IR 已有引用、出站协议渲染不
+// 下」，这里是「入站标注本就不是 URL 形态、进不了 IR」。三条解码通道（流式增量帧、
+// 流式终态快照、请求回声）共用同一措辞。
+func NonURLCitationDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped %d non-URL annotation(s) while decoding responses output (file_citation / container_file_citation / file_path): their source is a file or container index rather than a URL, and IR citations are keyed by URL, so the annotation was skipped instead of being mis-rendered as a URL citation", n)
+}
+
 // CitationResolveDropNote 反推失败的引用丢失注记：跨协议投影来的引用没有原文
 // 可透传，编成 web_search_result_location 又必须带 cited_text，而它既没自带
 // cited_text、也无法按范围从所在块正文切出来时，整条只能丢弃（带空 cited_text

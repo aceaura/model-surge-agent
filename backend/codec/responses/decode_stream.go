@@ -74,6 +74,12 @@ type streamDecoder struct {
 	// droppedLogprobs 携带 logprobs 的 output_text part 数：逐 token 概率
 	// 没有 IR 槽位，计数经 Notes() 报出。
 	droppedLogprobs int
+	// droppedNonURLCites 是解码时跳过的「非 url_citation」标注数
+	//（file_citation / container_file_citation / file_path）：来源身份是文件/
+	// 容器下标而非 URL，IR.Citation 装不下。增量帧与终态快照两条路径都经
+	// decodeAnnotations 过滤，此前静默丢弃；计数经 Notes() 报出。与编码侧的
+	// CitationDropNote 分账（那是出站渲染不下，这是入站进不了 IR）。
+	droppedNonURLCites int
 	// mergedSummary 携带 summary_index>0 的 reasoning 帧数：IR 的一个
 	// thinking 块承载全部段落，多段 part 并入同一块，正文不丢但 part
 	// 边界与 summary_index 寻址变形，计数经 Notes() 报出。
@@ -134,6 +140,10 @@ func (d *streamDecoder) Notes() []string {
 	if d.droppedLogprobs > 0 {
 		notes = append(notes, codec.LogProbsDropNote(d.droppedLogprobs))
 		d.droppedLogprobs = 0
+	}
+	if d.droppedNonURLCites > 0 {
+		notes = append(notes, codec.NonURLCitationDropNote(d.droppedNonURLCites))
+		d.droppedNonURLCites = 0
 	}
 	if d.mergedSummary > 0 {
 		notes = append(notes, fmt.Sprintf(
@@ -256,7 +266,10 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 		// 只挂到已存在的 part 槽位（lookup 不分配）：标注到达时正文必然
 		// 已开启，没开说明序号对不上，为一个不存在的 part 分配块索引
 		// 会让客户端多出一个空文本块。
-		cs := decodeAnnotations([]annotation{*orEmptyAnnotation(ev.Annotation)})
+		cs, dropped := decodeAnnotations([]annotation{*orEmptyAnnotation(ev.Annotation)})
+		// 计数要在早返回前记：非 url_citation 标注解出空 cs，恰好走下面
+		// len==0 分支返回，放到后面这类丢弃就漏计了。
+		d.droppedNonURLCites += dropped
 		if len(cs) == 0 {
 			return nil, nil
 		}
@@ -716,7 +729,10 @@ func (d *streamDecoder) doneCitations(key string, p *wirePart) []ir.Event {
 	if p == nil {
 		return nil
 	}
-	cs := decodeAnnotations(p.Annotations)
+	cs, dropped := decodeAnnotations(p.Annotations)
+	// 终态快照里的非 url_citation 标注同样计数：漏发 annotation.added 增量帧
+	// 的网关，标注只在这里出现，两条路径口径必须一致。
+	d.droppedNonURLCites += dropped
 	if len(cs) == 0 {
 		return nil
 	}
@@ -902,17 +918,19 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	}
 	hosted := 0
 	logprobs := 0
+	nonURLCites := 0
 	for _, item := range w.Output {
 		switch item.Type {
 		case itemMessage:
 			// 逐 token 概率没有 IR 槽位：只探测计数、经注记报出，
 			// 判据与流式 completeItemParts 相同。
 			logprobs += countLogprobsParts(item.Content)
-			blocks, err := decodeContent(item.Content)
+			blocks, droppedNonURL, err := decodeContent(item.Content)
 			if err != nil {
 				return nil, nil, ir.NewError(ir.ErrUpstream, 0, "",
 					fmt.Sprintf("undecodable output content: %v", err))
 			}
+			nonURLCites += droppedNonURL
 			out.Content = append(out.Content, blocks...)
 		case itemFunctionCall:
 			out.Content = append(out.Content, ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
@@ -964,6 +982,9 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	}
 	if logprobs > 0 {
 		notes = append(notes, codec.LogProbsDropNote(logprobs))
+	}
+	if nonURLCites > 0 {
+		notes = append(notes, codec.NonURLCitationDropNote(nonURLCites))
 	}
 	return out, notes, nil
 }

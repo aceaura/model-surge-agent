@@ -87,12 +87,16 @@ func TestDecodeAnnotationsFilters(t *testing.T) {
 		{Type: "", URL: "https://wx.test/2", StartIndex: 1, EndIndex: 2},
 		{Type: "url_citation", URL: ""},
 	}
-	got := decodeAnnotations(in)
+	got, droppedNonURL := decodeAnnotations(in)
 	if len(got) != 1 {
 		t.Fatalf("want 1 kept, got %+v", got)
 	}
 	if got[0].URL != "https://wx.test/2" {
 		t.Errorf("wrong survivor: %+v", got[0])
+	}
+	// file_citation 那条按类型跳过并计数；空 URL 的 url_citation 是空壳、不计入。
+	if droppedNonURL != 1 {
+		t.Errorf("want 1 non-URL annotation counted, got %d", droppedNonURL)
 	}
 }
 

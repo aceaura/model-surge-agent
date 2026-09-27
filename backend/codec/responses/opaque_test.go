@@ -12,7 +12,7 @@ import (
 // 未知 part 型解码归不透明（Item=false：消息内的 part）。
 func TestDecodeUnknownPartToOpaque(t *testing.T) {
 	raw := json.RawMessage(`{"type":"input_video","video":{"id":"vid_1"}}`)
-	b, err := decodePart(raw)
+	b, _, err := decodePart(raw)
 	if err != nil {
 		t.Fatalf("decodePart: %v", err)
 	}

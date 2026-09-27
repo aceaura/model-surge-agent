@@ -217,10 +217,11 @@ func appendItem(out *ir.Request, item wireItem, raw json.RawMessage) error {
 
 	switch kind {
 	case itemMessage:
-		blocks, err := decodeContent(item.Content)
+		blocks, droppedNonURL, err := decodeContent(item.Content)
 		if err != nil {
 			return err
 		}
+		noteNonURLCites(out, droppedNonURL)
 		switch item.Role {
 		case roleSystem, roleDeveloper:
 			// 拒绝正文是 assistant 专属槽位（模型「拒绝作答」时的输出）。客户端
@@ -282,10 +283,11 @@ func appendItem(out *ir.Request, item wireItem, raw json.RawMessage) error {
 		// output 与 function_call_output 同款双形态（字符串或 part 数组），
 		// 复用同一套解析；失败前缀也照认——那是我们出站写的，换目标重试时
 		// 不认回来模型会把失败当成功。
-		content, err := decodeToolCallOutput(item.Output)
+		content, droppedNonURL, err := decodeToolCallOutput(item.Output)
 		if err != nil {
 			return badRequest(err.Error())
 		}
+		noteNonURLCites(out, droppedNonURL)
 		content, isErr := codec.AdoptToolResultError(content)
 		appendBlocks(out, ir.RoleUser, []ir.Block{{
 			Type: ir.BlockToolResult,
@@ -300,10 +302,11 @@ func appendItem(out *ir.Request, item wireItem, raw json.RawMessage) error {
 
 	case itemFunctionCallOutput:
 		// output 官方允许字符串或 content part 数组两种形态。
-		content, err := decodeToolCallOutput(item.Output)
+		content, droppedNonURL, err := decodeToolCallOutput(item.Output)
 		if err != nil {
 			return badRequest(err.Error())
 		}
+		noteNonURLCites(out, droppedNonURL)
 		// 本协议没有失败标记字段，失败态是我们出站时写进正文的前缀，
 		// 这里认回来：不认的话换目标重试时模型会把失败当成功。
 		content, isErr := codec.AdoptToolResultError(content)
@@ -380,15 +383,15 @@ func appendOpaqueItem(out *ir.Request, wireType string, raw json.RawMessage) {
 // 不存在的结果，比空结果更难排查。但「格式畸形」（既非合法字符串也非合法
 // part 数组）不再混进占位——那会把「客户端的 output 字段写错了」伪装成
 // 「工具返回了空串」，模型据此继续，错得无声无息。畸形一律上抛 400。
-func decodeToolCallOutput(raw json.RawMessage) ([]ir.Block, error) {
-	blocks, err := decodeContent(raw)
+func decodeToolCallOutput(raw json.RawMessage) ([]ir.Block, int, error) {
+	blocks, droppedNonURL, err := decodeContent(raw)
 	if err != nil {
-		return nil, fmt.Errorf("function_call_output.output: %w", err)
+		return nil, 0, fmt.Errorf("function_call_output.output: %w", err)
 	}
 	if len(blocks) == 0 {
-		return []ir.Block{{Type: ir.BlockText}}, nil
+		return []ir.Block{{Type: ir.BlockText}}, droppedNonURL, nil
 	}
-	return blocks, nil
+	return blocks, droppedNonURL, nil
 }
 
 // appendBlocks 把块并进末尾消息，角色不同才新开一条。
@@ -443,34 +446,47 @@ func decodeReasoningContent(raw json.RawMessage) string {
 	return b.String()
 }
 
-// decodeContent 认字符串与 part 数组两种形态。
-func decodeContent(raw json.RawMessage) ([]ir.Block, error) {
+// decodeContent 认字符串与 part 数组两种形态。第二返回值是各 part 跳过的
+// 「非 url_citation」标注数之和（见 decodePart）。
+func decodeContent(raw json.RawMessage) ([]ir.Block, int, error) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return nil, nil
+		return nil, 0, nil
 	}
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
 		if text == "" {
-			return nil, nil
+			return nil, 0, nil
 		}
-		return []ir.Block{{Type: ir.BlockText, Text: text}}, nil
+		return []ir.Block{{Type: ir.BlockText, Text: text}}, 0, nil
 	}
 
 	// 逐 part 保留原文再解析：未知 part 型要整块归不透明（同族逐字回吐），
 	// 且一个 part 的形状冲突不能连累同数组里的其它 part。
 	var raws []json.RawMessage
 	if err := json.Unmarshal(raw, &raws); err != nil {
-		return nil, fmt.Errorf("content must be a string or a part array: %w", err)
+		return nil, 0, fmt.Errorf("content must be a string or a part array: %w", err)
 	}
 	out := make([]ir.Block, 0, len(raws))
+	var droppedNonURL int
 	for _, rp := range raws {
-		b, err := decodePart(rp)
+		b, dropped, err := decodePart(rp)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
+		droppedNonURL += dropped
 		out = append(out, b)
 	}
-	return out, nil
+	return out, droppedNonURL, nil
+}
+
+// noteNonURLCites 把解码时跳过的「非 url_citation」标注数记进请求侧说明通道
+// （ir.Request.DecodeNotes，经 Sanitize 上报）。n 为 0 时不记，避免为无丢弃的
+// 条目产出空注记。措辞与流式侧共用 codec.NonURLCitationDropNote，按说明检索
+// 的人不会把同一件事当成两种故障。
+func noteNonURLCites(out *ir.Request, n int) {
+	if n > 0 {
+		out.DecodeNotes = append(out.DecodeNotes, codec.NonURLCitationDropNote(n))
+	}
 }
 
 // partTypeOf 只取 part 的 {type}，用于解析失败时仍能给出可识别的判别值。
@@ -487,24 +503,28 @@ func partTypeOf(raw json.RawMessage) string {
 // decodePart 解单个 content part。未知型或解析失败但带 type 的，整块归
 // ir.BlockOpaque（Item=false：这是消息内的 part，不是独立条目），同族编码
 // 时逐字回吐，跨族由编码器报错（见 encodeMessage 的 BlockOpaque）。
-func decodePart(raw json.RawMessage) (ir.Block, error) {
+//
+// 第二返回值是本 part 里跳过的「非 url_citation」标注数（仅文本 part 会有），
+// 由调用方汇总进 ir.Request.DecodeNotes：客户端把上一轮的 file_citation 等标注
+// 当历史回声发回来时，解码侧同样不得静默丢弃。
+func decodePart(raw json.RawMessage) (ir.Block, int, error) {
 	var p wirePart
 	if err := json.Unmarshal(raw, &p); err != nil {
 		if wt := partTypeOf(raw); wt != "" {
 			return ir.Block{Type: ir.BlockOpaque,
-				Opaque: &ir.Opaque{WireType: wt, Body: raw, From: Name}}, nil
+				Opaque: &ir.Opaque{WireType: wt, Body: raw, From: Name}}, 0, nil
 		}
-		return ir.Block{}, fmt.Errorf("content part is not a valid object: %w", err)
+		return ir.Block{}, 0, fmt.Errorf("content part is not a valid object: %w", err)
 	}
 	switch p.Type {
 	case partInputText, partOutputText, "":
-		return ir.Block{Type: ir.BlockText, Text: p.Text,
-			Citations: decodeAnnotations(p.Annotations)}, nil
+		cs, dropped := decodeAnnotations(p.Annotations)
+		return ir.Block{Type: ir.BlockText, Text: p.Text, Citations: cs}, dropped, nil
 	case partRefusal:
 		// 拒绝正文是可见内容而非元数据，且本族有专属槽位：解成独立的
 		// refusal 块，同族往返才能原样回到 refusal part。并进文本块会让
 		// 客户端无法区分「模型拒绝了」与「模型这么答的」。
-		return ir.Block{Type: ir.BlockRefusal, Text: p.Refusal}, nil
+		return ir.Block{Type: ir.BlockRefusal, Text: p.Refusal}, 0, nil
 	case partInputImage:
 		var url, nested string
 		if p.ImageURL != nil {
@@ -518,15 +538,15 @@ func decodePart(raw json.RawMessage) (ir.Block, error) {
 		if media.Detail == "" {
 			media.Detail = nested
 		}
-		return ir.Block{Type: ir.BlockImage, Media: media}, nil
+		return ir.Block{Type: ir.BlockImage, Media: media}, 0, nil
 	case partInputAudio:
 		if p.InputAudio == nil {
-			return ir.Block{}, fmt.Errorf("input_audio part needs a payload")
+			return ir.Block{}, 0, fmt.Errorf("input_audio part needs a payload")
 		}
 		return ir.Block{Type: ir.BlockAudio, Media: &ir.Media{
 			MediaType: audioMediaType(p.InputAudio.Format),
 			Data:      p.InputAudio.Data,
-		}}, nil
+		}}, 0, nil
 	case partInputFile:
 		media := &ir.Media{Name: p.Filename}
 		if p.FileData != "" {
@@ -541,16 +561,16 @@ func decodePart(raw json.RawMessage) (ir.Block, error) {
 			// 上游拿一个 id 去当链接抓。
 			media.FileID = p.FileID
 		}
-		return ir.Block{Type: codec.MediaKindFor(codec.SniffMediaType(media)), Media: media}, nil
+		return ir.Block{Type: codec.MediaKindFor(codec.SniffMediaType(media)), Media: media}, 0, nil
 	case partSummaryText:
 		return ir.Block{
 			Type:     ir.BlockThinking,
 			Thinking: &ir.Thinking{Text: p.Text, SignatureFrom: Name},
-		}, nil
+		}, 0, nil
 	default:
 		// 未知 part 型整块归不透明：同族逐字回吐，跨族报错（见 ir.BlockOpaque）。
 		return ir.Block{Type: ir.BlockOpaque,
-			Opaque: &ir.Opaque{WireType: p.Type, Body: raw, From: Name}}, nil
+			Opaque: &ir.Opaque{WireType: p.Type, Body: raw, From: Name}}, 0, nil
 	}
 }
 

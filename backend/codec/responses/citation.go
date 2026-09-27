@@ -19,19 +19,25 @@ func orEmptyAnnotation(a *annotation) *annotation {
 	return a
 }
 
-// decodeAnnotations 线上标注 -> IR。
+// decodeAnnotations 线上标注 -> IR，并回报跳过的「非 url_citation」标注条数。
 //
-// 按 type 过滤：本协议的标注类型可能扩展（file_citation 等），认不出的
-// 跳过而不是照 url 位解——别的类型的 url 语义不同，混进来会指向错误来源。
-// 空 type 放行（部分兼容端省略）。本协议的标注同样以 URL 为来源身份，
-// 空 URL 的那条连自己协议里都无从渲染，收下只会往下游传一条空壳。
-func decodeAnnotations(as []annotation) []ir.Citation {
+// 按 type 过滤：本协议的标注类型可能扩展（file_citation / container_file_citation /
+// file_path 等），认不出的跳过而不是照 url 位解——别的类型的来源身份是文件/容器
+// 下标而非 URL，混进来会指向错误来源。IR.Citation 以 URL 为身份，装不下这些形态，
+// 故跳过条数经第二返回值 droppedNonURL 报出，由调用方计入有损注记：解码侧此前对
+// 这类标注静默丢弃，客户端连「有个来源没了」都看不到。
+//
+// 空 type 放行（部分兼容端省略）。空 URL 的 url_citation 连自己协议里都无从渲染，
+// 收下只会往下游传一条空壳，同样跳过——但不计入 droppedNonURL：那是「形态装得下
+// 但字段为空」的空壳，与「另一种引用形态无处落脚」分账，措辞不同不可混计。
+func decodeAnnotations(as []annotation) (cites []ir.Citation, droppedNonURL int) {
 	if len(as) == 0 {
-		return nil
+		return nil, 0
 	}
 	out := make([]ir.Citation, 0, len(as))
 	for _, a := range as {
 		if a.Type != "" && a.Type != "url_citation" {
+			droppedNonURL++
 			continue
 		}
 		if a.URL == "" {
@@ -44,7 +50,7 @@ func decodeAnnotations(as []annotation) []ir.Citation {
 			End:   a.EndIndex,
 		})
 	}
-	return ir.DedupeCitations(out)
+	return ir.DedupeCitations(out), droppedNonURL
 }
 
 // encodeAnnotations IR -> 线上标注。无法解析范围的条目保留（零偏移量），
