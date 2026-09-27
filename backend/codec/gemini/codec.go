@@ -102,6 +102,9 @@ func (outboundCodec) Caps() codec.Capabilities {
 		// 不在表里的类型发出去会拿到不可重试的 400。
 		// 非图片媒体可只凭远程 URL 投递（FileData.FileURI），故为真。
 		NonImageMediaURL: true,
+		// 图片槽位也能带文件名：Blob.displayName / FileData.displayName 对图片
+		// 与非图片一视同仁地写回 Media.Name，故这一维不丢。
+		ImageFilename: true,
 		MediaTypes: []string{
 			"image/png", "image/jpeg", "image/webp", "image/heic", "image/heif",
 			"audio/wav", "audio/mpeg", "audio/mp3", "audio/aiff", "audio/aac",

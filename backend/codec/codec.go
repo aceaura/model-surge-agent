@@ -136,6 +136,18 @@ type Capabilities struct {
 	// URL 那种「换成 base64 即可」不同，读者无从补救，故单独立一位。
 	// 当前只有 Responses 一族有这一维。
 	ImageFileRef bool
+	// ImageFilename 为真表示本协议的**图片**槽位能携带附件文件名（gemini 的
+	// Blob.displayName / FileData.displayName，对图片与非图片一视同仁）。为假的
+	// 三家图片槽位（chat 的 image_url、responses 的 input_image、anthropic 的
+	// image source）都只装 URL/字节/detail，没有文件名字段——带载荷的图片块若
+	// 携了 Media.Name（来自 chat 的 file part / responses 的 input_file，mime 嗅
+	// 成图片时归 BlockImage 且带名），出站这一维静默丢弃。注意与「非图片文件
+	// 名」分开：非图片走 file/input_file part 与 anthropic document.title，三家
+	// 都保得住名；唯独图片这一路丢，故单独立一位。事实出处是各 encodeMediaPart
+	// 的图片分支（image_url/input_image 无 Filename，gemini wireBlob 有
+	// DisplayName），诊断与它同源避免漂移。file_id-only 的图片不经此路（chat/
+	// responses 用 file/input_file part 保住名），故诊断只在 HasPayload 时报。
+	ImageFilename bool
 	// NativeFileRef 为真表示本协议有一个原生「文件引用」槽位，可只凭上游
 	// 文件服务的 id 投递**非图片**媒体（document/file/audio）而不内联字节：
 	// chat_completions 的 file part、responses 的 input_file。与 ImageFileRef

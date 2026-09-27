@@ -25,6 +25,7 @@ var structuralCaps = map[string]struct {
 	toolResultError    bool
 	toolResultTextOnly bool
 	imageDetail        bool
+	imageFilename      bool
 }{
 	codec.ProtocolAnthropic: {
 		cacheBreakpoints: 4,
@@ -70,6 +71,8 @@ var structuralCaps = map[string]struct {
 		toolResultTextOnly: true,
 		// 官方限定至多 5 个 stopSequences，超出即 INVALID_ARGUMENT。
 		maxStopSequences: 5,
+		// Blob.displayName / FileData.displayName 对图片也写回文件名。
+		imageFilename: true,
 	},
 }
 
@@ -121,6 +124,9 @@ func TestEveryOutboundDeclaresStructuralCaps(t *testing.T) {
 			}
 			if got.ImageDetail != want.imageDetail {
 				t.Errorf("ImageDetail = %v，想要 %v", got.ImageDetail, want.imageDetail)
+			}
+			if got.ImageFilename != want.imageFilename {
+				t.Errorf("ImageFilename = %v，想要 %v", got.ImageFilename, want.imageFilename)
 			}
 		})
 	}

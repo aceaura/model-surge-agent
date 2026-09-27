@@ -469,6 +469,11 @@ const emptyMediaWhy = "the part carries no payload the target protocol can expre
 // 外族没有对应槽位。tool_use 与 server_tool_use 共用此串以免两处漂移。
 const toolCallerWhy = "the tool call carries an anthropic-only caller/toolset_name provenance marker that the target protocol has no field for; it is dropped"
 
+// imageFilenameWhy 是「带载荷图片块的文件名投给无图片文件名槽位的目标被丢」的
+// 措辞。文件名不影响图片字节的投递，只是少了「这本来叫什么文件」的旁注，故措辞
+// 与「整张图没了」区分开。gemini 的 displayName 接得住，不报此条。
+const imageFilenameWhy = "the image part carries a filename but this target's image slot has no filename field (only the bytes/URL are sent); the name is dropped"
+
 // describeImageLossy 报一张图片相对目标协议丢掉的三维：detail 档位、file_id
 // 引用、以及整个部件没有任何可投递载荷。与能力位判定同一出处，编码器的跳过
 // 判据（HasPayload）与这里的「确实丢了」口径一致。
@@ -500,6 +505,14 @@ func describeImageLossy(m *ir.Media, caps Capabilities, note func(field, why str
 		// 档位决定上游怎么切图、进而决定输入 token 计费。丢掉之后上游一律
 		// 按自己的默认档处理，账单上看得出、请求里看不出。
 		note("image detail", "no detail slot, the upstream will tile it at its own default level")
+	}
+	if m.Name != "" && m.HasPayload() && !caps.ImageFilename {
+		// 带载荷的图片走各家的图片槽位（chat image_url / responses input_image /
+		// anthropic image source），这些槽位只装 URL/字节/detail，没有文件名字段，
+		// Media.Name 静默蒸发。gemini 的 Blob.displayName 接得住（caps.ImageFilename
+		// 为真），排除之。只在 HasPayload 时报：file_id-only 的图片不经图片槽位，
+		// chat/responses 用 file/input_file part 把文件名保住了，报了就是谎报。
+		note("image filename", imageFilenameWhy)
 	}
 	if m.HasPayload() {
 		return

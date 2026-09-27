@@ -1745,7 +1745,12 @@ func lossyProbes() []lossyProbe {
 			},
 			expressible: func(c codec.Capabilities) bool { return c.Thinking },
 		},
-		mediaProbe(ir.BlockImage, "image/png", pngPixel, "shot.png"),
+		// 图片探针不带文件名：本矩阵测的是「媒体类型可投递 ⇒ 无说明」这一维，
+		// 而文件名是图片的正交子维度（与 detail 同类）——带载荷图片即便类型可投递，
+		// 投给无图片文件名槽位的三家仍会丢名并单独报一条（见 imagefilenameloss_test.go）。
+		// 探针留空文件名（正如它也不设 detail），矩阵才只钉类型维；audio/document/file
+		// 探针保留文件名，因为它们类型可投递时名字随之保住、不另生说明。
+		mediaProbe(ir.BlockImage, "image/png", pngPixel, ""),
 		mediaProbe(ir.BlockAudio, "audio/wav", wavClip, "clip.wav"),
 		mediaProbe(ir.BlockDocument, "application/pdf", pdfDoc, "spec.pdf"),
 		mediaProbe(ir.BlockFile, "text/plain", textFile, "notes.txt"),
