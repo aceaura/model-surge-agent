@@ -369,6 +369,18 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 			if (b.Media == nil || b.Media.HasPayload()) && !caps.AcceptsMedia(SniffMediaType(b.Media)) {
 				note(string(b.Type)+" blocks", "unsupported media type, downgraded to text")
 			}
+			// 类型在白名单里（上面那条因此不报），但只带远程 URL、没有内联字节，
+			// 而目标又不能凭 URL 投递非图片媒体（chat 的 file part / responses 的
+			// input_file 只认内联 data 或 file_id 引用）：编码器把它降级成「附件已
+			// 省略」文本占位，URL 没送到模型面前，模型读不到那个文件。这是与「类型
+			// 不支持」不同的第二种降级，此前无人报。判据与各 encodeMediaPart 的
+			// 「非图片需内联 Data」分支同源。图片另有 URL 槽位（四家都能按 URL 投
+			// 图片），不在此列；纯 file_id 引用已在上面的空载荷分支按 NativeFileRef
+			// 判过，走不到这里。
+			if b.Type != ir.BlockImage && b.Media != nil && b.Media.Data == "" && b.Media.URL != "" &&
+				caps.AcceptsMedia(SniffMediaType(b.Media)) && !caps.NonImageMediaURL {
+				note(string(b.Type)+" blocks", "the part is only a remote URL and this target cannot deliver non-image media by reference, downgraded to a text placeholder")
+			}
 
 		case b.Type == ir.BlockToolUse, b.Type == ir.BlockToolResult:
 			if !caps.Tools {
@@ -797,6 +809,17 @@ func describeParamsLossy(req *ir.Request, name string, caps Capabilities, note, 
 			switch {
 			case caps.ResponseSchema:
 				// schema 约束原样送达（含 anthropic 的 output_config.format）。
+				// 例外：客户端选了 json_schema 却没带 schema 原文（OpenAI 两系会
+				// 解成 Kind=Schema、Schema 空）。没有结构可约束时，能退回纯 JSON
+				// 的目标（chat/responses 写 json_object、gemini 写 responseMimeType）
+				// 保住了「至少是 JSON」这一最低要求，不算丢失；但只收 schema 约束
+				// 形态、退回不了纯 JSON 的目标（anthropic：ResponseSchema 真而
+				// ResponseFormat 假）空 schema 时什么都写不出，连「要 JSON」都落空，
+				// 响应变自由文本——与纯 JSON 模式在它上面的处置（见下面 else 分支）
+				// 一致，必须报。
+				if rf.Schema == "" && !caps.ResponseFormat {
+					note("response_format", "the request asked for schema-constrained output but carried no schema, and the target accepts only schema-constrained structured output, so the response will be free-form text")
+				}
 			case caps.ResponseFormat:
 				// 支持 JSON 但不支持 schema：降级成「只要求是 JSON」，
 				// 客户端的最低要求仍满足。

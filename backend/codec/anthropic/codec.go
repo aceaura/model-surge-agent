@@ -158,6 +158,9 @@ func (outboundCodec) Caps() codec.Capabilities {
 		// 这是照官方请求体核实的结果，不是没填。
 		// SchemaDialect 留零值：本协议接受完整 JSON Schema。
 		// 本协议只读图片与 PDF；音频与其他附件在编码时降级为文本。
+		// 图片与 PDF 都能只凭远程 URL 投递（document source.type=url），故
+		// NonImageMediaURL 为真——只带 URL 的 PDF 不会被降级。
+		NonImageMediaURL: true,
 		MediaTypes: []string{
 			"image/png", "image/jpeg", "image/gif", "image/webp",
 			"application/pdf",

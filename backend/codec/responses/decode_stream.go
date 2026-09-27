@@ -664,6 +664,15 @@ func (d *streamDecoder) completeItemParts(oi int, raw json.RawMessage) []ir.Even
 			out = append(out, d.backfill(partKey(oi, n), kind,
 				partText(&parts[n]), ir.EvTextDelta)...)
 			out = append(out, d.doneCitations(partKey(oi, n), &parts[n])...)
+		default:
+			// done-only 上游把整条正文只放在 output_item.done 里；其中未映射的
+			// part 种类（如音频输出、日后新增的 part 型）此前被这个 switch 静默
+			// 跳过——连「丢了个 part」都不说。与流式 part 帧路径
+			// （content_part.added 的 default，见上面 droppedMsgParts++）同口径
+			// 计数，经 Notes() 报出：同一类丢弃不能一条路径报、另一条不报。空
+			// type 已在上面 case 里按「缺字段的文本」处理，落到这里的一定是未知
+			// 的非空种类，故无需再判空。
+			d.droppedMsgParts++
 		}
 	}
 	return out

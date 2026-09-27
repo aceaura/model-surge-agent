@@ -488,3 +488,34 @@ func TestResponsesRoundTripNormalStreamNoDuplication(t *testing.T) {
 		t.Fatalf("增量帧数不对：\n%s", s)
 	}
 }
+
+// done-only 上游把整条正文只放在 output_item.done 里，其中夹着本转换映射不了的
+// part 种类（如 output_audio）：completeItemParts 的 switch 此前没有 default，
+// 未映射 part 被静默跳过——连「丢了个 part」都不说。而流式 part 帧路径
+// （content_part.added 的 default）对同一类丢弃会计数并经 Notes() 报出。同一类
+// 丢弃不能一条路径报、另一条不报（对称规则 c）。这里直接构造解码器以取 Notes()。
+func TestStreamDecodeItemDoneUnmappedPartIsCounted(t *testing.T) {
+	d := newStreamDecoder()
+	if _, err := d.Feed("", `{"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"m1","role":"assistant","content":[{"type":"output_text","text":"正文"},{"type":"output_audio","audio":{"data":"AAA","id":"a1"}}]}}`); err != nil {
+		t.Fatalf("Feed: %v", err)
+	}
+	d.Finish()
+	notes := strings.Join(d.Notes(), "\n")
+	if !strings.Contains(notes, "does not map") {
+		t.Errorf("output_item.done 里未映射的 output_audio part 应计入丢弃注记，实际:\n%s", notes)
+	}
+}
+
+// 反向隔离：output_item.done 只含已映射的 output_text 时不得误报丢弃 part，
+// 否则上面那条断言可能只是恒真。
+func TestStreamDecodeItemDoneMappedPartNotCounted(t *testing.T) {
+	d := newStreamDecoder()
+	if _, err := d.Feed("", `{"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"m1","role":"assistant","content":[{"type":"output_text","text":"正文"}]}}`); err != nil {
+		t.Fatalf("Feed: %v", err)
+	}
+	d.Finish()
+	notes := strings.Join(d.Notes(), "\n")
+	if strings.Contains(notes, "does not map") {
+		t.Errorf("只含 output_text 的 output_item.done 被误报丢弃 part:\n%s", notes)
+	}
+}

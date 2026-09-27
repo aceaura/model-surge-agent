@@ -100,6 +100,8 @@ func (outboundCodec) Caps() codec.Capabilities {
 		},
 		// 本协议的 mimeType 是必填项且上游按白名单校验，
 		// 不在表里的类型发出去会拿到不可重试的 400。
+		// 非图片媒体可只凭远程 URL 投递（FileData.FileURI），故为真。
+		NonImageMediaURL: true,
 		MediaTypes: []string{
 			"image/png", "image/jpeg", "image/webp", "image/heic", "image/heif",
 			"audio/wav", "audio/mpeg", "audio/mp3", "audio/aiff", "audio/aac",

@@ -145,7 +145,18 @@ type Capabilities struct {
 	// 语义，故 chat_completions 有 NativeFileRef 而无 ImageFileRef。出站编码器
 	// 的 encodeMediaPart FileID 分支是这一维的事实出处，诊断与它同源避免漂移。
 	NativeFileRef bool
-	LogitBias     bool
+	// NonImageMediaURL 为真表示本协议能只凭一个远程 URL 投递**非图片**媒体
+	// （document/file/audio）：anthropic 的 document source.type=url、gemini 的
+	// FileData.FileURI。为假的两家（chat_completions 的 file part、responses 的
+	// input_file）承载非图片媒体只认内联 base64（或 file_id 引用，见
+	// NativeFileRef），拿到「只有 URL、没有内联字节」的附件无从投递，编码器降级
+	// 成「附件已省略」文本占位——URL 本身没送到模型面前，模型读不到那个文件。
+	// 与 NativeFileRef 是两条独立维度：一个说「能不能凭 id 引用」，一个说「能不能
+	// 凭 URL 引用」。图片不在此列：四家都有图片 URL 槽位（image_url.url /
+	// input_image / FileURI），只带 URL 的图片照常投递。事实出处是各 encodeMediaPart
+	// 的「非图片需内联 Data」分支，诊断与它同源避免漂移。
+	NonImageMediaURL bool
+	LogitBias        bool
 	// ServiceTier 有服务质量档位槽位。三家值集不同：anthropic 只有
 	// auto/standard_only，chat 是 auto/default/flex/scale/priority/fast，
 	// responses 的值集是 chat 的超集（另有 ultrafast）。有槽位不代表
