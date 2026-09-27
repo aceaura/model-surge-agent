@@ -259,9 +259,6 @@ type wireResponse struct {
 	StopReason   string          `json:"stop_reason,omitempty"`
 	StopSequence string          `json:"stop_sequence,omitempty"`
 	Usage        wireUsage       `json:"usage"`
-	// ServiceTier 实际执行档位回显（standard/priority/batch）。上游同族
-	// 原值收下；跨族由编码器按 codec.MapServiceTierEcho 翻译或丢弃。
-	ServiceTier string `json:"service_tier,omitempty"`
 	// StopDetails 拒绝档的结构化分类（官方 response.stop_details）。
 	StopDetails *wireStopDetails `json:"stop_details,omitempty"`
 	// Container 代码执行容器回显（按需出场，缺键与 null 同义）。
@@ -288,6 +285,14 @@ type wireUsage struct {
 	ServerToolUse *wireServerToolUsage `json:"server_tool_use,omitempty"`
 	// InferenceGeo 实际推理区域回显（官方 usage.inference_geo）。
 	InferenceGeo string `json:"inference_geo,omitempty"`
+	// ServiceTier 实际执行档位回显（standard/priority/batch）。**官方把它
+	// 放在 usage 下**（Usage.service_tier），不是 Message 顶层——顶层没有
+	// 这个键（据 anthropic-sdk-typescript：Message 仅 id/type/role/model/
+	// content/stop_reason/stop_sequence/stop_details/container/usage）。
+	// 只在 message_start 的完整 usage 与非流式响应里出现；message_delta 的
+	// 精简 usage（MessageDeltaUsage）没有它。上游同族原值收下，跨族由编码器
+	// 按 codec.MapServiceTierEcho 翻译或丢弃。
+	ServiceTier string `json:"service_tier,omitempty"`
 	// Iterations beta usage.iterations：按迭代阶段（message/compaction/advisor）
 	// 细分的用量。判别式值域仍在演进，原文透传不建模；stable Usage 无此键，
 	// 仅 beta 往返带得回。
@@ -412,9 +417,6 @@ type streamMsg struct {
 	StopReason   *string   `json:"stop_reason"`
 	StopSequence *string   `json:"stop_sequence"`
 	Usage        wireUsage `json:"usage"`
-	// ServiceTier 实际执行档位回显（message_start 携带；message_delta
-	// 没有这个槽位，晚到的回显送不出去）。
-	ServiceTier string `json:"service_tier,omitempty"`
 	// Container 代码执行容器回显（message_start 首帧携带，缺键与 null 同义）。
 	Container *container `json:"container,omitempty"`
 }

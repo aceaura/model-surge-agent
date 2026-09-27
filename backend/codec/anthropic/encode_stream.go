@@ -371,12 +371,15 @@ func (e *streamEncoder) encodeStart(ev ir.Event) ([][]byte, error) {
 		Type: "message", ID: ev.MessageID, Model: ev.Model, Role: string(ir.RoleAssistant),
 		Content: []json.RawMessage{},
 	}
-	// 实际执行档位回显：同族原值下发，跨族按回显值集翻译；装不下的
+	// 实际执行档位回显：官方置于 usage.service_tier（message_start 的完整
+	// usage 里），不是 message 顶层。同族原值下发，跨族按回显值集翻译；装不下的
 	// 丢弃，Notes() 报出——这一维决定计费，无声丢掉会让客户端按自己
-	// 点的档位对账。
+	// 点的档位对账。tierEcho 暂存待写入 usage 的值（renderUsage 会整体覆盖
+	// msg.Usage，故必须在其后再落档位）。
+	var tierEcho string
 	if ev.ServiceTier != "" {
 		if tier, ok := codec.MapServiceTierEcho(ev.ServiceTier, Name); ok {
-			msg.ServiceTier = tier
+			tierEcho = tier
 			e.tierSent = true
 		} else {
 			e.droppedTier = ev.ServiceTier
@@ -404,6 +407,8 @@ func (e *streamEncoder) encodeStart(ev ir.Event) ([][]byte, error) {
 			e.startDeliveredGeo = true
 		}
 	}
+	// usage 就位后再写档位回显（renderUsage 会整体覆盖 msg.Usage）。
+	msg.Usage.ServiceTier = tierEcho
 	frame, err := marshalFrame(evMessageStart, streamEvent{Type: evMessageStart, Message: msg})
 	if err != nil {
 		return nil, err
@@ -581,10 +586,11 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 		Usage:        renderUsage(resp.Usage),
 		Container:    encodeContainerInfo(resp.Container),
 	}
-	// 实际执行档位回显：跨族按回显值集翻译，装不下的（OpenAI 系的
-	// flex/scale/fast/ultrafast 等）丢弃，由 DescribeResponseTierLoss 报出。
+	// 实际执行档位回显：官方置于 usage.service_tier，不是 Message 顶层。
+	// 跨族按回显值集翻译，装不下的（OpenAI 系的 flex/scale/fast/ultrafast
+	// 等）丢弃，由 DescribeResponseTierLoss 报出。
 	if tier, ok := codec.MapServiceTierEcho(resp.ServiceTier, Name); ok {
-		w.ServiceTier = tier
+		w.Usage.ServiceTier = tier
 	}
 	if w.ID == "" {
 		w.ID = "msg_unknown"

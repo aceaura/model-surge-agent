@@ -205,7 +205,7 @@ var serviceTierStream = map[string]string{
 		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"model\":\"m\",\"status\":\"completed\",\"service_tier\":\"default\"}}\n\n",
 	codec.ProtocolAnthropic: "event: message_start\n" +
 		"data: {\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"model\":\"m\"," +
-		"\"role\":\"assistant\",\"service_tier\":\"standard\",\"usage\":{\"input_tokens\":1}}}\n\n" +
+		"\"role\":\"assistant\",\"usage\":{\"input_tokens\":1,\"service_tier\":\"standard\"}}}\n\n" +
 		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
 }
 
@@ -222,8 +222,8 @@ var serviceTierWhole = map[string]string{
 	codec.ProtocolResponses: `{"id":"r1","model":"m","status":"completed","service_tier":"default",
 		"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}]}`,
 	codec.ProtocolAnthropic: `{"id":"m1","type":"message","role":"assistant","model":"m",
-		"service_tier":"standard","content":[{"type":"text","text":"hi"}],
-		"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`,
+		"content":[{"type":"text","text":"hi"}],
+		"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1,"service_tier":"standard"}}`,
 }
 
 // TestServiceTierDecodesIntoIR：三个有这个字段的出站协议都要解出它，

@@ -105,7 +105,8 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 			out.MessageID = ev.Message.ID
 			out.Model = ev.Message.Model
 			// 上游回显的实际执行档位原值进 IR，跨族映射在出站编码做。
-			out.ServiceTier = ev.Message.ServiceTier
+			// 官方把 service_tier 放在 message_start 的 usage 下，不是 message 顶层。
+			out.ServiceTier = ev.Message.Usage.ServiceTier
 			out.Container = decodeContainer(ev.Message.Container)
 			u := convertUsage(ev.Message.Usage)
 			out.Usage = &u
@@ -253,7 +254,8 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 		StopReason:  convertStopReason(w.StopReason),
 		StopDetails: decodeStopDetails(w.StopDetails),
 		Usage:       convertUsage(w.Usage),
-		ServiceTier: w.ServiceTier,
+		// 官方 service_tier 在 usage 下，不是 Message 顶层。
+		ServiceTier: w.Usage.ServiceTier,
 		Container:   decodeContainer(w.Container),
 	}
 	out.StopSequence = adoptStopSequence(out.StopReason, w.StopSequence)
