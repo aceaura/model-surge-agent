@@ -86,6 +86,11 @@ type toolSlot struct {
 	name      string
 	pending   strings.Builder
 	announced bool
+	// custom 标记这是 type=custom 的自定义工具调用：入参是自由文本（走 wire
+	// custom.input）而非 JSON 的 function.arguments。block_start 要据此带
+	// Kind=ToolCustom，聚合器才知道终态把累积的入参原文落进 InputText 并补
+	// {"input":…} 投影，而不是当 JSON 参数处理。与非流式 toolUseFromCall 同口径。
+	custom bool
 }
 
 func newStreamDecoder() *streamDecoder {
@@ -312,18 +317,34 @@ func (d *streamDecoder) decodeToolCalls(calls []wireToolCall) ([]ir.Event, error
 			slot.id = tc.ID
 			d.byID[tc.ID] = slot
 		}
-		if tc.Function.Name != "" {
-			slot.name = tc.Function.Name
+		// custom 调用（type=custom）的名字与入参在 custom 槽位、不在 function 槽位。
+		// 此前只读 function.*：流式 custom 调用会因 function.name 恒空被 announcePending
+		// 兜底成 unknown_tool、自由文本入参整段蒸发，且无任何注记（非流式
+		// toolUseFromCall 早已正确解出 Kind/InputText，两路不一致）。标记形态并改从
+		// custom 载荷取名与入参片段——入参与 function.arguments 一样按分片累积。
+		nameFrag := tc.Function.Name
+		inputFrag := tc.Function.Arguments
+		if tc.Type == "custom" || tc.Custom != nil {
+			// type 通常只在首片带，后续片只带 custom.input；两种线索任一命中都
+			// 认作 custom，并把名字/入参改从 custom 载荷取（缺片的空名不覆盖首片）。
+			slot.custom = true
+			if tc.Custom != nil {
+				nameFrag = tc.Custom.Name
+				inputFrag = tc.Custom.Input
+			}
+		}
+		if nameFrag != "" {
+			slot.name = nameFrag
 		}
 
 		if slot.announced {
-			if tc.Function.Arguments != "" {
+			if inputFrag != "" {
 				out = append(out, ir.Event{
-					Type: ir.EvToolInput, Index: slot.index, Text: tc.Function.Arguments})
+					Type: ir.EvToolInput, Index: slot.index, Text: inputFrag})
 			}
 			continue
 		}
-		slot.pending.WriteString(tc.Function.Arguments)
+		slot.pending.WriteString(inputFrag)
 		if slot.name != "" {
 			out = append(out, d.announce(slot)...)
 		}
@@ -338,13 +359,16 @@ func (d *streamDecoder) announce(slot *toolSlot) []ir.Event {
 		slot.id = d.synthCallID(slot.name)
 	}
 	slot.announced = true
+	tu := &ir.ToolUse{ID: slot.id, Name: slot.name}
+	if slot.custom {
+		// 带上形态：聚合器据此把累积的入参原文落进 InputText 并补 {"input":…}
+		// 投影，而不是当 JSON 参数（与 responses 流式 custom_tool_call 同口径）。
+		tu.Kind = ir.ToolCustom
+	}
 	out := []ir.Event{{
 		Type:  ir.EvBlockStart,
 		Index: slot.index,
-		Block: &ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
-			ID:   slot.id,
-			Name: slot.name,
-		}},
+		Block: &ir.Block{Type: ir.BlockToolUse, ToolUse: tu},
 	}}
 	if slot.pending.Len() > 0 {
 		out = append(out, ir.Event{

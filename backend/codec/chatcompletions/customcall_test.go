@@ -160,3 +160,73 @@ func TestDeprecatedFunctionCallStream(t *testing.T) {
 		t.Errorf("合成 id 注记不对：%q", notes)
 	}
 }
+
+// 流式 custom 调用（delta.tool_calls type=custom）：此前流式只读 function 槽位，
+// custom 调用因 function.name 恒空被兜底成 unknown_tool、自由文本入参整段蒸发
+// （非流式早已正确）。钉住流式与非流式同款：Kind=custom、名字、InputText 原文、
+// Input 投影、id 都保全。type 只在首片带、入参跨片累积都要认得。
+func TestCustomToolCallStream(t *testing.T) {
+	resp, _ := decodeStream(t,
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"tool_calls":[`+
+			`{"index":0,"id":"call_1","type":"custom","custom":{"name":"shell","input":"echo "}}]}}]}`,
+		// 后续片不再带 type，只带 custom.input：也要认作 custom 并累积。
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"tool_calls":[`+
+			`{"index":0,"custom":{"input":"hi"}}]}}]}`,
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		doneSentinel,
+	)
+	tools := toolBlocks(resp)
+	if len(tools) != 1 {
+		t.Fatalf("tool blocks = %d, want 1: %+v", len(tools), tools)
+	}
+	tu := tools[0].ToolUse
+	if tu == nil {
+		t.Fatalf("tool use 为 nil: %+v", tools[0])
+	}
+	if tu.Kind != ir.ToolCustom {
+		t.Errorf("流式 custom 调用没带上 Kind=custom：%q", tu.Kind)
+	}
+	if tu.Name != "shell" {
+		t.Errorf("名字丢失或被兜底成 unknown_tool：%q", tu.Name)
+	}
+	if tu.InputText != "echo hi" {
+		t.Errorf("自由文本入参没跨片拼回：%q", tu.InputText)
+	}
+	if tu.Input != `{"input":"echo hi"}` {
+		t.Errorf("Input 投影不对：%q", tu.Input)
+	}
+	if tu.ID != "call_1" {
+		t.Errorf("id 丢失：%q", tu.ID)
+	}
+}
+
+// 同一条流里 custom 与 function 两种调用并存：各走各的槽位，custom 落 InputText、
+// function 落 JSON 参数，互不串味。
+func TestCustomToolCallStreamMixedWithFunction(t *testing.T) {
+	resp, _ := decodeStream(t,
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"tool_calls":[`+
+			`{"index":0,"id":"call_c","type":"custom","custom":{"name":"shell","input":"ls -l"}}]}}]}`,
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"tool_calls":[`+
+			`{"index":1,"id":"call_f","type":"function","function":{"name":"get","arguments":"{\"q\":1}"}}]}}]}`,
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		doneSentinel,
+	)
+	tools := toolBlocks(resp)
+	if len(tools) != 2 {
+		t.Fatalf("tool blocks = %d, want 2: %+v", len(tools), tools)
+	}
+	byName := map[string]*ir.ToolUse{}
+	for _, b := range tools {
+		if b.ToolUse != nil {
+			byName[b.ToolUse.Name] = b.ToolUse
+		}
+	}
+	c := byName["shell"]
+	if c == nil || c.Kind != ir.ToolCustom || c.InputText != "ls -l" || c.Input != `{"input":"ls -l"}` {
+		t.Errorf("custom 调用不对：%+v", c)
+	}
+	f := byName["get"]
+	if f == nil || f.Kind != ir.ToolFunction || f.Input != `{"q":1}` || f.InputText != "" {
+		t.Errorf("function 调用被 custom 逻辑污染：%+v", f)
+	}
+}
