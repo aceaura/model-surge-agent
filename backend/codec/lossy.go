@@ -245,6 +245,22 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 				"dropped the responses message phase (commentary/final_answer) on %d assistant message(s): the target protocol has no phase slot, the model cannot tell commentary from the final answer", n)
 		}
 	}
+	// responses reasoning 条目的通道来源（content 通道 reasoning_text=模型内部推理
+	// 原文 vs summary 通道 reasoning_summary_text=给用户看的摘要，见
+	// ir.Thinking.ContentChannel）：只有 responses 解码器落进 IR、只有 responses
+	// 编码器据此选回哪条通道，其余族的思考块只有一个正文槽，通道 provenance 无处
+	// 安放。跨族时正文逐字保留（anthropic thinking / gemini thought part / chat
+	// reasoning_content 都写回同一段文本），丢的只是「这段是原始推理还是摘要」这个
+	// 标记——与 message phase 同款「内容不丢、语义标签丢」。同族 responses→responses
+	// 按标记选回原通道，原样往返，报了就是谎报，排除之（与 item id / phase 同款门控）。
+	// 判据与解码器同口径（ContentChannel 仅在 content 通道有正文时置真，故必带非空
+	// 正文，跨族正文一定保留、不会被空壳跳过）。
+	if name != ProtocolResponses {
+		if n := countContentChannelReasoning(req); n > 0 {
+			notes["reasoning channel"] = fmt.Sprintf(
+				"dropped the content-channel marker on %d reasoning block(s): the reasoning text is preserved verbatim, but the target protocol has no reasoning-channel slot, so its model cannot tell the model's raw internal reasoning (reasoning_text) from a user-facing summary (reasoning_summary_text)", n)
+		}
+	}
 	// responses 的 typed tool_choice（mcp/file_search/computer_use 等无 name
 	// 变体，IR 的 Raw 不透明槽、Mode 留零值）：外族的 tool_choice 形状只有
 	// auto/any/none/具名函数四档，托管工具指名变体整条编不出，出站缺省后
@@ -1786,6 +1802,23 @@ func countMessagePhase(req *ir.Request) int {
 	for _, m := range req.Messages {
 		if m.ResponsesPhase != "" {
 			n++
+		}
+	}
+	return n
+}
+
+// countContentChannelReasoning 数标记为 content 通道（reasoning_text 原文，
+// 而非 summary 通道摘要）的思考块条数。该维度只由 responses 解码器落进 IR、
+// 只由 responses 编码器据此选回哪条通道，跨族丢弃后目标族无从区分原始推理与
+// 用户摘要（正文本身逐字保留）。判据与解码器同口径：ContentChannel 仅在
+// content 通道有正文时置真，故每个被计数的块都带非空正文。
+func countContentChannelReasoning(req *ir.Request) int {
+	n := 0
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			if b.Thinking != nil && b.Thinking.ContentChannel {
+				n++
+			}
 		}
 	}
 	return n
