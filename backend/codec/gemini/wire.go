@@ -200,6 +200,11 @@ type wireCandidate struct {
 	// ir.Citation（Portable 以 URL 为身份）；字节偏移的取舍见 candidateCitations。
 	CitationMetadata  *wireCitationMetadata  `json:"citationMetadata,omitempty"`
 	GroundingMetadata *wireGroundingMetadata `json:"groundingMetadata,omitempty"`
+	// LogprobsResult 是上游按 responseLogprobs=true 计算出的逐 token 对数概率
+	// （官方 Candidate.logprobsResult，Output only）。IR 响应模型没有逐 token
+	// 概率槽位，只探测存在性并计数报出——与 chat/responses 解码器同款处置
+	// （LogProbsDropNote）。不建模内部结构：只需知道「有没有」，不需解析内容。
+	LogprobsResult json.RawMessage `json:"logprobsResult,omitempty"`
 }
 
 // wireCitationMetadata 是候选级引用集合（官方 CitationMetadata.citationSources）。

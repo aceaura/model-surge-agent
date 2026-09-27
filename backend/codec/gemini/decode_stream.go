@@ -67,6 +67,9 @@ type streamDecoder struct {
 	sawText   bool
 	// droppedCitations 计无处安放（候选无文本块）的来源标注数，经 Notes() 报出。
 	droppedCitations int
+	// droppedLogprobs 计携带 logprobsResult 的候选数：逐 token 对数概率没有 IR
+	// 槽位，与 chat/responses 解码器同款处置（探测存在性→计数→LogProbsDropNote）。
+	droppedLogprobs int
 }
 
 type openBlock struct {
@@ -113,6 +116,10 @@ func (d *streamDecoder) Notes() []string {
 	if d.droppedCitations > 0 {
 		notes = append(notes, codec.DroppedCitationsNote(d.droppedCitations))
 		d.droppedCitations = 0
+	}
+	if d.droppedLogprobs > 0 {
+		notes = append(notes, codec.LogProbsDropNote(d.droppedLogprobs))
+		d.droppedLogprobs = 0
 	}
 	return codec.DedupeNotes(notes)
 }
@@ -200,6 +207,11 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 			} else {
 				d.droppedCitations += len(cits)
 			}
+		}
+		// 逐 token 对数概率：IR 没有槽位，探测存在性后计数报出（与 chat/responses
+		// 解码器同款处置）。只认 logprobsResult（主载荷），avgLogprobs 是其摘要。
+		if len(cand.LogprobsResult) > 0 && string(cand.LogprobsResult) != "null" {
+			d.droppedLogprobs++
 		}
 		if cand.FinishReason != "" {
 			d.stopReason = convertFinishReason(cand.FinishReason)
@@ -535,6 +547,7 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 
 	var calls int
 	var droppedCitations int
+	var logprobs int
 	for _, cand := range w.Candidates {
 		if cand.Index != 0 {
 			if cand.Index > maxCandidate {
@@ -614,6 +627,9 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 				droppedCitations += len(cits)
 			}
 		}
+		if len(cand.LogprobsResult) > 0 && string(cand.LogprobsResult) != "null" {
+			logprobs++
+		}
 	}
 	if calls > 0 && (out.StopReason == "" || out.StopReason == ir.StopEndTurn) {
 		out.StopReason = ir.StopToolUse
@@ -634,6 +650,9 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	}
 	if droppedCitations > 0 {
 		notes = append(notes, codec.DroppedCitationsNote(droppedCitations))
+	}
+	if logprobs > 0 {
+		notes = append(notes, codec.LogProbsDropNote(logprobs))
 	}
 	return out, codec.DedupeNotes(notes), nil
 }
