@@ -255,12 +255,18 @@ func appendMessage(out *ir.Request, m wireMessage) error {
 		for _, tc := range m.ToolCalls {
 			blocks = append(blocks, ir.Block{Type: ir.BlockToolUse, ToolUse: toolUseFromCall(tc)})
 		}
-		if len(m.ToolCalls) == 0 && m.FunctionCall != nil && m.FunctionCall.Name != "" {
-			// 废弃形态但载荷完整：name+arguments 直接进 IR（无 id 可带）。
+		if len(m.ToolCalls) == 0 && m.FunctionCall != nil {
+			// 废弃形态但载荷在手：name+arguments 直接进 IR（无 id 可带）。
 			// 不读则旧兼容上游的函数调用整段蒸发。tool_calls 同在时以
-			// tool_calls 为准，两槽位不重复进 IR。
+			// tool_calls 为准，两槽位不重复进 IR。name 为空不丢整条——与流式
+			// announcePending 同款补 unknown_tool 占位，否则历史里「决定调用
+			// 工具却没给名字」的调用会在此静默蒸发，模型看不到自己调用过。
+			name := m.FunctionCall.Name
+			if name == "" {
+				name = unknownToolName
+			}
 			blocks = append(blocks, ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
-				Name:  m.FunctionCall.Name,
+				Name:  name,
 				Input: m.FunctionCall.Arguments,
 			}})
 		}

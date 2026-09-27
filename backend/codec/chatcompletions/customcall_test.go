@@ -230,3 +230,77 @@ func TestCustomToolCallStreamMixedWithFunction(t *testing.T) {
 		t.Errorf("function 调用被 custom 逻辑污染：%+v", f)
 	}
 }
+
+// 废弃 function_call 带空名但有 arguments 载荷：非流式响应侧不得整段蒸发。
+// 此前门控 Name != "" 会把「上游决定调用工具却没给名字」的调用连同 arguments
+// 一起静默丢掉，而流式 announcePending 保全成 unknown_tool——同一丢弃两路分叉。
+// 钉住非流式与流式同款：补 unknown_tool 占位、arguments 原样保全。
+func TestDeprecatedFunctionCallEmptyNameNonStreaming(t *testing.T) {
+	respBody := `{"id":"c1","model":"m","choices":[{"index":0,"finish_reason":"function_call",` +
+		`"message":{"role":"assistant","function_call":{"arguments":"{\"a\":1}"}}}]}`
+	resp, err := DecodeResponse([]byte(respBody))
+	if err != nil {
+		t.Fatalf("DecodeResponse: %v", err)
+	}
+	if len(resp.Content) != 1 || resp.Content[0].ToolUse == nil {
+		t.Fatalf("空名废弃 function_call 整段蒸发: %+v", resp.Content)
+	}
+	tu := resp.Content[0].ToolUse
+	if tu.Name != unknownToolName {
+		t.Errorf("空名没补 unknown_tool 占位：%q", tu.Name)
+	}
+	if tu.Input != `{"a":1}` {
+		t.Errorf("arguments 载荷丢失：%q", tu.Input)
+	}
+}
+
+// 请求历史侧同款：空名废弃 function_call 不得蒸发，补 unknown_tool 占位、
+// arguments 保全，模型才看得到自己上一轮调用过工具。
+func TestDeprecatedFunctionCallEmptyNameRequestHistory(t *testing.T) {
+	body := `{"model":"m","messages":[{"role":"assistant","function_call":{"arguments":"{\"a\":1}"}}]}`
+	req, err := DecodeRequest([]byte(body))
+	if err != nil {
+		t.Fatalf("DecodeRequest: %v", err)
+	}
+	var tu *ir.ToolUse
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			if b.Type == ir.BlockToolUse && b.ToolUse != nil {
+				tu = b.ToolUse
+			}
+		}
+	}
+	if tu == nil {
+		t.Fatalf("请求历史空名废弃 function_call 整段蒸发")
+	}
+	if tu.Name != unknownToolName {
+		t.Errorf("空名没补 unknown_tool 占位：%q", tu.Name)
+	}
+	if tu.Input != `{"a":1}` {
+		t.Errorf("arguments 载荷丢失：%q", tu.Input)
+	}
+}
+
+// 流式侧回归：空名废弃 function_call 仍走 announcePending 补 unknown_tool，
+// arguments 跨片拼回，收尾合成 id 并经注记报出（与非流式保全一致）。
+func TestDeprecatedFunctionCallEmptyNameStream(t *testing.T) {
+	resp, notes := decodeStream(t,
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"function_call":{"arguments":"{\"a\":"}}}]}`,
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"function_call":{"arguments":"1}"}}}]}`,
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"function_call"}]}`,
+		doneSentinel,
+	)
+	tools := toolBlocks(resp)
+	if len(tools) != 1 {
+		t.Fatalf("tool blocks = %d, want 1: %+v", len(tools), tools)
+	}
+	if tools[0].ToolUse.Name != unknownToolName {
+		t.Errorf("流式空名没补 unknown_tool 占位：%q", tools[0].ToolUse.Name)
+	}
+	if tools[0].ToolUse.Input != `{"a":1}` {
+		t.Errorf("流式 arguments 未拼回：%q", tools[0].ToolUse.Input)
+	}
+	if !anyNoteHas(notes, "synthesized an id") {
+		t.Errorf("合成 id 注记不对：%q", notes)
+	}
+}

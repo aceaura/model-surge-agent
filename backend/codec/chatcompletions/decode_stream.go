@@ -574,11 +574,17 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 		for _, tc := range m.ToolCalls {
 			out.Content = append(out.Content, ir.Block{Type: ir.BlockToolUse, ToolUse: toolUseFromCall(tc)})
 		}
-		if len(m.ToolCalls) == 0 && m.FunctionCall != nil && m.FunctionCall.Name != "" {
-			// 废弃形态但载荷完整（判据同请求侧）：不读则旧兼容上游的
-			// 整段调用蒸发。
+		if len(m.ToolCalls) == 0 && m.FunctionCall != nil {
+			// 废弃形态但载荷在手：不读则旧兼容上游的整段调用蒸发。name 为空
+			// 不丢整条——与流式 announcePending 同款补 unknown_tool 占位，否则
+			// 上游「决定调用工具却没给名字」时 arguments 载荷会在此静默蒸发，
+			// 而流式路径保全，同一丢弃两路分叉（违反流式/非流式同损同报）。
+			name := m.FunctionCall.Name
+			if name == "" {
+				name = unknownToolName
+			}
 			out.Content = append(out.Content, ir.Block{Type: ir.BlockToolUse, ToolUse: &ir.ToolUse{
-				Name:  m.FunctionCall.Name,
+				Name:  name,
 				Input: m.FunctionCall.Arguments,
 			}})
 		}
