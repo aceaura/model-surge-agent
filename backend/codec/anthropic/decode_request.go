@@ -354,6 +354,10 @@ func decodeBlock(b wireBlock, raw json.RawMessage) (ir.Block, bool, error) {
 			// 故走 decodeCitationsConfig 而非 decodeCitations。
 			media.Context = b.Context
 			media.CitationsEnabled = decodeCitationsConfig(b.Citations)
+			// 官方 document.title 是本协议唯一能承载附件文件名的槽位，落进 Media.Name：
+			// 同族往返逐字带回，跨族由各自编码器保全（chat/responses 的 Filename、
+			// gemini 的 displayName）或在装不下时报出。
+			media.Name = b.Title
 		}
 		// 两个容器同形，块类型按 media type 判定而非容器名：
 		// document 容器里也可能装别的类型。

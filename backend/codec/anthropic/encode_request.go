@@ -302,6 +302,11 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 			// citations 是 {"enabled":bool} 配置对象（不是引用数组）。跨族投影来
 			// 的附件没有这两维，字段为零值时 omitempty 自然不带出。
 			out.Context = b.Media.Context
+			// 附件文件名（Media.Name，由 chat file.filename / responses
+			// input_file.filename / 同族 document.title 设入）回写进官方 title 槽：
+			// document 容器是 anthropic 唯一表达得了附件名的地方。跨族投影来的文档
+			// 带了文件名此前整条丢弃、无注记。零值时 omitempty 不写。
+			out.Title = b.Media.Name
 			if b.Media.CitationsEnabled != nil {
 				raw, err := json.Marshal(citationsConfig{Enabled: *b.Media.CitationsEnabled})
 				if err != nil {

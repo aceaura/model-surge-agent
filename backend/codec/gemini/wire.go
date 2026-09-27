@@ -88,11 +88,20 @@ func (p wirePart) hasUnknownContent() bool {
 type wireBlob struct {
 	MimeType string `json:"mimeType"`
 	Data     string `json:"data"`
+	// DisplayName 是官方 Blob.displayName（可选，"the name used to refer to this
+	// blob to the model, e.g. my_blob.png"）。承载 IR Media.Name（附件文件名）：
+	// chat 的 file.filename / responses 的 input_file.filename 由客户端设入，此前
+	// gemini 出站整条丢弃、无注记——文件名对文档类附件是有语义的（模型据此区分
+	// 多个附件）。omitempty：异族来源或无文件名的媒体给不出非空值，自然不写。
+	DisplayName string `json:"displayName,omitempty"`
 }
 
 type wireFileData struct {
 	MimeType string `json:"mimeType,omitempty"`
 	FileURI  string `json:"fileUri"`
+	// DisplayName 官方 FileData.displayName（可选，"the name used to refer to this
+	// file to the model, e.g. my_file.pdf"），与 wireBlob 同维，承载 Media.Name。
+	DisplayName string `json:"displayName,omitempty"`
 }
 
 // wireFunctionCall 没有调用 id，只有函数名。这是本协议与另外三个的关键差异：

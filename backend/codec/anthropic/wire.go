@@ -92,6 +92,11 @@ type wireBlock struct {
 	// Context document 块的用途说明（官方 DocumentBlockParam.context）。与 text
 	// 块的正文不是一回事：它是客户端给模型的旁注，不进 IR 的 Text，只落 Media.Context。
 	Context string `json:"context,omitempty"`
+	// Title document 块的标题（官方 DocumentBlock(Param).title，"The title of the
+	// document"）。承载 IR Media.Name（附件文件名）：document 容器是 anthropic 唯一
+	// 能表达附件名的槽位（image 块没有对应字段）。omitempty：异族投影来的附件或无
+	// 文件名的文档给不出非空值，自然不写。
+	Title string `json:"title,omitempty"`
 	// Citations text 块的来源标注（托管搜索与文档引用都会下发）。用 RawMessage
 	// 而不是 []citationIn：Anthropic 在 document / search_result 块上复用同一个
 	// 键名承载 {"enabled":bool} 配置对象。声明成数组时那种块会让整条 content 的

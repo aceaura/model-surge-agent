@@ -181,10 +181,11 @@ func encodeMessage(m ir.Message, names map[string]string) ([]wireContent, error)
 			}
 			if b.Media.URL != "" {
 				parts = append(parts, wirePart{FileData: &wireFileData{
-					MimeType: media, FileURI: b.Media.URL}})
+					MimeType: media, FileURI: b.Media.URL, DisplayName: b.Media.Name}})
 				continue
 			}
-			parts = append(parts, wirePart{InlineData: &wireBlob{MimeType: media, Data: b.Media.Data}})
+			parts = append(parts, wirePart{InlineData: &wireBlob{
+				MimeType: media, Data: b.Media.Data, DisplayName: b.Media.Name}})
 		case ir.BlockThinking:
 			if b.Thinking == nil || b.Thinking.Text == "" {
 				continue
