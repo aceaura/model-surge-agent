@@ -131,10 +131,13 @@ type Capabilities struct {
 	// 东西悄悄没了会让账单对不上。
 	ImageDetail bool
 	// ImageFileRef 为真表示图片槽位可只凭上游文件服务的 id 投递
-	// （Responses 的 input_image.file_id）。图片字节从未内联进请求体，
+	// （Responses 的 input_image.file_id、anthropic image_block 的
+	// FileImageSourceParam {type:"file",file_id}）。图片字节从未内联进请求体，
 	// 本服务也不代取，所以这一维装不下就等于这张图彻底没了——与远程
 	// URL 那种「换成 base64 即可」不同，读者无从补救，故单独立一位。
-	// 当前只有 Responses 一族有这一维。
+	// Responses 与 anthropic 两族为真（都能在「仍是图片」的槽位里承载 file_id）；
+	// chat_completions 刻意不设（图片 file_id 被塞进通用 file part，丢了「这是
+	// 图片」的语义，见 chatcompletions/codec.go）；gemini 没有图片 file 引用槽位。
 	ImageFileRef bool
 	// ImageFilename 为真表示本协议的**图片**槽位能携带附件文件名（gemini 的
 	// Blob.displayName / FileData.displayName，对图片与非图片一视同仁）。为假的

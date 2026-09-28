@@ -192,6 +192,13 @@ type wireSource struct {
 	MediaType string `json:"media_type,omitempty"`
 	Data      string `json:"data,omitempty"`
 	URL       string `json:"url,omitempty"`
+	// FileID 是 type=file 源的上游文件服务引用（官方 FileImageSourceParam /
+	// FileDocumentSourceParam：image_block 与 document_block 的 source union 都
+	// 含 {type:"file",file_id}）。此前未建模 → 客户端发来的 file 源被
+	// json.Unmarshal 静默吞掉、整块媒体变空壳，同族 anthropic→anthropic 往返
+	// 整块蒸发。本服务不代取文件内容，只在同族逐字带回、跨族投给同样原生收
+	// file_id 的目标（responses input_image/input_file）。
+	FileID string `json:"file_id,omitempty"`
 }
 
 // wireTransformations 是图片块的渲染指令对象（官方 ImageTransformationsParam）。

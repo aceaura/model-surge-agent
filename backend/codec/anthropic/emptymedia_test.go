@@ -7,11 +7,13 @@ import (
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
-// 空壳文档（只有 file_id、无 base64/URL）不得编出缺 data 的 document source：
-// 文件名嗅出 application/pdf，media_type 在而 data 因 omitempty 蒸发，
-// {"type":"document","source":{"type":"base64","media_type":"application/pdf"}}
-// 缺必填键，上游 400 拒整轮。部件应整块跳过并报有损注记。
-func TestEncodeSkipsEmptyShellDocument(t *testing.T) {
+// 只带 file_id 的文档（无 base64/URL）：anthropic 官方 document_block 的 source
+// union 含 FileDocumentSourceParam（{type:"file",file_id}），故应编出**合法的 file
+// 源**逐字投递，而不是早先误以为的「缺 data 的非法 base64 源」→ 整块跳过。轮次48
+// 据 anthropic-sdk-python 核实修正：本族原生收文件引用，同族往返无损、不报有损注记。
+// （真正三载体全空、连 file_id 都没有的空壳文档仍走跳过分支，见 TestEncodeSkipsEmptyShellAudio
+// 的同型逻辑与 imagefidelity 的空壳图片用例。）
+func TestEncodeEmitsFileSourceForFileIDOnlyDocument(t *testing.T) {
 	req := &ir.Request{
 		Model: "m",
 		Messages: []ir.Message{{
@@ -27,24 +29,27 @@ func TestEncodeSkipsEmptyShellDocument(t *testing.T) {
 		t.Fatalf("encode: %v", err)
 	}
 	s := string(body)
-	if strings.Contains(s, `"type":"document"`) {
-		t.Fatalf("空壳文档编出了非法形状: %s", s)
+	if !strings.Contains(s, `"type":"document"`) || !strings.Contains(s, `"type":"file"`) ||
+		!strings.Contains(s, `"file_id":"file-abc"`) {
+		t.Fatalf("file_id-only 文档没编出合法 file 源: %s", s)
 	}
-	if strings.Contains(s, "file-abc") {
-		t.Fatalf("file_id 泄进了 anthropic 请求体: %s", s)
+	// 不得编出缺 data 的非法 base64 源。
+	if strings.Contains(s, `"type":"base64"`) {
+		t.Fatalf("编出了非法 base64 源: %s", s)
+	}
+	// 文件名随 document.title 带回。
+	if !strings.Contains(s, `"title":"x.pdf"`) {
+		t.Errorf("文档文件名没随 title 带回: %s", s)
 	}
 	// 文本部件仍在，消息没被拖空。
 	if !strings.Contains(s, "read this") {
 		t.Fatalf("同消息的文本部件被误伤: %s", s)
 	}
-	var noted bool
+	// 同族可投递，不该报「无可投递载荷」。
 	for _, n := range notes {
 		if strings.Contains(n, "no payload") {
-			noted = true
+			t.Fatalf("file 源可投递，不该报有损注记: %v", notes)
 		}
-	}
-	if !noted {
-		t.Fatalf("空壳文档缺有损注记: %v", notes)
 	}
 }
 

@@ -346,6 +346,10 @@ func decodeBlock(b wireBlock, raw json.RawMessage) (ir.Block, bool, error) {
 			MediaType: b.Source.MediaType,
 			Data:      b.Source.Data,
 			URL:       b.Source.URL,
+			// type=file 源只带 file_id（官方 FileImageSourceParam /
+			// FileDocumentSourceParam，无 media_type/data/url）。落进 Media.FileID：
+			// 同族逐字往返，跨族投给原生收 file_id 的目标（responses）可保全。
+			FileID: b.Source.FileID,
 		}
 		// transformations.oversized_image 是图片块专属的渲染指令（官方只在
 		// image_block_param 上有此键），故仅图片块读入：同族逐字往返，跨族由有损
@@ -368,6 +372,17 @@ func decodeBlock(b wireBlock, raw json.RawMessage) (ir.Block, bool, error) {
 		// 两个容器同形，块类型按 media type 判定而非容器名：
 		// document 容器里也可能装别的类型。
 		out.Type = codec.MediaKindFor(codec.SniffMediaType(media))
+		// type=file 源没有内联字节可嗅（media_type 恒空），SniffMediaType 给不出
+		// 类型 → MediaKindFor 一律落 BlockFile，会丢掉「这是图片还是文档」。容器名
+		// 此刻是唯一信号，按 wire 块型还原，保证同族往返图片仍是图片、文档仍是文档
+		//（出站编码器据此选 image / document 的 file 源）。
+		if b.Source.Type == "file" {
+			if b.Type == blockImage {
+				out.Type = ir.BlockImage
+			} else {
+				out.Type = ir.BlockDocument
+			}
+		}
 		out.Media = media
 	case blockToolUse:
 		out.Type = ir.BlockToolUse

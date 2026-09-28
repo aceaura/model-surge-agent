@@ -439,15 +439,19 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 				}
 			} else if b.Media != nil && !b.Media.HasPayload() {
 				// 非图片媒体（document/file/audio）base64 与 URL 两载体全空。
-				// 若还带 file_id 引用，则只有原生收文件引用的目标（chat_completions
-				// 的 file part、responses 的 input_file，见 caps.NativeFileRef）能
-				// 逐字投递，不算损耗；anthropic 整块跳过、gemini 降级为文本，这两族
-				// 表达不了纯引用，仍报「无可投递载荷」。file_id 也空时所有目标都无
-				// 从编起（照编是缺必填键/data:"" 的形状，上游 400 拒整轮），一律报。
+				// 若还带 file_id 引用，则只有原生收文件引用的目标能逐字投递，不算损耗：
+				// chat_completions 的 file part、responses 的 input_file（见 caps.NativeFileRef，
+				// document/file/audio 皆可），以及 anthropic 的 document file 源
+				//（FileDocumentSourceParam，仅 document/PDF——它没有通用文件 part，音频与
+				// 未知类型通用文件仍无从投递，故 NativeFileRef 为假、这里按块型单列）。
+				// gemini 降级为文本，表达不了纯引用，仍报「无可投递载荷」。file_id 也空时
+				// 所有目标都无从编起（照编是缺必填键/data:"" 的形状，上游 400 拒整轮），一律报。
 				// 判据与各出站编码器 encodeMediaPart 的 FileID 分支同源，避免漂移。
-				// 图片的三维细则由 describeImageLossy 报。跳过/降级优先于「类型不
-				// 支持」的降级说明，故 continue。
-				if b.Media.FileID == "" || !caps.NativeFileRef {
+				// 图片的三维细则由 describeImageLossy 报（含 anthropic 的 image file 源，
+				// 走 caps.ImageFileRef）。跳过/降级优先于「类型不支持」的降级说明，故 continue。
+				fileRefDeliverable := caps.NativeFileRef ||
+					(name == ProtocolAnthropic && b.Type == ir.BlockDocument)
+				if b.Media.FileID == "" || !fileRefDeliverable {
 					note(string(b.Type)+" blocks", emptyMediaWhy)
 				}
 				continue

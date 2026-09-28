@@ -274,13 +274,40 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 			return out, false, fmt.Errorf("%s block without payload", b.Type)
 		}
 		if !b.Media.HasPayload() {
+			// file_id-only 媒体：anthropic 原生支持 {type:"file",file_id} 源
+			//（官方 FileImageSourceParam 在 image_block、FileDocumentSourceParam 在
+			// document_block 的 source union 里），图片与文档都能逐字投递，此前却整块
+			// 跳过 → 同族 anthropic→anthropic 往返丢失整个块。按 IR 块型还原容器：
+			// 图片走 image 源、文档走 document 源（并带回 title/context/citations 配置）。
+			// 音频与未知类型的通用文件 anthropic 没有对应源（只读图片与 PDF），仍落入
+			// 下方跳过分支、由有损诊断报「无可投递载荷」。
+			if b.Media.FileID != "" {
+				switch b.Type {
+				case ir.BlockImage:
+					out.Type = blockImage
+					out.Source = &wireSource{Type: "file", FileID: b.Media.FileID}
+					return out, true, nil
+				case ir.BlockDocument:
+					out.Type = blockDocument
+					out.Source = &wireSource{Type: "file", FileID: b.Media.FileID}
+					out.Context = b.Media.Context
+					out.Title = b.Media.Name
+					if b.Media.CitationsEnabled != nil {
+						raw, err := json.Marshal(citationsConfig{Enabled: *b.Media.CitationsEnabled})
+						if err != nil {
+							return out, false, err
+						}
+						out.Citations = raw
+					}
+					return out, true, nil
+				}
+			}
 			// 空壳媒体整块跳过（不止图片）：官方 source 只有 base64（media_type
-			// 与 data 都是 Required）与 url 两种，两者皆空编出来是缺必填键的形状
+			// 与 data 都是 Required）、url、file 三种，全空编出来是缺必填键的形状
 			// ——图片是 {"type":"image","source":{"type":"base64"}}，文档是
 			// {"type":"document","source":{"type":"base64","media_type":"application/pdf"}}
 			// （文件名嗅出的 media_type 在，data 因 omitempty 蒸发）——上游 400 拒
-			// 整轮。常见来源是 Responses 客户端只给了 file_id，而本族没有「引用上游
-			// 文件服务里的附件」这一维。损耗由有损诊断报出。
+			// 整轮。损耗由有损诊断报出。
 			return out, false, nil
 		}
 		media := codec.SniffMediaType(b.Media)

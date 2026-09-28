@@ -110,8 +110,15 @@ func (outboundCodec) Caps() codec.Capabilities {
 		// tool_use.input 是 JSON 对象槽位。
 		ToolInputObject: true,
 		// 官方 Tool.strict：schema 严格校验保证。
-		ToolStrict:    true,
-		Images:        true,
+		ToolStrict: true,
+		Images:     true,
+		// 官方 image_block_param 的 source union 含 FileImageSourceParam
+		// （{type:"file",file_id}），图片可只凭上游文件服务 id 投递且仍是图片，
+		// 与 responses input_image.file_id 同维 → 图片 file_id 引用对 anthropic
+		// 无损。注意 NativeFileRef 仍为假：anthropic 没有「通用文件 part」，只有
+		// 按类型定死的 image / document(PDF) 两种 file 源，音频与未知类型通用文件
+		// 无从投递，故不满足 NativeFileRef「document/file/audio 皆可」的语义。
+		ImageFileRef:  true,
 		CacheControl:  true,
 		TopK:          true,
 		StopSequences: true,
