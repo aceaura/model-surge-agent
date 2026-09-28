@@ -121,6 +121,13 @@ type streamEncoder struct {
 	// 同损同措辞（规则 b）。真流式路径骨架不带 ContentChannel（responses 解码器
 	// 已在解码侧计数报出），故只在投影路径计数，不与解码侧重复。
 	contentChannel int
+	// customDowngraded 记「custom 工具调用（block_start 骨架上 ToolUse.Kind==
+	// ToolCustom）被本协议流式降级成 type=function」的调用数。官方 Chat Completions
+	// 流式 chunk 只支持 type=function（custom 不进流式，有意限制），非流式 message
+	// 才认 type=custom——故非流式编码器原样保全、流式只能降级。调用名保留、自由文本
+	// 入参经 EvToolInput 原样落进 function.arguments，custom 形态标记丢失。Notes()
+	// 收尾报出，否则 stream:true 降级无声、stream:false 却保全，两路结论不一。
+	customDowngraded int
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
 	// suppressUsageFrame 为真表示客户端明确说了不要那一帧单独的 usage
@@ -165,6 +172,13 @@ func (e *streamEncoder) Notes() []string {
 	if e.contentChannel > 0 {
 		notes = append(notes, codec.ContentChannelCrossFamilyNote(e.contentChannel))
 		e.contentChannel = 0
+	}
+	// custom 工具调用流式降级成 function：官方流式 chunk 无 custom 槽位（非流式
+	// message 有、故非流式保全不报），调用名保留、自由文本入参原样进 arguments，
+	// custom 形态丢失。判据见 CustomToolStreamDowngradeNote，报出即抽干避免二次重复。
+	if e.customDowngraded > 0 {
+		notes = append(notes, codec.CustomToolStreamDowngradeNote(e.customDowngraded))
+		e.customDowngraded = 0
 	}
 	// usage 细分维度与 TTL 明细同口径门控：客户端没 opt-in 时 usage 帧
 	// 压根没发（见下方 finish() 的 !suppressUsageFrame 守卫），细分与 TTL
@@ -360,6 +374,16 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		if ev.Block != nil && ev.Block.ToolUse != nil {
 			call.ID = ev.Block.ToolUse.ID
 			call.Function.Name = ev.Block.ToolUse.Name
+			// custom 工具调用（自由文本入参）：官方 Chat Completions 流式 chunk 只支持
+			// type=function，custom 不进流式（有意限制；非流式 message 才认 type=custom，
+			// 故非流式编码器原样保全）。这里只能降级成 function——调用名保留、自由文本
+			// 入参经 EvToolInput 原样落进 function.arguments，custom 形态标记丢失。计数由
+			// Notes() 报出，否则 stream:true 时降级无声无息、stream:false 时却保全，两路
+			// 结论不一。block_start 每索引只触发一次（解码器 announce 置 announced、投影
+			// splitBlock 每块一个骨架），无需去重，与 contentChannel/媒体计数同款。
+			if ev.Block.ToolUse.Kind == ir.ToolCustom {
+				e.customDowngraded++
+			}
 		}
 		e.sentToolHeader[ev.Index] = true
 		e.toolPending[ev.Index] = true

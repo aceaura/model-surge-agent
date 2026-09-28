@@ -1929,6 +1929,21 @@ func CustomToolOutputDowngradeNote(n int) string {
 		"downgraded %d custom tool output(s) to ordinary function results: the target protocol has no custom_tool_call_output item", n)
 }
 
+// CustomToolStreamDowngradeNote 是「custom 工具调用在 Chat Completions 流式响应里
+// 降级成 function 调用」的说明。官方明确：流式 chunk 的 choices.delta.tool_calls
+// 只支持 type=function，custom 工具调用不进流式（这是 Chat Completions 的有意限制，
+// 非 spec 缺漏）——而非流式 message.tool_calls 认 type=custom，故非流式编码器原样
+// 保全、不报此损。于是流式路径只能把 custom 调用降级成 function：调用名保留，自由
+// 文本入参逐片原样落进 function.arguments（不是 JSON、也不套 {"input":…} 投影，流式
+// 增量无法逐片包裹），「这是自由文本 custom 调用」的形态标记丢失。入参原文属会话
+// 内容，不进注记。与请求侧 CustomToolDowngradeNote 同属 custom→function 降级类，但
+// 成因（流式无 custom 槽 vs 目标协议无自由文本条目）与入参处置（原样 vs 投影）不同，
+// 故措辞分立；与非流式保全路径构成有意不对称（stream:true 降级、stream:false 保全）。
+func CustomToolStreamDowngradeNote(n int) string {
+	return fmt.Sprintf(
+		"downgraded %d custom tool call(s) to function calls in streaming: the Chat Completions streaming chunk schema only supports type=function tool calls (custom tool calls are not streamed, an intentional API limitation; the non-streaming message does support type=custom and preserves it), so the free-form input is carried verbatim in function.arguments and the custom-call kind is lost", n)
+}
+
 // countRequestAudioRefs 数出请求历史里 assistant 消息携带的音频引用条数。
 // 只数 assistant：官方只在 assistant 历史上接受 {audio:{id}}，其余角色
 // 出现的引用是伪造形态，不计数也不外发。
