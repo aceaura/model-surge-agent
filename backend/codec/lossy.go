@@ -1440,6 +1440,46 @@ func ContentChannelStreamNote(n int) string {
 		"re-labeled %d content-channel reasoning block(s) (reasoning_text, the model's internal reasoning) as summary-channel in streaming: the text is preserved, but the channel distinction the non-streaming path keeps via Thinking.ContentChannel has no slot in the streaming event model", n)
 }
 
+// ContentChannelCrossFamilyNote 报「content 通道推理标记在跨族响应里被丢弃」。
+// responses 上游的 reasoning 条目可把模型内部推理原文放在 content 通道
+// （reasoning_text，ir.Thinking.ContentChannel=true 标记），与给用户看的 summary
+// 通道（reasoning_summary_text）并存、语义不同。anthropic / chat 响应的思考块只有
+// 一个正文槽、没有通道维度：正文逐字保留（anthropic thinking / chat
+// reasoning_content 写回同一段文本），丢的只是「这段是原始推理还是摘要」这个标记
+// ——与请求侧 countContentChannelReasoning 是同一损类（规则 c：请求侧与响应侧对
+// 同一损类都报），只是受众换成收响应的客户端。流式与非流式共用这一份措辞（规则 b）。
+//
+// 区别于 ContentChannelStreamNote：那条是 responses **同族**流式里 content 被改标成
+// summary（流式事件模型无通道槽位）；本条是**跨族**——目标协议压根没有通道维度，
+// 无论流式还是非流式都丢。同族 responses→responses 按标记选回原通道、原样往返，
+// 报了就是谎报，故 DescribeResponseContentChannelLoss 门控排除 responses（与请求侧
+// countContentChannelReasoning 的 name != ProtocolResponses 同款）。
+func ContentChannelCrossFamilyNote(n int) string {
+	return fmt.Sprintf(
+		"dropped the content-channel marker on %d reasoning block(s): the reasoning text is preserved verbatim, but this response format has no reasoning-channel slot, so the client cannot tell the model's raw internal reasoning (reasoning_text) from a user-facing summary (reasoning_summary_text)", n)
+}
+
+// DescribeResponseContentChannelLoss 报非流式响应里 content 通道推理标记的跨族
+// 丢弃。判据与流式编码器（anthropic / chat 的 contentChannel 计数）同源、措辞共用
+// ContentChannelCrossFamilyNote。同族 responses 保全通道、报了就是谎报，排除之。
+// gemini 仅出站、无客户端响应编码器，且 content 通道只由 responses 解码器产出，
+// 故本损类只在 responses 上游 → anthropic / chat 客户端时可达。
+func DescribeResponseContentChannelLoss(resp *ir.Response, name string) []string {
+	if resp == nil || name == ProtocolResponses {
+		return nil
+	}
+	n := 0
+	for _, b := range resp.Content {
+		if b.Type == ir.BlockThinking && b.Thinking != nil && b.Thinking.ContentChannel {
+			n++
+		}
+	}
+	if n == 0 {
+		return nil
+	}
+	return []string{ContentChannelCrossFamilyNote(n)}
+}
+
 // CumulativeTextNote 是累计式文本帧被改写的说明：部分上游每帧重发迄今
 // 全部正文而非只发增量，逐字转发会让客户端文本按帧数重复膨胀（最轻句子
 // 复读，最重 token 用量翻倍）。按前缀比对识别，只下发新增后缀。

@@ -114,6 +114,13 @@ type streamEncoder struct {
 	// droppedRedacted 被跳过的涂抹推理块（redacted_thinking）数：加密载荷是
 	// anthropic 同族专属，本协议没有承载槽位，整块跳过，Notes() 收尾时报出。
 	droppedRedacted int
+	// contentChannel 记「整份响应投影（ir.ResponseEvents）路径里，responses 上游
+	// content 通道推理块（block_start 骨架上 ContentChannel=true）被本协议渲染成
+	// 普通 reasoning_content、通道 provenance 丢失」的块数。正文逐字保留，丢的只是
+	// 「原始推理 vs 用户摘要」标记——与非流式 DescribeResponseContentChannelLoss
+	// 同损同措辞（规则 b）。真流式路径骨架不带 ContentChannel（responses 解码器
+	// 已在解码侧计数报出），故只在投影路径计数，不与解码侧重复。
+	contentChannel int
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
 	// suppressUsageFrame 为真表示客户端明确说了不要那一帧单独的 usage
@@ -151,6 +158,13 @@ func (e *streamEncoder) Notes() []string {
 	}
 	if e.droppedRedacted > 0 {
 		notes = append(notes, codec.RedactedDropNote(e.droppedRedacted))
+	}
+	// content 通道推理标记跨族丢弃（仅整份响应投影路径计数）：正文保留、通道
+	// provenance 丢失。判据与非流式 DescribeResponseContentChannelLoss 同源、
+	// 措辞一致，报出即抽干避免二次重复。
+	if e.contentChannel > 0 {
+		notes = append(notes, codec.ContentChannelCrossFamilyNote(e.contentChannel))
+		e.contentChannel = 0
 	}
 	// usage 细分维度与 TTL 明细同口径门控：客户端没 opt-in 时 usage 帧
 	// 压根没发（见下方 finish() 的 !suppressUsageFrame 守卫），细分与 TTL
@@ -302,6 +316,14 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			// 正文经 EvThinkingDelta 走 reasoning_content，与异族处置相同，不计数。
 			if ev.Block != nil && ev.Block.Thinking != nil && ev.Block.Thinking.Redacted {
 				e.droppedRedacted++
+			}
+			// content 通道推理标记（ir.Thinking.ContentChannel）：responses 上游把
+			// 模型内部推理原文放在 content 通道，本协议 reasoning_content 只有正文槽、
+			// 无通道维度，正文逐字保留但 provenance 丢失。只在整份响应投影路径计数
+			//（骨架带 ContentChannel）；真流式骨架不带（解码器侧已报），不会双报。
+			// 与非流式 DescribeResponseContentChannelLoss 同源、措辞一致。
+			if ev.Block != nil && ev.Block.Thinking != nil && ev.Block.Thinking.ContentChannel {
+				e.contentChannel++
 			}
 			return nil, nil
 		case ir.BlockOpaque:

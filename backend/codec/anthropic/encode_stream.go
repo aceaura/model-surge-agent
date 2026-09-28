@@ -44,6 +44,13 @@ type streamEncoder struct {
 	// 媒体数（与降级互斥：降级有载荷、空壳没有）。判据 mediaEmptyShell 与
 	// 非流式 countResponseEmptyMedia 同源，计数经 Notes() 报出。
 	emptyMedia int
+	// contentChannel 记「整份响应投影（ir.ResponseEvents）路径里，responses 上游
+	// content 通道推理块（block_start 骨架上 ContentChannel=true）被本协议渲染成
+	// 普通 thinking 块、通道 provenance 丢失」的块数。正文逐字保留，丢的只是
+	// 「原始推理 vs 用户摘要」标记——与非流式 DescribeResponseContentChannelLoss
+	// 同损同措辞（规则 b）。真流式路径骨架不带 ContentChannel（responses 解码器
+	// 已在解码侧计数报出），故只在投影路径计数，不与解码侧重复。
+	contentChannel int
 	// blockOrder 让 Finish 按开启顺序闭合，避免 map 遍历顺序不定
 	// 导致同样的输入产出不同的帧序。
 	blockOrder []int
@@ -133,6 +140,13 @@ func (e *streamEncoder) Notes() []string {
 	// renderStopReason 塌进 max_tokens，成因与补救方向丢失。判据与非流式
 	// EncodeResponseLossy 同源。
 	notes = append(notes, codec.DescribeResponseStopReasonLoss(e.stopReason, Name)...)
+	// content 通道推理标记跨族丢弃（仅整份响应投影路径计数）：正文保留、通道
+	// provenance 丢失。判据与非流式 DescribeResponseContentChannelLoss 同源、
+	// 措辞一致，报出即抽干避免二次重复。
+	if e.contentChannel > 0 {
+		notes = append(notes, codec.ContentChannelCrossFamilyNote(e.contentChannel))
+		e.contentChannel = 0
+	}
 	// 上游审核回执 / 客户端关联键值回声（chat/responses 专属响应级槽位）：
 	// 本协议流式帧没有对应事件，到达即丢。判据与非流式
 	// DescribeResponseClientMetaLoss 同源、措辞一致，报出即抽干避免二次重复。
@@ -223,6 +237,15 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			// 单列计数。与非流式 countResponseEmptyMedia 判据同源。
 			if mediaEmptyShell(*ev.Block) {
 				e.emptyMedia++
+			}
+			// content 通道推理标记（ir.Thinking.ContentChannel）：responses 上游把
+			// 模型内部推理原文放在 content 通道，本协议 thinking 块只有正文槽、无
+			// 通道维度，正文逐字保留但 provenance 丢失。只在整份响应投影路径计数
+			//（骨架带 ContentChannel）；真流式骨架不带（解码器侧已报），不会双报。
+			// 与非流式 DescribeResponseContentChannelLoss 同源、措辞一致。
+			if ev.Block.Type == ir.BlockThinking && ev.Block.Thinking != nil &&
+				ev.Block.Thinking.ContentChannel {
+				e.contentChannel++
 			}
 			// 工具调用自带的推理签名（gemini 把 thoughtSignature 挂在 functionCall
 			// part 自身）本协议的 tool_use 没有承载槽位，流式增量也带不回：必然

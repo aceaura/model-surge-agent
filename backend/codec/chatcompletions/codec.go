@@ -103,6 +103,12 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	// 槽位，整体丢弃。moderation / metadata 两维本协议是承载族、原样带回不报，
 	// 故这里只会渲染诊断回执一维。判据与流式 Notes() 同源。
 	notes = append(notes, codec.DescribeResponseClientMetaLoss(resp, Name)...)
+	// responses 上游 content 通道推理（reasoning_text 原文，ir.Thinking.ContentChannel）
+	// 跨族投给本协议：正文写回 reasoning_content 逐字保留，但本协议思考块无通道维度，
+	// 「原始推理 vs 用户摘要」的 provenance 丢失。请求侧同类丢弃由
+	// countContentChannelReasoning 报出，响应侧此前静默——这里补齐，判据与流式
+	// Notes() 同源。同族 responses→responses 保全通道，门控排除之。
+	notes = append(notes, codec.DescribeResponseContentChannelLoss(resp, Name)...)
 	return body, codec.DedupeNotes(notes), nil
 }
 

@@ -86,6 +86,12 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	// 跨族终止原因折叠：responses 的 max_messages / steered 本协议无对应值，
 	// 塌进 max_tokens，具体成因与补救方向丢失。判据与流式 Notes() 同源。
 	notes = append(notes, codec.DescribeResponseStopReasonLoss(resp.StopReason, Name)...)
+	// responses 上游 content 通道推理（reasoning_text 原文，ir.Thinking.ContentChannel）
+	// 跨族投给本协议：正文写回 thinking 块逐字保留，但本协议思考块无通道维度，
+	// 「原始推理 vs 用户摘要」的 provenance 丢失。请求侧同类丢弃由
+	// countContentChannelReasoning 报出，响应侧此前静默——这里补齐，判据与流式
+	// Notes() 同源。同族 responses→responses 保全通道，门控排除之。
+	notes = append(notes, codec.DescribeResponseContentChannelLoss(resp, Name)...)
 	// 跨协议投影来、无 Raw 又反推不出 cited_text 的引用被 encodeBlock 整条
 	// 丢弃（带空 cited_text 上游 400）。与文档类引用的 CitationDropNote 分账，
 	// 判据与流式侧同源，非流式响应不因走另一条编码路就漏报。
