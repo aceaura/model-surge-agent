@@ -234,7 +234,13 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 		// 同款）。空数组/缺席 len 为 0，不误计。
 		d.droppedSafetyRatings += len(cand.SafetyRatings)
 		if cand.FinishReason != "" {
-			d.stopReason = convertFinishReason(cand.FinishReason)
+			sr := convertFinishReason(cand.FinishReason)
+			d.stopReason = sr
+			// 折进 content_filter 且失真（MALFORMED_FUNCTION_CALL / 未识别枚举）：
+			// 把原枚举回带报出，别把「重试即可」的失真标签静默贴给客户端。
+			if sr == ir.StopContentFilter && finishReasonMisfold(cand.FinishReason) {
+				d.notes = append(d.notes, codec.FinishReasonMisfoldNote(cand.FinishReason))
+			}
 		}
 	}
 	return out, nil
@@ -595,7 +601,12 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 			notes = append(notes, codec.FinishDetailNote(cand.FinishMessage))
 		}
 		if cand.FinishReason != "" {
-			out.StopReason = convertFinishReason(cand.FinishReason)
+			sr := convertFinishReason(cand.FinishReason)
+			out.StopReason = sr
+			// 与流式同一处置、同一措辞：失真折叠把原枚举回带报出。
+			if sr == ir.StopContentFilter && finishReasonMisfold(cand.FinishReason) {
+				notes = append(notes, codec.FinishReasonMisfoldNote(cand.FinishReason))
+			}
 		}
 		// 来源标注（grounding/citation metadata）在候选级到达，映射成 ir.Citation
 		// 后挂到本候选的文本块上；候选没有正文块可挂时计入丢弃、经注记报出。
@@ -857,5 +868,28 @@ func convertFinishReason(s string) ir.StopReason {
 		// 未识别的取值按安全侧兜底：把被拦截的回答当正常结束，
 		// 客户端会照着不完整的内容继续往下走。
 		return ir.StopContentFilter
+	}
+}
+
+// finishReasonMisfold 判 finishReason 折进 content_filter 时是否**失真**（须报
+// FinishReasonMisfoldNote）。必须与 convertFinishReason 的枚举集保持同步：
+//   - 不折进 content_filter 的（STOP / MAX_TOKENS / 未指定 / 空）：无从失真，false；
+//   - 货真价实的内容策略拦截（SAFETY / RECITATION / LANGUAGE / OTHER / BLOCKLIST /
+//     PROHIBITED_CONTENT / SPII / IMAGE_SAFETY / IMAGE_PROHIBITED_CONTENT /
+//     IMAGE_RECITATION）：content_filter 忠实表达，false（另有 finishMessage 时
+//     由 FinishDetailNote 带原文）；
+//   - MALFORMED_FUNCTION_CALL：根本不是拦截，是模型工具调用不合法被丢弃，补救=重试
+//     而非改措辞，折进 content_filter 会误导 → true；
+//   - 任何未识别的新枚举：无从判断成因，折进 content_filter 可能失真 → true（把原
+//     枚举回带，宁可见真值也不静默贴错标签）。
+func finishReasonMisfold(s string) bool {
+	switch s {
+	case "STOP", "MAX_TOKENS", "FINISH_REASON_UNSPECIFIED", "",
+		"SAFETY", "RECITATION", "LANGUAGE", "OTHER", "BLOCKLIST",
+		"PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY",
+		"IMAGE_PROHIBITED_CONTENT", "IMAGE_RECITATION":
+		return false
+	default:
+		return true
 	}
 }

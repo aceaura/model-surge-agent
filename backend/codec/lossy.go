@@ -1269,6 +1269,25 @@ func FinishDetailNote(detail string) string {
 	return "dropped the upstream finish detail: " + detail
 }
 
+// FinishReasonMisfoldNote 报上游 finish reason 枚举被**失真地**折进 content_filter。
+//
+// 与 FinishDetailNote 分账：那条带的是上游另附的人类可读原文串（finishMessage），
+// 这条带的是 finishReason **枚举本身**——IR 只有 content_filter 一档，装不下它。
+// 内容策略类的枚举（SAFETY / RECITATION / BLOCKLIST / PROHIBITED_CONTENT / SPII /
+// LANGUAGE / IMAGE_SAFETY / IMAGE_PROHIBITED_CONTENT / IMAGE_RECITATION / OTHER）
+// 折进 content_filter 是忠实的，不报；但 MALFORMED_FUNCTION_CALL 根本不是拦截——
+// 是模型生成的工具调用不合法被丢弃，补救动作是重试整个回合而非改措辞，未识别的
+// 新枚举同理无从判断。这两类被折进 content_filter 会把成因和补救方向一起带偏，
+// 故把原枚举回带报出。与 StopReasonFoldNote 也分账：那条是 IR 档跨族**出站**编码
+// 时折叠，这条是上游枚举**解码进 IR** 时就失真，措辞落在解码侧、原枚举丢失。
+func FinishReasonMisfoldNote(reason string) string {
+	if len(reason) > maxFinishDetail {
+		reason = textsafe.Truncate(reason, maxFinishDetail) + "..."
+	}
+	return "the upstream finish reason was " + reason +
+		", which is not a content-policy block, but this gateway had no matching stop value and folded it into the generic content-filter reason; the specific cause — and the different remediation it implies (a malformed function call means retry the turn, not rephrase it) — is lost"
+}
+
 // BlockReasonNote 是上游整轮安全阻断原因（如 gemini 的
 // promptFeedback.blockReason）被压成停因后、原文串本身的留存说明。
 //
