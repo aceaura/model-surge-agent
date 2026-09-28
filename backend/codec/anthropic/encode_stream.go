@@ -78,6 +78,12 @@ type streamEncoder struct {
 	// max_messages / steered 本协议无对应值，renderStopReason 塌进 max_tokens，
 	// 成因丢失要报出。帧渲染仍按事件原值下发，不读这份记录。
 	stopReason ir.StopReason
+	// sawModeration / sawClientMetadata 记上游流里是否到达过审核回执 / 客户端
+	// 关联键值回声（chat/responses 专属响应级槽位，随 message_start /
+	// message_delta 事件到达）。本协议响应两者都没有落点，到达即丢弃，Notes()
+	// 收尾报出——判据与非流式 DescribeResponseClientMetaLoss 同源、措辞一致。
+	sawModeration     bool
+	sawClientMetadata bool
 }
 
 // Notes 实现 codec.StreamNotes。
@@ -123,6 +129,17 @@ func (e *streamEncoder) Notes() []string {
 	// renderStopReason 塌进 max_tokens，成因与补救方向丢失。判据与非流式
 	// EncodeResponseLossy 同源。
 	notes = append(notes, codec.DescribeResponseStopReasonLoss(e.stopReason, Name)...)
+	// 上游审核回执 / 客户端关联键值回声（chat/responses 专属响应级槽位）：
+	// 本协议流式帧没有对应事件，到达即丢。判据与非流式
+	// DescribeResponseClientMetaLoss 同源、措辞一致，报出即抽干避免二次重复。
+	if e.sawModeration {
+		notes = append(notes, codec.ResponseModerationDropNote())
+		e.sawModeration = false
+	}
+	if e.sawClientMetadata {
+		notes = append(notes, codec.ResponseClientMetadataDropNote())
+		e.sawClientMetadata = false
+	}
 	// usage 细分维度：chat 专属的音频/预测四位本协议没有槽位，聚合
 	// 总量不丢，细分蒸发要报出，判据与非流式 EncodeResponseLossy 同源。
 	if dims := codec.UsageDropDims(&e.usage, Name); len(dims) > 0 {
@@ -159,6 +176,15 @@ func newStreamEncoder() *streamEncoder {
 func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 	if e.errored {
 		return nil, nil
+	}
+	// 审核回执 / 客户端关联键值回声只随 message_start / message_delta 到达；
+	// 本协议响应无对应槽位，到达即丢，记位由 Notes() 收尾报出。显式 null 的
+	// moderation 不算到达（与非流式判据一致）。
+	if len(ev.Moderation) > 0 && string(ev.Moderation) != "null" {
+		e.sawModeration = true
+	}
+	if len(ev.Metadata) > 0 {
+		e.sawClientMetadata = true
 	}
 	switch ev.Type {
 	case ir.EvMessageStart:

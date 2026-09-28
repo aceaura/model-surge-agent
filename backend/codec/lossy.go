@@ -1286,6 +1286,51 @@ func ContainerDropNote() string {
 	return "dropped container info: this protocol's response has no container field, the client cannot see or reuse the code-execution container that served the request"
 }
 
+// ResponseModerationDropNote 是上游审核回执丢失的说明。审核回执（官方 chat 的
+// ChatCompletion.moderation、responses 的 response.moderation）是 chat/responses
+// 两族专属的响应级槽位，由上游内容安全侧产出、不是客户端回声：开了 moderated
+// completions 的客户端靠它门控输入/输出审核结果。anthropic 响应没有 moderation
+// 字段（gemini 仅出站、不面向客户端），跨族投影来的一律丢弃，客户端拿不到审核
+// 判定。与 ContainerDropNote 互为镜像（那是 anthropic 专属回显被外族丢，这是
+// 外族专属回显被 anthropic 丢）。回执正文属会话内容，不进说明。
+func ResponseModerationDropNote() string {
+	return "dropped the upstream moderation receipt: this protocol's response has no moderation field, so a client gating on moderated completions cannot see the input/output moderation result the upstream produced"
+}
+
+// ResponseClientMetadataDropNote 是客户端自定义关联键值回声丢失的说明。响应级
+// metadata（官方 chat 的 ChatCompletion.metadata、responses 的 response.metadata）
+// 是 chat/responses 两族专属槽位，回显客户端请求里带的自定义键值，客户端按它做
+// 异步关联 / 幂等对账。anthropic 响应没有 metadata 字段，跨族投影来的回声整体
+// 丢弃。仅在真非空时报出：anthropic 客户端本就无从设置该键值（请求侧无对应槽位、
+// 且请求侧丢弃另由 describeRequestLossy 报出），故回声对 anthropic 客户端通常
+// 不可达，此注记是对称防御——字段一旦非空即照实报，绝不为空值误报。
+func ResponseClientMetadataDropNote() string {
+	return "dropped the echoed client metadata: this protocol's response has no metadata field, so a client relying on its custom key-values for async correlation or idempotency cannot read them back"
+}
+
+// DescribeResponseClientMetaLoss 非流式响应侧的审核回执 / 客户端关联键值回声
+// 损耗扫描：承载族（chat_completions / responses）编码时原样带回、无损耗；非
+// 承载族没有对应槽位，跨族投影来的一律静默丢弃，这里照实报出。请求侧同类丢弃
+// 已由 describeRequestLossy 报出（moderation / metadata 两处），响应侧此前静默，
+// 判据与流式编码器 Notes() 同源。字段仅在真非空（且 moderation 非显式 null）时
+// 报出，回声不可达时不误报。
+func DescribeResponseClientMetaLoss(resp *ir.Response, name string) []string {
+	if resp == nil {
+		return nil
+	}
+	if name == ProtocolChatCompletions || name == ProtocolResponses {
+		return nil // 承载族原样带回，无损耗
+	}
+	var notes []string
+	if len(resp.ResponsesModeration) > 0 && string(resp.ResponsesModeration) != "null" {
+		notes = append(notes, ResponseModerationDropNote())
+	}
+	if len(resp.ClientMetadata) > 0 {
+		notes = append(notes, ResponseClientMetadataDropNote())
+	}
+	return notes
+}
+
 // ContainerUploadDropNote 容器文件引用块（container_upload）丢失注记。该块是
 // anthropic 专属（file_id 指向容器输入/产出文件），外族没有 file_id 槽位：
 // 整块跳过而不降级（把 file_id 拼进正文会污染回答），损耗经此报出。

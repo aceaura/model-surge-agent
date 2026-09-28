@@ -58,6 +58,11 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	// 翻译回写；值集装不下的丢弃，照实报出——这一维决定计费，无声丢掉
 	// 会让客户端按点的档位对账。
 	notes = append(notes, codec.DescribeResponseTierLoss(resp, Name)...)
+	// 上游审核回执与客户端关联键值回声（chat/responses 专属响应级槽位）：
+	// 本协议响应没有 moderation / metadata 字段，跨族投影来的一律丢弃。请求侧
+	// 同类丢弃由 describeRequestLossy 报出，响应侧此前静默——与 ContainerDropNote
+	// 互为镜像，这里补齐。判据与流式编码器 Notes() 同源，字段仅真非空时报出。
+	notes = append(notes, codec.DescribeResponseClientMetaLoss(resp, Name)...)
 	// 模型音频输出是 chat 非流式专属维度：本协议响应没有完整音频槽位。
 	if resp != nil && resp.Audio != nil {
 		notes = append(notes, codec.AudioOutputDropNote())
