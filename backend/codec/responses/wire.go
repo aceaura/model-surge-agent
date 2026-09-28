@@ -230,6 +230,14 @@ type wireRespItem struct {
 	// message：客户端按下标往 content 里填 part，字段缺席时无处可填。
 	Content json.RawMessage `json:"content,omitempty"`
 
+	// Phase 是上游在 output message 条目上给的阶段标记（官方
+	// response_output_message.phase，commentary|final_answer）。IR 的响应模型
+	// 是扁平 []Block、无消息级槽位，连 responses→responses 同族也带不到客户端，
+	// 解码即丢——建模此键只为探测存在性并计数经 ResponsePhaseDropNote 报出，
+	// 内容不进 IR（与请求侧 wireItem.Phase 的 preserve-and-resend 保全相对：
+	// 那是 ir.Message 有槽位可保全，这里响应侧无槽位只能报）。
+	Phase string `json:"phase,omitempty"`
+
 	// function_call / custom_tool_call：客户端要按条目类型读全字段，
 	// 空字符串表示「还没有入参」而不是「没有这个字段」，缺席会让客户端
 	// 跳过该调用。必填只对这两类条目生效，见 MarshalJSON。

@@ -80,6 +80,11 @@ type streamDecoder struct {
 	// decodeAnnotations 过滤，此前静默丢弃；计数经 Notes() 报出。与编码侧的
 	// CitationDropNote 分账（那是出站渲染不下，这是入站进不了 IR）。
 	droppedNonURLCites int
+	// droppedPhases 是上游 output message 条目携带的 phase（commentary|
+	// final_answer）计数：IR 响应模型扁平无消息级槽位，解码即丢，经 Notes()
+	// 报出。只在 output_item.done 终态帧计一次（与 completeItemParts 处理
+	// message 正文同一处），避免 added/done 两帧重复计数。
+	droppedPhases int
 	// mergedSummary 携带 summary_index>0 的 reasoning 帧数：IR 的一个
 	// thinking 块承载全部段落，多段 part 并入同一块，正文不丢但 part
 	// 边界与 summary_index 寻址变形，计数经 Notes() 报出。
@@ -144,6 +149,10 @@ func (d *streamDecoder) Notes() []string {
 	if d.droppedNonURLCites > 0 {
 		notes = append(notes, codec.NonURLCitationDropNote(d.droppedNonURLCites))
 		d.droppedNonURLCites = 0
+	}
+	if d.droppedPhases > 0 {
+		notes = append(notes, codec.ResponsePhaseDropNote(d.droppedPhases))
+		d.droppedPhases = 0
 	}
 	if d.mergedSummary > 0 {
 		notes = append(notes, fmt.Sprintf(
@@ -523,6 +532,13 @@ func (d *streamDecoder) itemDone(ev wireStreamEvent) []ir.Event {
 		case itemMessage:
 			// done-only 上游的整条正文只在 item.content 里，前面一帧增量都没有。
 			out = append(out, d.completeItemParts(ev.OutputIndex, ev.Item.Content)...)
+			// phase 是上游给该 output message 的阶段标记（commentary|final_answer）：
+			// IR 响应模型扁平无消息级槽位，解码即丢，计数经 Notes() 报出。只在
+			// done 终态帧计一次（added 帧的 message 走 default 不处理，且 phase 以
+			// 终态为准），与 completeItemParts 处理正文同一处，避免重复计数。
+			if ev.Item.Phase != "" {
+				d.droppedPhases++
+			}
 		case itemFunctionCall:
 			// 完整参数可能只在 item.done 里：只发终态的调用一帧增量都没有。
 			out = append(out, d.backfill(callKey(ev.OutputIndex), ir.BlockToolUse,
@@ -925,12 +941,17 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	hosted := 0
 	logprobs := 0
 	nonURLCites := 0
+	phases := 0
 	for _, item := range w.Output {
 		switch item.Type {
 		case itemMessage:
 			// 逐 token 概率没有 IR 槽位：只探测计数、经注记报出，
 			// 判据与流式 completeItemParts 相同。
 			logprobs += countLogprobsParts(item.Content)
+			// phase 同流式：IR 响应模型无消息级槽位，探测计数经注记报出。
+			if item.Phase != "" {
+				phases++
+			}
 			blocks, droppedNonURL, err := decodeContent(item.Content)
 			if err != nil {
 				return nil, nil, ir.NewError(ir.ErrUpstream, 0, "",
@@ -997,6 +1018,9 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	}
 	if nonURLCites > 0 {
 		notes = append(notes, codec.NonURLCitationDropNote(nonURLCites))
+	}
+	if phases > 0 {
+		notes = append(notes, codec.ResponsePhaseDropNote(phases))
 	}
 	return out, notes, nil
 }

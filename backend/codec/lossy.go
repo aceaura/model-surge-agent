@@ -1645,6 +1645,20 @@ func NonURLCitationDropNote(n int) string {
 		"dropped %d non-URL annotation(s) while decoding responses output (file_citation / container_file_citation / file_path): their source is a file or container index rather than a URL, and IR citations are keyed by URL, so the annotation was skipped instead of being mis-rendered as a URL citation", n)
 }
 
+// ResponsePhaseDropNote 解码侧「responses message phase」丢失注记：上游在响应的
+// output message 条目上给出 phase（官方 response_output_message.phase，枚举
+// commentary|final_answer），标记该助手消息是中间旁白还是最终答复。IR 的响应模型
+// （ir.Response.Content 是扁平 []Block）没有消息级槽位，连 responses→responses
+// 同族也无法把 phase 带到客户端，解码即丢。与请求侧 countMessagePhase 注记互为
+// 镜像（那是客户端回传历史里的 phase 跨族丢失、gated name!=responses；这是上游
+// 响应里的 phase 在解码边界丢失，IR 无槽位故不分族一律报）。官方 docstring 要求
+// 客户端 preserve-and-resend phase，丢了它客户端无从遵循、后续请求会退化。
+// 与 logprobs/非 URL 标注同款「上游给了、IR 无槽位」处置：只探测计数、不建模内容。
+func ResponsePhaseDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped the responses message phase (commentary/final_answer) on %d upstream output message(s): the internal response model has no message-level slot, so a client cannot preserve-and-resend phase on follow-up requests as the official contract requires", n)
+}
+
 // CitationResolveDropNote 反推失败的引用丢失注记：跨协议投影来的引用没有原文
 // 可透传，编成 web_search_result_location 又必须带 cited_text，而它既没自带
 // cited_text、也无法按范围从所在块正文切出来时，整条只能丢弃（带空 cited_text
