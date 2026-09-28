@@ -215,16 +215,20 @@ type Response struct {
 	// 缓存前缀。判别式联合值域在演进，原文透传不建模；仅 responses 一族有
 	// 槽位，跨族不投影。
 	ResponsesPromptCacheDiagnostics json.RawMessage `json:"responses_prompt_cache_diagnostics,omitempty"`
-	// ResponsesModeration responses 响应侧的审核结果回执（官方 response.
-	// moderation，nullable）。开了 moderated completions 的客户端靠它门控
-	// 输入/输出审核结果。chat 族对同名字段是「丢弃+注记」，responses 这里
-	// 同族原样带回复原保真；跨族无槽位不投影。
+	// ResponsesModeration 上游响应侧的审核结果回执（官方 responses 的
+	// response.moderation 与 chat 的 ChatCompletion.moderation，均 nullable）。
+	// 开了 moderated completions 的客户端靠它门控输入/输出审核结果。responses 与
+	// chat 两族都有响应级 moderation 槽位、结构同形，故同族原样带回、跨族
+	// （responses↔chat）互投也保全；anthropic/gemini 无槽位，跨族不投影。
+	// 结构属演进中的判别式联合，原文透传不建模。字段名沿用历史 Responses 前缀，
+	// 实为 chat+responses 共用的单一审核回执槽位。
 	ResponsesModeration json.RawMessage `json:"responses_moderation,omitempty"`
 	// ClientMetadata 上游在 response 对象里回显的客户端自定义关联键值
-	//（官方 response.metadata，与请求侧 ClientMetadata 同源回显）。仅
-	// responses 一族有响应级 metadata 槽位：同族往返原值带回（口径同
-	// created / completed_at，客户端按它做异步关联/幂等），跨族无槽位不
-	// 投影——目标协议没有响应级 metadata 概念，与 completed_at / moderation
-	// 同属「仅本族有槽位、跨族不投影」的响应侧回执。
+	//（官方 responses 的 response.metadata 与 chat 的 ChatCompletion.metadata，
+	// 与请求侧 ClientMetadata 同源回显）。responses 与 chat 两族都有响应级
+	// metadata 槽位、同为字符串键值 map：同族往返原值带回、跨族（responses↔chat）
+	// 互投也保全（口径同 created / completed_at，客户端按它做异步关联/幂等）；
+	// anthropic/gemini 无响应级 metadata 概念，跨族不投影。注意官方
+	// chat.completion.chunk（流式）无 metadata 字段，故 chat 侧只在非流式响应回显。
 	ClientMetadata map[string]string `json:"client_metadata,omitempty"`
 }

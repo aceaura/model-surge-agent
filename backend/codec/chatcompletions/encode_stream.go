@@ -647,6 +647,11 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 	}
 	// 指纹原样回写：chat 专属维度，异族来源恒为空串，omitempty 自然不带。
 	out.SystemFingerprint = resp.SystemFingerprint
+	// moderation / metadata 回执原样回写：官方非流式 ChatCompletion 两键都有，
+	// chat 同族往返逐字带回；responses 上游投影来的同形回执（moderation 结构一致、
+	// metadata 同为字符串键值）也一并保全，不再静默蒸发。零值时 omitempty 不写。
+	out.Moderation = resp.ResponsesModeration
+	out.Metadata = resp.ClientMetadata
 	if out.ID == "" {
 		out.ID = "chatcmpl-unknown"
 	}

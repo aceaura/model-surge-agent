@@ -525,6 +525,16 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	out := &ir.Response{ID: w.ID, Model: w.Model, Content: []ir.Block{},
 		ServiceTier: w.ServiceTier, SystemFingerprint: w.SystemFingerprint,
 		Created: w.Created}
+	// 官方非流式 ChatCompletion 的 moderation / metadata 回执落进 IR：moderation
+	// 是 moderated completions 的审核结果、metadata 是客户端关联键值的回显，此前
+	// wireResponse 未建模两键，被 json.Unmarshal 静默吞掉。显式 null / 空 map 等同
+	// 没给，不占位（判据与 responses decode 同源）。
+	if len(w.Moderation) > 0 && string(w.Moderation) != "null" {
+		out.ResponsesModeration = w.Moderation
+	}
+	if len(w.Metadata) > 0 {
+		out.ClientMetadata = w.Metadata
+	}
 	if w.Usage != nil {
 		out.Usage = convertUsage(*w.Usage)
 	}

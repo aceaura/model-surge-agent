@@ -301,6 +301,20 @@ type wireResponse struct {
 	ServiceTier string `json:"service_tier,omitempty"`
 	// SystemFingerprint 后端配置指纹（系统版本变化信号，排障用）。
 	SystemFingerprint string `json:"system_fingerprint,omitempty"`
+	// Metadata 是官方非流式 ChatCompletion.metadata（至多 16 对客户端关联键值
+	// 的响应回显，与请求侧同源）。此前 wireResponse 未建模该键，json.Unmarshal
+	// 静默吞掉——同族往返丢回声、responses 上游投影来的 ClientMetadata 也无处
+	// 落脚。落进 ir.Response.ClientMetadata，同族/跨族（responses↔chat 同形）
+	// 编码原样带回。注意官方 chat.completion.chunk（流式）没有 metadata 字段，
+	// 故本键只在非流式响应对象上出现，omitempty 自然区分。
+	Metadata map[string]string `json:"metadata,omitempty"`
+	// Moderation 是官方 ChatCompletion.moderation / chat.completion.chunk.
+	// moderation（开了 moderated completions 时的输入/输出审核结果回执，流式与
+	// 非流式都带）。此前 wireResponse 未建模，审核回执被静默吞掉，客户端无从
+	// 门控。原文透传进 ir.Response.ResponsesModeration（IR 的单一审核回执槽位，
+	// chat 与 responses 同形共用），编码原样带回。结构属演进中的判别式联合，
+	// 不建模只透传。
+	Moderation json.RawMessage `json:"moderation,omitempty"`
 }
 
 type wireChoice struct {
