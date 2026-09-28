@@ -1254,6 +1254,19 @@ func DroppedCitationsNote(n int) string {
 	return fmt.Sprintf("dropped %d response citation(s): the candidate carried no text block to attach them to", n)
 }
 
+// CitationLicenseDropNote gemini 上游引用来源的 license 字段丢弃注记。官方
+// CitationSource.license（Output only）是引用来源的版权/许可标识：wireCitationSource
+// 已建模该键，但 candidateCitations 只把 URI 映进 ir.Citation，license 无处安放被静默
+// 丢弃。ir.Citation 没有 license 槽位（URL/Title/CitedText/Start/End/EncryptedIndex/
+// WireType/Raw 都不是它），且 gemini 是出站-only、跨族恒无对应维，故只探测计数报出
+// （与 SafetyRatingsDropNote 同款「上游给了、IR 无槽位」处置）。与 startIndex/endIndex
+// 的丢弃分账：那两个是字节偏移与 IR rune 口径不符、有意不携带（wire.go 注释在案），
+// 而 license 此前既无注释也无注记，是纯静默丢弃。
+func CitationLicenseDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped the license/attribution string from %d citation source(s): the internal citation model has no slot for a source license, so the client cannot see the license under which a cited source was provided", n)
+}
+
 // maxFinishDetail 是上游收尾原因原文的保留字节数。
 // 说明会落库进流水，而原文长度不受本服务控制。
 const maxFinishDetail = 200

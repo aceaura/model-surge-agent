@@ -238,7 +238,9 @@ type wireCitationMetadata struct {
 
 // wireCitationSource 单条引用来源（官方 CitationSource：uri/startIndex/endIndex/
 // license）。只 URI 进 IR；startIndex/endIndex 是相对候选全文的**字节**偏移，
-// 与 IR 的 rune 口径不符，换算不可靠，故不携带（见 candidateCitations）。
+// 与 IR 的 rune 口径不符，换算不可靠，故不携带（见 candidateCitations）。license
+// 是来源的版权/许可标识，ir.Citation 无对应槽位、gemini 又是出站-only 跨族恒无维，
+// 故探测计数经 CitationLicenseDropNote 报出（countCitationLicenses），不静默丢弃。
 type wireCitationSource struct {
 	URI        string `json:"uri,omitempty"`
 	StartIndex int    `json:"startIndex,omitempty"`

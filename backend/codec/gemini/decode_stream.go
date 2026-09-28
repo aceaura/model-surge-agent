@@ -83,6 +83,10 @@ type streamDecoder struct {
 	// 异源（评的是用户输入而非输出候选），故独立计数、用 PromptSafetyRatingsDropNote 的
 	// prompt 专属措辞报出，不与候选级混账（共用候选措辞会把 prompt 误说成 candidate）。
 	droppedPromptSafetyRatings int
+	// droppedCitationLicenses 计引用来源携带的 license 字段条数（官方
+	// CitationSource.license）：candidateCitations 只把 URI 映进 ir.Citation，license
+	// 无 IR 槽位被静默丢弃，故独立计数经 Notes() 报出（CitationLicenseDropNote）。
+	droppedCitationLicenses int
 }
 
 type openBlock struct {
@@ -145,6 +149,10 @@ func (d *streamDecoder) Notes() []string {
 	if d.droppedPromptSafetyRatings > 0 {
 		notes = append(notes, codec.PromptSafetyRatingsDropNote(d.droppedPromptSafetyRatings))
 		d.droppedPromptSafetyRatings = 0
+	}
+	if d.droppedCitationLicenses > 0 {
+		notes = append(notes, codec.CitationLicenseDropNote(d.droppedCitationLicenses))
+		d.droppedCitationLicenses = 0
 	}
 	return codec.DedupeNotes(notes)
 }
@@ -248,6 +256,8 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 		// 按类别内容安全评级：IR 无结构化槽位，探测计数报出（与 logprobsResult
 		// 同款）。空数组/缺席 len 为 0，不误计。
 		d.droppedSafetyRatings += len(cand.SafetyRatings)
+		// 引用来源的 license：ir.Citation 无槽位，探测计数报出（CitationLicenseDropNote）。
+		d.droppedCitationLicenses += countCitationLicenses(cand)
 		if cand.FinishReason != "" {
 			sr := convertFinishReason(cand.FinishReason)
 			d.stopReason = sr
@@ -476,6 +486,22 @@ func candidateCitations(c wireCandidate) []ir.Citation {
 	return out
 }
 
+// countCitationLicenses 数候选的引用来源里携带非空 license 的条数。官方
+// CitationSource.license 无 ir.Citation 槽位，candidateCitations 只映 URI，故这里
+// 单独探测计数、经 CitationLicenseDropNote 报出。groundingChunks/urlContext 无 license
+// 维，只看 citationMetadata.citationSources。流式与非流式共用同一判据（规则 b）。
+func countCitationLicenses(c wireCandidate) int {
+	var n int
+	if c.CitationMetadata != nil {
+		for _, s := range c.CitationMetadata.CitationSources {
+			if s.License != "" {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 // switchTo 保证当前开着的块是指定种类：种类变了就先闭合旧块再开新块。
 // 本协议的 parts 没有索引，块边界只能这样推出来。
 func (d *streamDecoder) switchTo(kind ir.BlockType) []ir.Event {
@@ -613,6 +639,7 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	var droppedCitations int
 	var logprobs int
 	var safetyRatings int
+	var citationLicenses int
 	for _, cand := range w.Candidates {
 		if cand.Index != 0 {
 			if cand.Index > maxCandidate {
@@ -634,6 +661,9 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 		// 来源标注（grounding/citation metadata）在候选级到达，映射成 ir.Citation
 		// 后挂到本候选的文本块上；候选没有正文块可挂时计入丢弃、经注记报出。
 		cits := candidateCitations(cand)
+		// 引用来源的 license：与流式同判据。在 Content==nil 提前 continue 之前先计，
+		// 否则无正文块的候选携带的 license 会漏计。
+		citationLicenses += countCitationLicenses(cand)
 		if cand.Content == nil {
 			droppedCitations += len(cits)
 			continue
@@ -728,6 +758,9 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	}
 	if safetyRatings > 0 {
 		notes = append(notes, codec.SafetyRatingsDropNote(safetyRatings))
+	}
+	if citationLicenses > 0 {
+		notes = append(notes, codec.CitationLicenseDropNote(citationLicenses))
 	}
 	return out, codec.DedupeNotes(notes), nil
 }
