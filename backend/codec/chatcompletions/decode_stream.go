@@ -179,8 +179,9 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 			out = append(out, events...)
 		}
 		// 逐 token 概率没有 IR 槽位，内容带不走：计数经 Notes() 报出。
-		// 显式 null 与缺省同义，不算载荷。
-		if len(choice.LogProbs) > 0 && string(choice.LogProbs) != "null" {
+		// 只认真载荷：null/缺省、以及 content 与 refusal 皆为 null 或空数组的
+		// 空壳对象都不算（见 hasChatLogProbsPayload），否则空壳会误报（规则 a）。
+		if hasChatLogProbsPayload(choice.LogProbs) {
 			d.droppedLogprobs++
 		}
 		if choice.FinishReason != "" {
@@ -190,6 +191,36 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 		}
 	}
 	return out, nil
+}
+
+// hasChatLogProbsPayload 判定一个 choice 的 logprobs 字段是否真带了逐 token 概率载荷。
+// chat 官方 choice.logprobs = anyOf[{content: array|null, refusal: array|null（二者
+// required）}, null]：未请求 logprobs 时其规范值是 null；即便请求了，无内容 token 的
+// choice（纯 tool_call、或只带 finish_reason 的空 delta 收尾帧）也会给出 content 与
+// refusal 皆为 null 或空数组的对象——`{"content":null,"refusal":null}` /
+// `{"content":[],"refusal":null}`。这两种空壳都意味着「上游根本没给逐 token 概率」，
+// 不能计入丢弃，否则每条这类 choice 都会误报 LogProbsDropNote，违反「注记当且仅当
+// 真实丢弃」（假阳性与漏报同样是缺口，规则 a）。与 responses hasLogProbsPayload
+// 同款纪律，只是那里 logprobs 是数组（防空数组）、这里 chat 是对象（防空 content/refusal）。
+//
+// 只有 content 或 refusal 解析出至少一个数组元素才算真载荷；无法解析成对象时（异形/
+// 损坏）按「存在」保守计数，交由内容解码路径负责报错——真实丢弃宁可报、不可漏。
+// 字符串比较只用来剔掉 null 字面量与空串，不用来判空壳对象。
+func hasChatLogProbsPayload(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	if s := strings.TrimSpace(string(raw)); s == "" || s == "null" {
+		return false
+	}
+	var obj struct {
+		Content []json.RawMessage `json:"content"`
+		Refusal []json.RawMessage `json:"refusal"`
+	}
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return true // 异形/损坏：保守按存在计，宁报勿漏。
+	}
+	return len(obj.Content) > 0 || len(obj.Refusal) > 0
 }
 
 func (d *streamDecoder) ensureStarted(chunk wireResponse) []ir.Event {
@@ -557,8 +588,9 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 			}
 			continue
 		}
-		// 逐 token 概率没有 IR 槽位：只探测计数、经注记报出。
-		if len(choice.LogProbs) > 0 && string(choice.LogProbs) != "null" {
+		// 逐 token 概率没有 IR 槽位：只探测计数、经注记报出。判据与流式相同
+		// （hasChatLogProbsPayload），空壳对象/null/缺省都不算载荷，避免误报。
+		if hasChatLogProbsPayload(choice.LogProbs) {
 			logprobs++
 		}
 		out.StopReason = convertFinishReason(choice.FinishReason)
