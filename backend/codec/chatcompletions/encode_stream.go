@@ -64,9 +64,18 @@ type streamEncoder struct {
 	fingerprint string
 	// moderation 上游的审核回执（ir.Response.ResponsesModeration 经事件投影而来）：
 	// 官方 chat.completion.chunk 有 moderation 字段，收尾时单独成帧回写给客户端
-	//（moderation chunk 形态：choices 为空）。先到先得，不覆盖。metadata 不在此列
-	// ——官方 chunk 无 metadata 字段，流式客户端本就收不到，属协议固有缺席。
+	//（moderation chunk 形态：choices 为空）。先到先得，不覆盖。
 	moderation json.RawMessage
+	// sawClientMetadata 记上游流里是否到达过客户端关联键值回声（ir.Event.Metadata
+	// 经事件投影而来）。官方 chat.completion.chunk **无** metadata 字段（spec 核实：
+	// CreateChatCompletionStreamResponse 顶层只有 id/choices/created/model/obfuscation/
+	// service_tier/system_fingerprint/object/usage/moderation，metadata 只在非流式
+	// CreateChatCompletionResponse 上），故流式路径装不下、到达即丢。这不是「协议固有
+	// 缺席」可静默：当 metadata 由 responses 上游回显而来时，非流式 chat 响应本可携带
+	//（wireResponse.Metadata，见非流式 EncodeResponse），流式却丢掉——真实信息损失，
+	// 必须报出。与 anthropic 流式编码器 sawClientMetadata 同款、与非流式
+	// DescribeResponseClientMetaLoss 同源、措辞一致。
+	sawClientMetadata bool
 	// sawPromptCacheDiagnostics 记上游流里是否到达过提示缓存诊断回执
 	//（ir.Response.ResponsesPromptCacheDiagnostics 经事件投影而来，源自 responses
 	// 上游按请求侧 prompt_cache_options.comparison_response_id 索要而回）。官方
@@ -172,6 +181,13 @@ func (e *streamEncoder) Notes() []string {
 		notes = append(notes, codec.ResponsePromptCacheDiagnosticsDropNote())
 		e.sawPromptCacheDiagnostics = false
 	}
+	// 客户端关联键值回声：chunk 无 metadata 槽位、流式路径装不下即丢。判据与
+	// 非流式 DescribeResponseClientMetaLoss 同源、与 anthropic 流式编码器同款，
+	// 措辞一致，报出即抽干避免二次重复。
+	if e.sawClientMetadata {
+		notes = append(notes, codec.ResponseClientMetadataDropNote())
+		e.sawClientMetadata = false
+	}
 	return codec.DedupeNotes(notes)
 }
 
@@ -219,6 +235,10 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		// 提示缓存诊断回执本协议装不下，只记到达位、收尾报出（不回填）。
 		if len(ev.PromptCacheDiagnostics) > 0 && string(ev.PromptCacheDiagnostics) != "null" {
 			e.sawPromptCacheDiagnostics = true
+		}
+		// 客户端关联键值回声：chunk 无 metadata 槽位，只记到达位、收尾报出（不回填）。
+		if len(ev.Metadata) > 0 {
+			e.sawClientMetadata = true
 		}
 		if ev.Container != nil {
 			e.droppedContainer = true
@@ -413,6 +433,10 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		// 提示缓存诊断回执同理随收尾帧抵达，本协议装不下，只记到达位。
 		if len(ev.PromptCacheDiagnostics) > 0 && string(ev.PromptCacheDiagnostics) != "null" {
 			e.sawPromptCacheDiagnostics = true
+		}
+		// 客户端关联键值回声同理随收尾帧抵达，chunk 无 metadata 槽位，只记到达位。
+		if len(ev.Metadata) > 0 {
+			e.sawClientMetadata = true
 		}
 		if ev.Container != nil {
 			e.droppedContainer = true
