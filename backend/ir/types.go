@@ -271,6 +271,13 @@ type Media struct {
 	// 零值表示客户端没给，此时出站不合成：合成一个会把「按上游默认」
 	// 变成「按我们猜的」，而两者的计费可能不同。
 	Detail string `json:"detail,omitempty"`
+	// OversizedImage 是 Anthropic 图片块的 transformations.oversized_image 指令
+	//（官方 image_block_param.transformations，值 "downsize"|"error"：图片超大时
+	// 是缩小还是报错）。只有 anthropic 图片块有这个槽位，是纯渲染指令、本网关不
+	// 据其分支，但同族（anthropic↔anthropic）往返必须逐字带回，否则客户端对超大
+	// 图片的处置意图丢失。外族协议（chat/responses/gemini）的图片形状没有对应字段，
+	// 跨族整维丢弃由有损诊断报出。零值表示客户端没给，出站不合成。
+	OversizedImage string `json:"oversized_image,omitempty"`
 	// FileID 是上游文件服务里的引用（Responses 的 input_image / input_file
 	// 都收这一种载体）。本服务不代取文件内容，只在同族往返时原样带回；
 	// 投给不认它的目标协议会丢，由有损诊断报告。

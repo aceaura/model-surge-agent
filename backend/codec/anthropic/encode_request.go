@@ -297,6 +297,13 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 		} else {
 			out.Source.Type = "base64"
 		}
+		// transformations.oversized_image 同族逐字回吐：图片块专属渲染指令，纯
+		// 指令性 provenance，本网关不据其分支，但同族往返必须原样带回，否则客户端
+		// 对超大图片的处置意图（downsize|error）丢失。零值时不写（外族投影或客户端
+		// 未给），omitempty 自然不带出该键。
+		if b.Media.OversizedImage != "" {
+			out.Transformations = &wireTransformations{OversizedImage: b.Media.OversizedImage}
+		}
 		if container == blockDocument {
 			// document 专属的两个配置键同族回写：context 是给模型的用途说明，
 			// citations 是 {"enabled":bool} 配置对象（不是引用数组）。跨族投影来

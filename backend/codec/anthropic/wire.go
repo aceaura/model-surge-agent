@@ -126,6 +126,10 @@ type wireBlock struct {
 
 	// image
 	Source *wireSource `json:"source,omitempty"`
+	// Transformations 是图片块的渲染指令（官方 image_block_param.transformations，
+	// 目前只有 oversized_image 一维：图片超大时 downsize|error）。此前未建模，
+	// 逐字段重建的 image 块会把它静默丢掉、同族往返不再逐字。
+	Transformations *wireTransformations `json:"transformations,omitempty"`
 
 	// thinking
 	Thinking  string `json:"thinking,omitempty"`
@@ -188,6 +192,12 @@ type wireSource struct {
 	MediaType string `json:"media_type,omitempty"`
 	Data      string `json:"data,omitempty"`
 	URL       string `json:"url,omitempty"`
+}
+
+// wireTransformations 是图片块的渲染指令对象（官方 ImageTransformationsParam）。
+// 目前官方只有 oversized_image 一维（"downsize"|"error"：图片超大时缩小还是报错）。
+type wireTransformations struct {
+	OversizedImage string `json:"oversized_image,omitempty"`
 }
 
 type wireCacheControl struct {

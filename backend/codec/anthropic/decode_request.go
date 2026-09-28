@@ -347,6 +347,12 @@ func decodeBlock(b wireBlock, raw json.RawMessage) (ir.Block, bool, error) {
 			Data:      b.Source.Data,
 			URL:       b.Source.URL,
 		}
+		// transformations.oversized_image 是图片块专属的渲染指令（官方只在
+		// image_block_param 上有此键），故仅图片块读入：同族逐字往返，跨族由有损
+		// 诊断报出。此前 wireBlock 未建模该键，逐字段重建的 image 块把它静默丢掉。
+		if b.Type == blockImage && b.Transformations != nil {
+			media.OversizedImage = b.Transformations.OversizedImage
+		}
 		if b.Type == blockDocument {
 			// document 块的两项配置（用途旁注 context 与引用开关 citations.enabled）
 			// 落进 Media：同族逐字往返，跨族由有损诊断报出（见 DocumentConfigDropNote）。

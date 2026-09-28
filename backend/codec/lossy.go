@@ -429,6 +429,14 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 			}
 			if b.Type == ir.BlockImage {
 				describeImageLossy(b.Media, caps, note)
+				if name != ProtocolAnthropic && b.Media != nil && b.Media.OversizedImage != "" {
+					// transformations.oversized_image 是 anthropic 图片块独有的渲染
+					// 指令（图片超大时 downsize|error），纯指令性 provenance。同族
+					// 逐字往返无损；投给外族（chat/responses/gemini 的图片形状都没有
+					// 对应字段）整维丢弃——与 tool_use 的 caller/toolset_name 同一
+					// 处置口径，报一条而不是静默蒸发。
+					note("image transformations", oversizedImageWhy)
+				}
 			} else if b.Media != nil && !b.Media.HasPayload() {
 				// 非图片媒体（document/file/audio）base64 与 URL 两载体全空。
 				// 若还带 file_id 引用，则只有原生收文件引用的目标（chat_completions
@@ -526,6 +534,13 @@ const toolCallerWhy = "the tool call carries an anthropic-only caller/toolset_na
 // 且它是工具「结果」而非工具「调用」，措辞各表其形以免误导。toolset_name 是配对
 // tool_use 所属的 beta toolsets 家族名，纯 provenance，外族工具结果形状没有槽位。
 const toolResultToolsetWhy = "the tool result carries an anthropic-only toolset_name provenance marker (the toolset family of the paired tool_use) that the target protocol has no field for; it is dropped"
+
+// oversizedImageWhy 是「anthropic 图片块的 transformations.oversized_image 指令投
+// 给外族被丢」的措辞。官方 image_block_param.transformations.oversized_image 取值
+// "downsize"|"error"，规定图片超大时上游是缩小还是报错——是纯渲染指令性 provenance，
+// 只有 anthropic 图片块有槽位（chat/responses/gemini 的图片形状都没有）。同族逐字
+// 往返无损；跨族整维丢弃报一条而不是静默蒸发，与 toolCallerWhy 同一处置口径。
+const oversizedImageWhy = "the image carries an anthropic-only transformations.oversized_image directive (downsize/error for oversized images) that the target protocol has no field for; it is dropped"
 
 // respCallerWhy 是「responses function_call/custom_tool_call 条目的 caller /
 // namespace / async 投给外族被丢」的统一措辞。caller 是发起方标记（union
