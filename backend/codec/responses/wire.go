@@ -222,9 +222,16 @@ type wireSummary struct {
 // "content":null，比字段缺席更糟——严格客户端把 null 当类型错误。
 // 因此构造时必须显式赋 []，不能只靠去掉 tag。
 type wireRespItem struct {
-	Type   string `json:"type,omitempty"`
-	ID     string `json:"id,omitempty"`
-	Role   string `json:"role,omitempty"`
+	Type string `json:"type,omitempty"`
+	ID   string `json:"id,omitempty"`
+	Role string `json:"role,omitempty"`
+	// Status 是条目级状态（官方 ResponseOutputMessage.status /
+	// FunctionToolCall.status，均**必填**，枚举 in_progress|completed|incomplete）。
+	// 响应侧解码不把它映射进 IR（IR 是扁平 []Block、无条目级状态槽位），编码器
+	// 反而给每个条目一律合成 "completed"（见 openItem.wire / EncodeResponse）。
+	// 于是上游标为 incomplete 的条目会被静默改写成 completed——解码侧只探测
+	// **未完成**（非空非 completed）的 status 计数、经 ResponseItemStatusDropNote
+	// 报出，completed 常态不计（否则每条正常条目都误报）。请求侧 wireItem 另有用途。
 	Status string `json:"status,omitempty"`
 
 	// message：客户端按下标往 content 里填 part，字段缺席时无处可填。

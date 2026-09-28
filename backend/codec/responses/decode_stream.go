@@ -85,6 +85,13 @@ type streamDecoder struct {
 	// 报出。只在 output_item.done 终态帧计一次（与 completeItemParts 处理
 	// message 正文同一处），避免 added/done 两帧重复计数。
 	droppedPhases int
+	// droppedItemStatuses 是上游 output 条目携带的**未完成** status
+	// （in_progress|incomplete）计数：官方 message/function_call 条目的 status
+	// 为必填，标记该条目自身是否被截断。IR 无条目级状态槽位，且同族编码器把每个
+	// 条目一律改写成 completed，解码即丢（并改写）。只在 output_item.done 终态帧、
+	// 且 status 非空非 completed 时计一次——completed 是常态且被如实改写回
+	// completed，无丢失，计入会对每条正常条目误报。经 Notes() 报出。
+	droppedItemStatuses int
 	// mergedSummary 携带 summary_index>0 的 reasoning 帧数：IR 的一个
 	// thinking 块承载全部段落，多段 part 并入同一块，正文不丢但 part
 	// 边界与 summary_index 寻址变形，计数经 Notes() 报出。
@@ -153,6 +160,10 @@ func (d *streamDecoder) Notes() []string {
 	if d.droppedPhases > 0 {
 		notes = append(notes, codec.ResponsePhaseDropNote(d.droppedPhases))
 		d.droppedPhases = 0
+	}
+	if d.droppedItemStatuses > 0 {
+		notes = append(notes, codec.ResponseItemStatusDropNote(d.droppedItemStatuses))
+		d.droppedItemStatuses = 0
 	}
 	if d.mergedSummary > 0 {
 		notes = append(notes, fmt.Sprintf(
@@ -527,6 +538,13 @@ func (d *streamDecoder) itemDone(ev wireStreamEvent) []ir.Event {
 	reasoning := reasoningKey(ev.OutputIndex)
 	var out []ir.Event
 	if ev.Item != nil {
+		// 条目级 status 未完成标记（in_progress/incomplete）没有 IR 槽位，且同族
+		// 编码器把每个条目一律改写成 completed：探测计数、经 Notes() 报出。对所有
+		// 条目类型生效（message/function_call/reasoning 的 status 官方都是必填），
+		// 故放在 switch 之前；只在 done 终态帧计一次，completed 常态不计。
+		if ev.Item.Status != "" && ev.Item.Status != "completed" {
+			d.droppedItemStatuses++
+		}
 		switch ev.Item.Type {
 		case itemMessage:
 			// done-only 上游的整条正文只在 item.content 里，前面一帧增量都没有。
@@ -942,7 +960,14 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	logprobs := 0
 	nonURLCites := 0
 	phases := 0
+	itemStatuses := 0
 	for _, item := range w.Output {
+		// 条目级 status 未完成标记（in_progress/incomplete）没有 IR 槽位，且同族
+		// 编码器把每个条目一律改写成 completed：探测计数、经注记报出，判据与流式
+		// itemDone 相同。对所有条目类型生效，故放在 switch 之前；completed 常态不计。
+		if item.Status != "" && item.Status != "completed" {
+			itemStatuses++
+		}
 		switch item.Type {
 		case itemMessage:
 			// 逐 token 概率没有 IR 槽位：只探测计数、经注记报出，
@@ -1021,6 +1046,9 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	}
 	if phases > 0 {
 		notes = append(notes, codec.ResponsePhaseDropNote(phases))
+	}
+	if itemStatuses > 0 {
+		notes = append(notes, codec.ResponseItemStatusDropNote(itemStatuses))
 	}
 	return out, notes, nil
 }

@@ -1910,6 +1910,25 @@ func ResponsePhaseDropNote(n int) string {
 		"dropped the responses message phase (commentary/final_answer) on %d upstream output message(s): the internal response model has no message-level slot, so a client cannot preserve-and-resend phase on follow-up requests as the official contract requires", n)
 }
 
+// ResponseItemStatusDropNote 解码侧「responses 条目级 status」丢失注记：上游在每个
+// output 条目（官方 ResponseOutputMessage.status / FunctionToolCall.status，均为
+// **必填**，枚举 in_progress|completed|incomplete）上标记该条目自身是生成中、已完成
+// 还是被截断（如 max_output_tokens 在条目中途截停）。IR 的响应模型是扁平 []Block、
+// 没有条目级状态槽位，且本族编码器给每个条目一律合成 "completed"（见 openItem.wire
+// 与 EncodeResponse 的各处 Status:"completed"），于是上游标为 incomplete 的条目到
+// 客户端被静默**改写**成 completed——既是丢弃也是改写。与响应级 status 互补而非重复：
+// 响应级 status/incomplete_details（经 stopReasonFor 保全）给出「整个响应被截断」的
+// 整体信号，这里丢的是「究竟哪个条目没写完」的条目粒度信息。
+//
+// 只在 status 表示未完成（非空且非 "completed"）时计数：completed 是终态响应里每个
+// 条目的常态、且被如实改写回 completed（无丢失），若无条件计入会对每条正常条目误报，
+// 违反「注记当且仅当真实丢弃」（假阳性与漏报同样是缺口）。与 phase 同款「上游给了、
+// IR 无槽位」处置：只探测计数、不建模内容；流式只在 output_item.done 终态帧计一次。
+func ResponseItemStatusDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped the non-completed status on %d upstream output item(s): the internal response model has no per-item status slot and same-family encoding rewrites every item to \"completed\", so a client cannot see which specific item the upstream marked in_progress or incomplete (e.g. a message truncated mid-item)", n)
+}
+
 // CitationResolveDropNote 反推失败的引用丢失注记：跨协议投影来的引用没有原文
 // 可透传，编成 web_search_result_location 又必须带 cited_text，而它既没自带
 // cited_text、也无法按范围从所在块正文切出来时，整条只能丢弃（带空 cited_text
