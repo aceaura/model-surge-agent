@@ -51,6 +51,14 @@ type streamEncoder struct {
 	// 同损同措辞（规则 b）。真流式路径骨架不带 ContentChannel（responses 解码器
 	// 已在解码侧计数报出），故只在投影路径计数，不与解码侧重复。
 	contentChannel int
+	// refusalMerged 记上游响应里的拒绝正文块（block_start 骨架 Type=BlockRefusal）
+	// 被本协议渲染成普通 text 块的条数。本协议没有独立 refusal 槽位（只有
+	// stop_reason=refusal），encodeBlock 把正文降级成文本——正文逐字保留，丢的是
+	// 「这是模型拒绝」的标记。真流式（chat/responses 解码器 slot 产出 BlockRefusal
+	// 骨架）与整份响应投影（replay splitBlock 保全块型）两条路径都带 BlockRefusal，
+	// 故在此统一计数；解码器侧不报此损（它忠实产出块），不会双报。与非流式
+	// DescribeResponseRefusalLoss 同损同措辞（规则 b）。
+	refusalMerged int
 	// blockOrder 让 Finish 按开启顺序闭合，避免 map 遍历顺序不定
 	// 导致同样的输入产出不同的帧序。
 	blockOrder []int
@@ -146,6 +154,12 @@ func (e *streamEncoder) Notes() []string {
 	if e.contentChannel > 0 {
 		notes = append(notes, codec.ContentChannelCrossFamilyNote(e.contentChannel))
 		e.contentChannel = 0
+	}
+	// 拒绝正文跨族并进普通文本：正文保留、「这是拒绝」标记丢失。判据与非流式
+	// DescribeResponseRefusalLoss 同源、措辞一致，报出即抽干避免二次重复。
+	if e.refusalMerged > 0 {
+		notes = append(notes, codec.ResponseRefusalMergeNote(e.refusalMerged))
+		e.refusalMerged = 0
 	}
 	// 上游审核回执 / 客户端关联键值回声（chat/responses 专属响应级槽位）：
 	// 本协议流式帧没有对应事件，到达即丢。判据与非流式
@@ -246,6 +260,13 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			if ev.Block.Type == ir.BlockThinking && ev.Block.Thinking != nil &&
 				ev.Block.Thinking.ContentChannel {
 				e.contentChannel++
+			}
+			// 拒绝正文块：本协议无独立 refusal 槽位，encodeBlock 把它降级成普通
+			// text 块（正文逐字保留），「这是模型拒绝」的标记丢失。真流式与投影
+			// 两条路径的 block_start 骨架都带 BlockRefusal，故在此统一计数；与非
+			// 流式 DescribeResponseRefusalLoss 同源、措辞一致（规则 b）。
+			if ev.Block.Type == ir.BlockRefusal {
+				e.refusalMerged++
 			}
 			// 工具调用自带的推理签名（gemini 把 thoughtSignature 挂在 functionCall
 			// part 自身）本协议的 tool_use 没有承载槽位，流式增量也带不回：必然

@@ -1480,6 +1480,40 @@ func DescribeResponseContentChannelLoss(resp *ir.Response, name string) []string
 	return []string{ContentChannelCrossFamilyNote(n)}
 }
 
+// ResponseRefusalMergeNote 是模型输出里的拒绝正文被并进普通文本的说明。
+// 与请求侧的「merged N refusal(s) into plain text …the model cannot tell it
+// previously refused」分账：那条讲的是**历史**里的拒绝（上游模型看不出自己
+// 上一轮拒绝过），本条讲的是**本轮模型输出**的拒绝（客户端把拒答当成了普通
+// 正文，分不出模型是在拒绝还是在正常作答）。正文逐字保留，丢的是「这是拒绝」
+// 这一标记——目标协议没有独立 refusal 槽位（chat 的 message.refusal、responses
+// 的 output refusal part 才有），只能降级成文本块。流式与非流式共用本措辞（规则 b）。
+func ResponseRefusalMergeNote(n int) string {
+	return fmt.Sprintf(
+		"merged %d refusal(s) from the model output into plain text: the target protocol has no refusal field, so the client cannot distinguish the model's refusal from ordinary text", n)
+}
+
+// DescribeResponseRefusalLoss 报「上游响应里的拒绝正文块投给没有 refusal 槽位的
+// 客户端协议时被并进普通文本」。chat_completions 与 responses 有独立 refusal 槽位
+// （caps.Refusal=true），原样保全、不报；其余客户端协议（anthropic；gemini 无客户端
+// 响应编码器）没有槽位，encodeBlock 把 BlockRefusal 渲染成 text 块，标记丢失。
+// 判据与请求侧 countRequestRefusals 的 !caps.Refusal 门控同源（规则 c：请求/响应
+// 同一损类都要报），与非流式 EncodeResponseLossy / 流式 Notes() 共用措辞（规则 b）。
+func DescribeResponseRefusalLoss(resp *ir.Response, name string) []string {
+	if resp == nil || name == ProtocolChatCompletions || name == ProtocolResponses {
+		return nil
+	}
+	n := 0
+	for _, b := range resp.Content {
+		if b.Type == ir.BlockRefusal {
+			n++
+		}
+	}
+	if n == 0 {
+		return nil
+	}
+	return []string{ResponseRefusalMergeNote(n)}
+}
+
 // CumulativeTextNote 是累计式文本帧被改写的说明：部分上游每帧重发迄今
 // 全部正文而非只发增量，逐字转发会让客户端文本按帧数重复膨胀（最轻句子
 // 复读，最重 token 用量翻倍）。按前缀比对识别，只下发新增后缀。
