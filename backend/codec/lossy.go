@@ -2153,6 +2153,11 @@ func DescribeResponseStopReasonLoss(reason ir.StopReason, name string) []string 
 			return []string{StopReasonFoldNote(
 				"steered (the user redirected generation mid-stream at a safety boundary; raising the output budget is meaningless)")}
 		}
+	case ir.StopPauseTurn:
+		if name != ProtocolAnthropic {
+			return []string{StopReasonFoldNote(
+				"pause-turn (a long-running server-side tool paused mid-turn and the turn is resumable; the client should re-submit the partial turn as-is to let the model continue, not raise the output budget)")}
+		}
 	}
 	return nil
 }

@@ -1264,10 +1264,12 @@ func outputHasRefusal(r *wireResponse) bool {
 // 命中停止序列确实是一次正常收尾，只是「因何而停」这一位表达不出来。
 func renderStatus(s ir.StopReason) (status string, incomplete *wireIncomplete) {
 	switch s {
-	case ir.StopMaxTokens, ir.StopContextWindow:
-		// context_window（输入占满窗口挤断输出）没有本族专属 reason 取值，
+	case ir.StopMaxTokens, ir.StopContextWindow, ir.StopPauseTurn:
+		// context_window（输入占满窗口挤断输出）与 pause_turn（服务端工具暂停
+		// 待续跑）都没有本族专属 reason 取值，
 		// 归 max_output_tokens：两者同为「输出不完整」，status=incomplete
-		// 至少让客户端不会把半截结果当终稿。真正的语义无法保留。
+		// 至少让客户端不会把半截结果当终稿。真正的语义无法保留，由
+		// DescribeResponseStopReasonLoss 报折叠注记。
 		return "incomplete", &wireIncomplete{Reason: "max_output_tokens"}
 	case ir.StopMaxMessages:
 		// 本族原值回写：max_messages 与 max_output_tokens 是两回事，

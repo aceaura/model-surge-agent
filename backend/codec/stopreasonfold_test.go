@@ -32,6 +32,11 @@ func TestR17StopReasonFoldMatrix(t *testing.T) {
 		{ir.StopSteered, codec.ProtocolResponses, false},
 		{ir.StopSteered, codec.ProtocolAnthropic, true},
 		{ir.StopSteered, codec.ProtocolChatCompletions, true},
+		// pause_turn 母协议是 anthropic：同族出站原值带回不报，跨到 chat/responses
+		// 塌进各自「输出不完整」档，续跑补救指引丢失，必须报。
+		{ir.StopPauseTurn, codec.ProtocolAnthropic, false},
+		{ir.StopPauseTurn, codec.ProtocolChatCompletions, true},
+		{ir.StopPauseTurn, codec.ProtocolResponses, true},
 	}
 	for _, c := range cases {
 		got := codec.DescribeResponseStopReasonLoss(c.reason, c.name)
@@ -63,6 +68,20 @@ func TestR17StopReasonFoldWording(t *testing.T) {
 		t.Fatalf("want 1 note, got %v", got)
 	}
 	for _, want := range []string{"steered", "no matching stop value", "output incomplete", "remediation"} {
+		if !strings.Contains(got[0], want) {
+			t.Errorf("注记缺 %q：%s", want, got[0])
+		}
+	}
+}
+
+// pause_turn 折叠注记的措辞须点明「回合可续跑、应原样续提而非抬预算」，
+// 让按说明检索流水的人能判断客户端被误导的补救方向。
+func TestR56PauseTurnFoldWording(t *testing.T) {
+	got := codec.DescribeResponseStopReasonLoss(ir.StopPauseTurn, codec.ProtocolChatCompletions)
+	if len(got) != 1 {
+		t.Fatalf("want 1 note, got %v", got)
+	}
+	for _, want := range []string{"pause-turn", "resumable", "re-submit", "no matching stop value", "remediation"} {
 		if !strings.Contains(got[0], want) {
 			t.Errorf("注记缺 %q：%s", want, got[0])
 		}

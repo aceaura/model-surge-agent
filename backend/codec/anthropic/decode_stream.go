@@ -372,8 +372,11 @@ func convertStopReason(s string) ir.StopReason {
 	case "refusal":
 		return ir.StopContentFilter
 	case "pause_turn":
-		// 该状态表示回合可以续跑，语义上等同于「没说完」。
-		return ir.StopMaxTokens
+		// 长时运行的服务端工具中途暂停、回合可续跑。单列而非并进 max_tokens：
+		// 补救动作相反——pause_turn 要把半截回合原样续提让模型接着跑，
+		// max_tokens 要抬输出配额。同族 anthropic 出站原值带回；外族出站按各自
+		// 「输出不完整」档投影，并由 DescribeResponseStopReasonLoss 报折叠注记。
+		return ir.StopPauseTurn
 	case "model_context_window_exceeded":
 		// 官方 beta 档：输入占满窗口挤断输出。兜底成 content_filter 会把
 		// 截断回答伪装成被拦截，客户端的补救动作（压缩输入）与 max_tokens
@@ -405,6 +408,10 @@ func renderStopReason(s ir.StopReason) string {
 		// 同族原值带回：外族上游给不出这一档，只有 anthropic 入站的
 		// 往返会走到这里。
 		return "model_context_window_exceeded"
+	case ir.StopPauseTurn:
+		// 同族原值带回：pause_turn 是 anthropic 专属档，只有 anthropic 入站
+		// 的往返会走到这里；外族上游给不出，外族客户端出站由各自 render 折叠。
+		return "pause_turn"
 	case ir.StopMaxMessages, ir.StopSteered:
 		// responses 的消息数上限档与用户转向截断档，本协议都无对应值。取
 		// max_tokens 而非 end_turn：两者都表示输出不完整，客户端至少不会把

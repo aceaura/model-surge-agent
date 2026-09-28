@@ -26,6 +26,13 @@ const (
 	// 已有自动后继，加大预算毫无意义。塌成 max_tokens 会让客户端误判补救
 	// 动作。只有 responses 一族有此档，外族出站归「输出不完整」的最近档。
 	StopSteered StopReason = "steered"
+	// StopPauseTurn 长时运行的服务端工具（web 搜索 / 代码执行 / MCP）中途暂停、
+	// 回合可续跑（anthropic 官方 stop_reason "pause_turn"）。单列而不并进
+	// StopMaxTokens：两者的客户端补救动作相反——pause_turn 要把已收到的半截回合
+	// 原样续提（re-submit 让模型接着跑），max_tokens 要抬输出配额。折成
+	// max_tokens 会让 agent 客户端去加预算而非续跑，永远接不上被暂停的回合。
+	// 只有 anthropic 一族有此档，外族出站归「输出不完整」的最近档。
+	StopPauseTurn StopReason = "pause_turn"
 )
 
 // Usage 是一次调用的 token 用量。

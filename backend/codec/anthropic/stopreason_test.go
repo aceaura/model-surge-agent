@@ -15,8 +15,9 @@ func TestConvertStopReasonCoversFullEnumeration(t *testing.T) {
 		"stop_sequence": ir.StopStopSequence,
 		"tool_use":      ir.StopToolUse,
 		"refusal":       ir.StopContentFilter,
-		// 回合可续跑，语义等同「没说完」。
-		"pause_turn": ir.StopMaxTokens,
+		// 服务端工具暂停、回合可续跑：独立档位，补救动作（原样续提回合）与
+		// max_tokens（抬输出配额）相反。
+		"pause_turn": ir.StopPauseTurn,
 		// 输入占满窗口挤断输出：独立档位，补救动作与 max_tokens 相反。
 		"model_context_window_exceeded": ir.StopContextWindow,
 		// 上游没给：留空由聚合层兜底。
@@ -36,7 +37,7 @@ func TestRenderStopReasonCoversEveryIRValue(t *testing.T) {
 	for _, s := range []ir.StopReason{
 		ir.StopEndTurn, ir.StopMaxTokens, ir.StopStopSequence,
 		ir.StopToolUse, ir.StopContentFilter, ir.StopContextWindow,
-		ir.StopMaxMessages,
+		ir.StopMaxMessages, ir.StopPauseTurn,
 	} {
 		if got := renderStopReason(s); got == "" {
 			t.Errorf("renderStopReason(%q) returned empty", s)
@@ -51,6 +52,18 @@ func TestContextWindowStopRoundTrip(t *testing.T) {
 		t.Fatalf("renderStopReason = %q", got)
 	}
 	if got := convertStopReason(renderStopReason(ir.StopContextWindow)); got != ir.StopContextWindow {
+		t.Fatalf("往返 = %q", got)
+	}
+}
+
+// pause_turn 档同族往返原值带回：不并进 max_tokens——pause_turn 要把半截回合
+// 原样续提让服务端工具接着跑，max_tokens 要抬输出配额，补救动作相反。此前折成
+// StopMaxTokens 会让 anthropic→anthropic 直通的 agent 客户端去加预算而非续跑。
+func TestPauseTurnStopRoundTrip(t *testing.T) {
+	if got := renderStopReason(ir.StopPauseTurn); got != "pause_turn" {
+		t.Fatalf("renderStopReason = %q", got)
+	}
+	if got := convertStopReason(renderStopReason(ir.StopPauseTurn)); got != ir.StopPauseTurn {
 		t.Fatalf("往返 = %q", got)
 	}
 }

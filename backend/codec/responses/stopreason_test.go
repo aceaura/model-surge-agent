@@ -60,6 +60,10 @@ func TestRenderStatusKeepsToolUseDecidable(t *testing.T) {
 		ir.StopStopSequence:  {"completed", ""},
 		ir.StopContentFilter: {"incomplete", "content_filter"},
 		"":                   {"completed", ""},
+		// pause_turn=服务端工具暂停待续跑（R56 新增独立档）：本协议无专属
+		// reason 取值，归 max_output_tokens/incomplete——是输出不完整、可续跑，
+		// 不落默认的 content_filter（那会把它伪装成被拦截）。
+		ir.StopPauseTurn: {"incomplete", "max_output_tokens"},
 		// 认不出的 IR 取值不说成正常结束。
 		"some_future_reason": {"incomplete", "content_filter"},
 	}

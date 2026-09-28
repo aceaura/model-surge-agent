@@ -41,6 +41,9 @@ func TestRenderFinishReasonCoversEveryIRValue(t *testing.T) {
 		ir.StopContextWindow: "length",
 		ir.StopMaxMessages:   "length",
 		ir.StopSteered:       "length",
+		// pause_turn=服务端工具暂停待续跑（R56 新增独立档）：本协议无对应值，
+		// 归 length 而非默认的 content_filter——它是输出不完整、可续跑，不是被拦截。
+		ir.StopPauseTurn: "length",
 		// 认不出的 IR 取值不说成正常结束。
 		"some_future_reason": "content_filter",
 	}
