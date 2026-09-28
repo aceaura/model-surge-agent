@@ -122,3 +122,21 @@ func TestBetaParamsRequestRoundTrip(t *testing.T) {
 		t.Errorf("往返 context_management 漂移：%s", back.ContextManagement)
 	}
 }
+
+// 轮次54 可达性锚点：客户端显式给「空容器」（mcp_servers:[] / context_management:{}）
+// 时，解码器按原样落进 IR（len>0 且非 null，不被归一）——这正是跨族 DescribeLossy
+// 曾误报「声明的 X 被丢弃」的入口（空数组/空对象语义等于什么都没声明）。此处钉住
+// 解码行为，配套的注记静默判据见 codec/emptycontainerloss_test.go。
+func TestBetaParamsDecodeEmptyContainerStored(t *testing.T) {
+	body := betaReqPrefix + `"mcp_servers":[],"context_management":{}}`
+	r, err := DecodeRequest([]byte(body))
+	if err != nil {
+		t.Fatalf("DecodeRequest: %v", err)
+	}
+	if len(r.McpServers) == 0 {
+		t.Errorf("空数组 mcp_servers:[] 应原样落进 IR（可达性前提），实得空：%q", r.McpServers)
+	}
+	if len(r.ContextManagement) == 0 {
+		t.Errorf("空对象 context_management:{} 应原样落进 IR（可达性前提），实得空：%q", r.ContextManagement)
+	}
+}

@@ -1,6 +1,8 @@
 package codec
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -39,6 +41,30 @@ func prefixSaysForeign(signature, name string) bool {
 // 会漏掉「本来就没编出去」的情形。返回值已去重并排序，令同一字段在多条
 // 消息上被丢弃只报一条，且顺序稳定便于落库比对。
 //
+// jsonContainerEmpty 报告一段原文 JSON 是否为「空容器/空值」——null、空数组 []、
+// 空对象 {}（含任意内部空白，如 [ ] / { }）都算空。用于请求侧探测式注记：
+// mcp_servers / context_management / access_programs 这类 RawMessage 透传字段，
+// 客户端显式给了空数组/空对象时（部分 SDK 会把「空列表」序列化成 [] 而非省略），
+// 语义等于「什么都没声明」，跨族丢弃它不损失任何信息，不该报「声明的 X 被丢弃」
+// 的假阳性注记——与轮次53 responses output_text.logprobs:[] 被误计为丢弃同款
+// 「规范空值被当成真载荷」缺口，违反「注记当且仅当真实丢弃」这条不变量（误报与
+// 漏报同为缺口）。用 json.Compact 归一空白而非裸字符串比较，兼容 [ ]/{ }。非法
+// JSON 或标量按「非空」保守处理：真给了东西宁可报、不可漏。
+func jsonContainerEmpty(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return true
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		return false
+	}
+	switch buf.String() {
+	case "null", "[]", "{}":
+		return true
+	}
+	return false
+}
+
 // 无丢弃时返回 nil。
 func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	if req == nil {
@@ -197,14 +223,14 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	// MCP 服务器声明（mcp_servers，anthropic beta）：外族没有 MCP 连接器槽位，
 	// 声明的外部 MCP 服务器整条丢弃，上游无从发现或调用其工具。anthropic 同族
 	// 原样往返（RawMessage 透传），报了就是谎报。
-	if len(req.McpServers) > 0 && name != ProtocolAnthropic {
+	if !jsonContainerEmpty(req.McpServers) && name != ProtocolAnthropic {
 		note("mcp_servers", "no MCP connector slot: the declared external MCP servers are dropped, the upstream cannot discover or call their tools")
 	}
 	// 上下文管理（context_management，anthropic beta）：外族没有上下文编辑槽位，
 	// 客户端请求的上下文裁剪（如清除旧工具调用）整条丢弃，上游发送未裁剪的完整
 	// 上下文，可能撞上客户端本以为会被裁掉的窗口上限。anthropic 同族原样往返
 	// （RawMessage 透传），报了就是谎报。
-	if len(req.ContextManagement) > 0 && name != ProtocolAnthropic {
+	if !jsonContainerEmpty(req.ContextManagement) && name != ProtocolAnthropic {
 		note("context_management", "no context-editing slot: the requested context management (e.g. clearing old tool uses) is dropped, the upstream sends the full unpruned context and may hit the window limit the client expected to be pruned")
 	}
 	// 域专属访问计划（access_programs，responses 独有，{cyber: standard|
@@ -213,7 +239,7 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	// standard），可能落到与客户端意图不同的档位。responses 同族原样往返
 	// （RawMessage 透传），报了就是谎报。值是官方枚举非敏感串，但为与同槽位的
 	// 其它访问/档位参数保持一致，不回显具体档位。
-	if len(req.AccessPrograms) > 0 && name != ProtocolResponses {
+	if !jsonContainerEmpty(req.AccessPrograms) && name != ProtocolResponses {
 		note("access_programs", "no domain-specific access-program slot: the client's explicit cyber access program (standard/daybreak_blue/daybreak_red) is dropped and the upstream resolves its own default program from the model tier and org/project access")
 	}
 	// 消息级发送者名（chat 的 message.name）：只有 chat_completions 解码器落进
