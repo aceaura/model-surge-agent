@@ -102,6 +102,12 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	// 上游也就无从命中，IR.StopReason 对本协议客户端恒不为 stop_sequence——
 	// DescribeResponseStopSequenceLoss 在此是结构性死代码（A2-1 同款：不加死注记）。
 	// 只有 chat_completions 入站（可发 ≤4 条 stop）配 anthropic 上游才真实可触达。
+	// 上游响应里工具调用的发起方 provenance 标记投给本协议：本协议 function_call/
+	// custom_tool_call 条目保全 responses 族的 caller/namespace/async（同族不报），
+	// 但没有 anthropic 族的 caller/toolset_name 槽位——anthropic 上游响应的工具调用
+	// 带这两维时原样丢，调用名与入参逐字保留。请求侧同类丢弃由 describeBlocksLossy
+	// 报出，响应侧此前静默——这里补齐，判据与流式 Notes() 同源、措辞一致（规则 b/c）。
+	notes = append(notes, codec.DescribeResponseToolProvenanceLoss(resp, Name)...)
 	return body, codec.DedupeNotes(notes), nil
 }
 

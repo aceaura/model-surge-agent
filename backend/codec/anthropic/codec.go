@@ -98,6 +98,13 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	// 正常正文。请求侧同类降级由 countRequestRefusals 的 !caps.Refusal 门控报出，
 	// 响应侧此前静默——这里补齐，判据与流式 Notes() 同源、措辞一致（规则 b/c）。
 	notes = append(notes, codec.DescribeResponseRefusalLoss(resp, Name)...)
+	// 上游响应里工具调用的发起方 provenance 标记（responses 族的 caller/namespace/
+	// async；anthropic 族的 caller/toolset_name 同族保全、不报）投给本协议：本协议
+	// tool_use 只有 anthropic 族的 caller/toolset_name 槽位，responses 族标记无处落，
+	// encodeBlock 原样丢——调用名与入参逐字保留，丢的是「谁发起/是否命名空间/异步」
+	// 这层归属。请求侧同类丢弃由 describeBlocksLossy 报出，响应侧此前静默——这里补齐，
+	// 判据与流式 Notes() 同源、措辞一致（规则 b/c）。
+	notes = append(notes, codec.DescribeResponseToolProvenanceLoss(resp, Name)...)
 	// 跨协议投影来、无 Raw 又反推不出 cited_text 的引用被 encodeBlock 整条
 	// 丢弃（带空 cited_text 上游 400）。与文档类引用的 CitationDropNote 分账，
 	// 判据与流式侧同源，非流式响应不因走另一条编码路就漏报。

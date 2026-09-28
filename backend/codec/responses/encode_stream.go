@@ -88,6 +88,15 @@ type streamEncoder struct {
 	// 于是这份改标只可能在这里被发现。不报就与真流式路径同损不同报（违反规则 b）。
 	// 措辞共用 codec.ContentChannelStreamNote，与解码器侧逐字一致。
 	contentChannel int
+	// toolCallerDropped / toolRespCallerDropped 记上游响应里工具调用的两族发起方
+	// provenance 标记被本协议丢弃的调用数。本协议 function_call/custom_tool_call
+	// 条目保全 responses 族 caller/namespace/async（同族不计数），但没有 anthropic 族
+	// caller/toolset_name 槽位——anthropic 上游响应的工具调用带这两维时投到本协议丢失。
+	// 真流式与整份响应投影两条路径都可达；解码器侧不报此损，不会双报。判据用
+	// codec.ToolProvenanceDropShape，与非流式 DescribeResponseToolProvenanceLoss 同源、
+	// 措辞一致（规则 b）。
+	toolCallerDropped     int
+	toolRespCallerDropped int
 	// badToolArgs 是关块时判定畸形的函数调用入参数（增量已发出、改写
 	// 不了，只能计数），Notes() 报出。
 	badToolArgs int
@@ -136,6 +145,16 @@ func (e *streamEncoder) Notes() []string {
 	if e.contentChannel > 0 {
 		notes = append(notes, codec.ContentChannelStreamNote(e.contentChannel))
 		e.contentChannel = 0
+	}
+	// 工具调用发起方 provenance 标记跨族丢弃：调用名与入参保留、归属标记丢失。
+	// 判据与非流式 DescribeResponseToolProvenanceLoss 同源、措辞一致，报出即抽干。
+	if e.toolCallerDropped > 0 {
+		notes = append(notes, codec.ResponseToolCallerDropNote(e.toolCallerDropped))
+		e.toolCallerDropped = 0
+	}
+	if e.toolRespCallerDropped > 0 {
+		notes = append(notes, codec.ResponseToolRespCallerDropNote(e.toolRespCallerDropped))
+		e.toolRespCallerDropped = 0
 	}
 	if e.droppedTier != "" {
 		notes = append(notes, codec.TierEchoDropNote(e.droppedTier))
@@ -327,6 +346,18 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			if note, drop := codec.ForeignToolSignature(
 				ev.Block.ToolUse.Signature, ev.Block.ToolUse.SignatureFrom, Name, false); drop {
 				e.notes = append(e.notes, note)
+			}
+			// 发起方 provenance 标记跨族丢弃：本协议保全 responses 族 caller/
+			// namespace/async（同族不计数），anthropic 族 caller/toolset_name 无处落。
+			// 判据与非流式 DescribeResponseToolProvenanceLoss 同源（共用
+			// ToolProvenanceDropShape），只在真正的块开启帧上认（ensureOpen 补开走 nil
+			// block，无标记可谈），block_start 每索引只触发一次，无需去重。
+			a, r := codec.ToolProvenanceDropShape(ev.Block.ToolUse, Name)
+			if a {
+				e.toolCallerDropped++
+			}
+			if r {
+				e.toolRespCallerDropped++
 			}
 		}
 		return e.openBlock(ev.Index, kind, ev.Block)

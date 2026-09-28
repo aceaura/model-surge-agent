@@ -59,6 +59,16 @@ type streamEncoder struct {
 	// 故在此统一计数；解码器侧不报此损（它忠实产出块），不会双报。与非流式
 	// DescribeResponseRefusalLoss 同损同措辞（规则 b）。
 	refusalMerged int
+	// toolCallerDropped / toolRespCallerDropped 记上游响应里工具调用的两族发起方
+	// provenance 标记（block_start 骨架上 ToolUse 的 caller/toolset_name 与
+	// caller/namespace/async）被本协议丢弃的调用数。本协议 tool_use 只有 anthropic
+	// 族 caller/toolset_name 槽位（同族保全、不计数），responses 族标记无处落故必丢。
+	// 真流式（responses 解码器 slot 产出带 Responses* 的骨架）与整份响应投影（replay
+	// splitBlock 浅拷贝整个 ToolUse、标记随骨架带过来）两条路径都可达；解码器侧不报
+	// 此损（它忠实产出块），不会双报。判据用 codec.ToolProvenanceDropShape，与非流式
+	// DescribeResponseToolProvenanceLoss 同源、措辞一致（规则 b）。
+	toolCallerDropped     int
+	toolRespCallerDropped int
 	// blockOrder 让 Finish 按开启顺序闭合，避免 map 遍历顺序不定
 	// 导致同样的输入产出不同的帧序。
 	blockOrder []int
@@ -160,6 +170,16 @@ func (e *streamEncoder) Notes() []string {
 	if e.refusalMerged > 0 {
 		notes = append(notes, codec.ResponseRefusalMergeNote(e.refusalMerged))
 		e.refusalMerged = 0
+	}
+	// 工具调用发起方 provenance 标记跨族丢弃：调用名与入参保留、归属标记丢失。
+	// 判据与非流式 DescribeResponseToolProvenanceLoss 同源、措辞一致，报出即抽干。
+	if e.toolCallerDropped > 0 {
+		notes = append(notes, codec.ResponseToolCallerDropNote(e.toolCallerDropped))
+		e.toolCallerDropped = 0
+	}
+	if e.toolRespCallerDropped > 0 {
+		notes = append(notes, codec.ResponseToolRespCallerDropNote(e.toolRespCallerDropped))
+		e.toolRespCallerDropped = 0
 	}
 	// 上游审核回执 / 客户端关联键值回声（chat/responses 专属响应级槽位）：
 	// 本协议流式帧没有对应事件，到达即丢。判据与非流式
@@ -278,6 +298,17 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 				if note, drop := codec.ForeignToolSignature(
 					ev.Block.ToolUse.Signature, ev.Block.ToolUse.SignatureFrom, Name, false); drop {
 					e.notes = append(e.notes, note)
+				}
+				// 发起方 provenance 标记跨族丢弃：本协议保全 anthropic 族 caller/
+				// toolset_name（同族不计数），responses 族 caller/namespace/async 无处落。
+				// 判据与非流式 DescribeResponseToolProvenanceLoss 同源（共用
+				// ToolProvenanceDropShape），block_start 每索引只触发一次，无需去重。
+				a, r := codec.ToolProvenanceDropShape(ev.Block.ToolUse, Name)
+				if a {
+					e.toolCallerDropped++
+				}
+				if r {
+					e.toolRespCallerDropped++
 				}
 			}
 			wb, ok, err := encodeBlock(*ev.Block)

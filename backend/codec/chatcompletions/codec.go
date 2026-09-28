@@ -109,6 +109,12 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	// countContentChannelReasoning 报出，响应侧此前静默——这里补齐，判据与流式
 	// Notes() 同源。同族 responses→responses 保全通道，门控排除之。
 	notes = append(notes, codec.DescribeResponseContentChannelLoss(resp, Name)...)
+	// 上游响应里工具调用的发起方 provenance 标记投给本协议：本协议 tool_calls 既无
+	// anthropic 族的 caller/toolset_name 槽位、也无 responses 族的 caller/namespace/
+	// async 槽位，两族标记一律丢——调用名与入参逐字保留，丢的是「谁发起/命名空间/
+	// 异步」这层归属。请求侧同类丢弃由 describeBlocksLossy 报出，响应侧此前静默——
+	// 这里补齐，判据与流式 Notes() 同源、措辞一致（规则 b/c）。
+	notes = append(notes, codec.DescribeResponseToolProvenanceLoss(resp, Name)...)
 	return body, codec.DedupeNotes(notes), nil
 }
 

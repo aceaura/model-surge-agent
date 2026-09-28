@@ -1514,6 +1514,85 @@ func DescribeResponseRefusalLoss(resp *ir.Response, name string) []string {
 	return []string{ResponseRefusalMergeNote(n)}
 }
 
+// ToolProvenanceDropShape 判一个工具调用块上的两族发起方 provenance 标记投给
+// 目标协议 name 时是否会被丢。返回两个布尔：anthropicShape（caller/toolset_name，
+// anthropic tool_use 块独有）、responsesShape（caller/namespace/async，responses
+// function_call/custom_tool_call 条目独有）。判据与请求侧 describeBlocksLossy 的
+// 两条门控（lossy.go 的 name != ProtocolAnthropic / name != ProtocolResponses）逐字
+// 同源——同族保全不报、跨族无槽位才报，且要求标记确实非空（避免零值假阳性）。
+// 请求侧与响应侧、非流式与流式四条路径共用本函数，杜绝判据漂移。
+func ToolProvenanceDropShape(u *ir.ToolUse, name string) (anthropicShape, responsesShape bool) {
+	if u == nil {
+		return false, false
+	}
+	if name != ProtocolAnthropic && (len(u.Caller) > 0 || u.ToolsetName != "") {
+		anthropicShape = true
+	}
+	if name != ProtocolResponses &&
+		(len(u.ResponsesCaller) > 0 || u.ResponsesNamespace != "" || u.ResponsesAsync != nil) {
+		responsesShape = true
+	}
+	return anthropicShape, responsesShape
+}
+
+// ResponseToolCallerDropNote 是模型输出里的工具调用 anthropic 族发起方标记
+// （caller/toolset_name）投给外族客户端被丢的说明。与请求侧 note("tool call
+// caller/toolset_name", toolCallerWhy) 分账：那条讲**客户端请求历史**里工具调用的
+// 发起方标记投给外族上游被丢，本条讲**上游响应里模型新产出**的工具调用发起方标记
+// 投给外族客户端被丢——方向相反、读者不同（前者是发请求的人，后者是收结果的人），
+// 故措辞各表其向。标记是纯 provenance（谁发起了这次调用：模型直接发起还是
+// code_execution/advisor 编排发起、属于哪个 beta toolset），调用名与入参逐字保留，
+// 丢的只是这层归属信息。流式与非流式共用本措辞（规则 b）。
+func ResponseToolCallerDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped the caller/toolset_name provenance marker from %d tool call(s) in the model output: the target protocol has no field for this anthropic-only marker, so the client cannot tell who initiated the call or which toolset it belonged to", n)
+}
+
+// ResponseToolRespCallerDropNote 是模型输出里的工具调用 responses 族发起方标记
+// （caller/namespace/async）投给外族客户端被丢的说明。与 ResponseToolCallerDropNote
+// 分立：两族标记形状不同（anthropic 的 caller 是 DirectCaller|ServerToolCaller，
+// responses 的是 union direct{caller_id}|program，外加 namespace/async 两维），
+// 互不通用，措辞各表其族以免误导。与请求侧 note("tool call caller/namespace/async",
+// respCallerWhy) 分账同理（方向相反）。流式与非流式共用本措辞（规则 b）。
+func ResponseToolRespCallerDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped the caller/namespace/async provenance marker from %d tool call(s) in the model output: the target protocol has no field for this responses-only marker, so the client cannot tell who initiated the call or whether it was namespaced/async", n)
+}
+
+// DescribeResponseToolProvenanceLoss 报非流式响应里工具调用的两族发起方 provenance
+// 标记跨族丢弃。可达两向：anthropic 上游响应（decode_stream 经 decodeRawBlock →
+// decodeBlock 保全 caller/toolset_name）投给 chat/responses 客户端；responses 上游
+// 响应（decode_stream 保全 caller/namespace/async）投给 anthropic/chat 客户端。同族
+// 保全不报（门控排除）。请求侧同类丢弃由 describeBlocksLossy 的两条门控报出，响应
+// 侧此前静默——这里补齐，判据与流式编码器 Notes() 的 EvBlockStart 计数同源、措辞
+// 一致（规则 b/c）。
+func DescribeResponseToolProvenanceLoss(resp *ir.Response, name string) []string {
+	if resp == nil {
+		return nil
+	}
+	var anthr, respShape int
+	for _, b := range resp.Content {
+		if b.Type != ir.BlockToolUse {
+			continue
+		}
+		a, r := ToolProvenanceDropShape(b.ToolUse, name)
+		if a {
+			anthr++
+		}
+		if r {
+			respShape++
+		}
+	}
+	var notes []string
+	if anthr > 0 {
+		notes = append(notes, ResponseToolCallerDropNote(anthr))
+	}
+	if respShape > 0 {
+		notes = append(notes, ResponseToolRespCallerDropNote(respShape))
+	}
+	return notes
+}
+
 // CumulativeTextNote 是累计式文本帧被改写的说明：部分上游每帧重发迄今
 // 全部正文而非只发增量，逐字转发会让客户端文本按帧数重复膨胀（最轻句子
 // 复读，最重 token 用量翻倍）。按前缀比对识别，只下发新增后缀。

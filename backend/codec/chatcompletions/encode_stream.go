@@ -128,6 +128,15 @@ type streamEncoder struct {
 	// 入参经 EvToolInput 原样落进 function.arguments，custom 形态标记丢失。Notes()
 	// 收尾报出，否则 stream:true 降级无声、stream:false 却保全，两路结论不一。
 	customDowngraded int
+	// toolCallerDropped / toolRespCallerDropped 记上游响应里工具调用的两族发起方
+	// provenance 标记（block_start 骨架上 ToolUse 的 caller/toolset_name 与
+	// caller/namespace/async）被本协议丢弃的调用数。本协议 tool_calls 两族槽位都没有，
+	// 故 anthropic 上游（caller/toolset_name）与 responses 上游（caller/namespace/async）
+	// 的工具调用投到本协议都丢这层归属。真流式与整份响应投影两条路径都可达；解码器侧
+	// 不报此损，不会双报。判据用 codec.ToolProvenanceDropShape，与非流式
+	// DescribeResponseToolProvenanceLoss 同源、措辞一致（规则 b）。
+	toolCallerDropped     int
+	toolRespCallerDropped int
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
 	// suppressUsageFrame 为真表示客户端明确说了不要那一帧单独的 usage
@@ -179,6 +188,16 @@ func (e *streamEncoder) Notes() []string {
 	if e.customDowngraded > 0 {
 		notes = append(notes, codec.CustomToolStreamDowngradeNote(e.customDowngraded))
 		e.customDowngraded = 0
+	}
+	// 工具调用发起方 provenance 标记跨族丢弃：调用名与入参保留、归属标记丢失。
+	// 判据与非流式 DescribeResponseToolProvenanceLoss 同源、措辞一致，报出即抽干。
+	if e.toolCallerDropped > 0 {
+		notes = append(notes, codec.ResponseToolCallerDropNote(e.toolCallerDropped))
+		e.toolCallerDropped = 0
+	}
+	if e.toolRespCallerDropped > 0 {
+		notes = append(notes, codec.ResponseToolRespCallerDropNote(e.toolRespCallerDropped))
+		e.toolRespCallerDropped = 0
 	}
 	// usage 细分维度与 TTL 明细同口径门控：客户端没 opt-in 时 usage 帧
 	// 压根没发（见下方 finish() 的 !suppressUsageFrame 守卫），细分与 TTL
@@ -383,6 +402,17 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 			// splitBlock 每块一个骨架），无需去重，与 contentChannel/媒体计数同款。
 			if ev.Block.ToolUse.Kind == ir.ToolCustom {
 				e.customDowngraded++
+			}
+			// 发起方 provenance 标记跨族丢弃：本协议 tool_calls 两族槽位都没有，
+			// anthropic 族 caller/toolset_name 与 responses 族 caller/namespace/async
+			// 一律丢。判据与非流式 DescribeResponseToolProvenanceLoss 同源（共用
+			// ToolProvenanceDropShape），block_start 每索引只触发一次，无需去重。
+			a, r := codec.ToolProvenanceDropShape(ev.Block.ToolUse, Name)
+			if a {
+				e.toolCallerDropped++
+			}
+			if r {
+				e.toolRespCallerDropped++
 			}
 		}
 		e.sentToolHeader[ev.Index] = true
