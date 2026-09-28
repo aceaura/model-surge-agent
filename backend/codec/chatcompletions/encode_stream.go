@@ -149,15 +149,20 @@ func (e *streamEncoder) Notes() []string {
 	if e.droppedUploads > 0 {
 		notes = append(notes, codec.ContainerUploadDropNote(e.droppedUploads))
 	}
-	if e.droppedCacheDetails {
-		notes = append(notes, codec.CacheCreationDetailsDropNote())
-	}
 	if e.droppedRedacted > 0 {
 		notes = append(notes, codec.RedactedDropNote(e.droppedRedacted))
 	}
 	// usage 细分维度与 TTL 明细同口径门控：客户端没 opt-in 时 usage 帧
-	// 压根没发，细分也就无所谓「没能交付」。
+	// 压根没发（见下方 finish() 的 !suppressUsageFrame 守卫），细分与 TTL
+	// 明细也就无所谓「没能交付」——照客户端的要求执行不是丢它要的东西
+	// （suppressUsageFrame 字段注释）。TTL 明细注记此前在门控之外无条件报出，
+	// 客户端显式 include_usage:false 时仍宣称「合计 token 保留」，而那一帧
+	// 根本没发、合计也没交付，属误报（违反规则 a：注记当且仅当真实丢弃）。
+	// 与 usage 细分维度并入同一门控，正是本注释一直声称的「同口径」。
 	if !e.suppressUsageFrame {
+		if e.droppedCacheDetails {
+			notes = append(notes, codec.CacheCreationDetailsDropNote())
+		}
 		if dims := codec.UsageDropDims(&e.usage, Name); len(dims) > 0 {
 			notes = append(notes, codec.UsageDetailDropNote(dims))
 			e.usage = ir.Usage{}
