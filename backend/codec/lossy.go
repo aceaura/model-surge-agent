@@ -1975,6 +1975,18 @@ func ModalityUsageDropNote(n int) string {
 		"dropped %d per-modality token breakdown(s) from the upstream usage metadata: the internal model has no slot for video, output-image, or cache/tool modality splits; aggregate token totals remain preserved", n)
 }
 
+// SafetyRatingsDropNote gemini 上游候选的按类别内容安全评级丢弃注记。官方
+// Candidate.safetyRatings（Output only）携带每个危害类别的命中概率档与是否因此
+// 拦截，IR 响应模型没有结构化安全评级槽位：gemini 的评级形状与 chat/responses 的
+// moderation 回执不同构，硬塞进那个 RawMessage 槽位会让客户端按 OpenAI moderation
+// 误解析，故只探测计数报出（与 LogProbsDropNote / ModalityUsageDropNote 同款
+// 「上游给了、IR 无槽位」处置）。finishReason=SAFETY 的自由文本已由 FinishDetailNote
+// 报出，但结构化的类别/概率/拦截明细此前静默；正常完成时的信息性评级同样静默。
+func SafetyRatingsDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped %d per-category safety rating(s) from the upstream candidate: the internal response model has no slot for structured content-safety assessments (harm category, probability, blocked), so the client cannot see which categories the upstream flagged or how strongly", n)
+}
+
 // UsageDetailDropNote usage 细分维度跨族丢弃注记（聚合 token 总量不丢）。
 func UsageDetailDropNote(dims []string) string {
 	return "dropped usage detail(s) (" + strings.Join(dims, ", ") +

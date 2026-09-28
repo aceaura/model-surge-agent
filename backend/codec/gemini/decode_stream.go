@@ -74,6 +74,10 @@ type streamDecoder struct {
 	// token 明细条数（VIDEO 两侧、输出侧 IMAGE、缓存与工具用量的模态细分），
 	// 经 Notes() 报出——与 droppedLogprobs 同款「给了但 IR 无槽位」处置。
 	droppedModalityDetails int
+	// droppedSafetyRatings 计候选携带的按类别内容安全评级条数（官方
+	// Candidate.safetyRatings，Output only）：IR 无结构化安全评级槽位，与
+	// droppedLogprobs 同款处置，经 Notes() 报出。
+	droppedSafetyRatings int
 }
 
 type openBlock struct {
@@ -128,6 +132,10 @@ func (d *streamDecoder) Notes() []string {
 	if d.droppedModalityDetails > 0 {
 		notes = append(notes, codec.ModalityUsageDropNote(d.droppedModalityDetails))
 		d.droppedModalityDetails = 0
+	}
+	if d.droppedSafetyRatings > 0 {
+		notes = append(notes, codec.SafetyRatingsDropNote(d.droppedSafetyRatings))
+		d.droppedSafetyRatings = 0
 	}
 	return codec.DedupeNotes(notes)
 }
@@ -222,6 +230,9 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 		if len(cand.LogprobsResult) > 0 && string(cand.LogprobsResult) != "null" {
 			d.droppedLogprobs++
 		}
+		// 按类别内容安全评级：IR 无结构化槽位，探测计数报出（与 logprobsResult
+		// 同款）。空数组/缺席 len 为 0，不误计。
+		d.droppedSafetyRatings += len(cand.SafetyRatings)
 		if cand.FinishReason != "" {
 			d.stopReason = convertFinishReason(cand.FinishReason)
 		}
@@ -572,6 +583,7 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	var calls int
 	var droppedCitations int
 	var logprobs int
+	var safetyRatings int
 	for _, cand := range w.Candidates {
 		if cand.Index != 0 {
 			if cand.Index > maxCandidate {
@@ -654,6 +666,8 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 		if len(cand.LogprobsResult) > 0 && string(cand.LogprobsResult) != "null" {
 			logprobs++
 		}
+		// 按类别内容安全评级：IR 无结构化槽位，探测计数报出（与流式同判据）。
+		safetyRatings += len(cand.SafetyRatings)
 	}
 	if calls > 0 && (out.StopReason == "" || out.StopReason == ir.StopEndTurn) {
 		out.StopReason = ir.StopToolUse
@@ -677,6 +691,9 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	}
 	if logprobs > 0 {
 		notes = append(notes, codec.LogProbsDropNote(logprobs))
+	}
+	if safetyRatings > 0 {
+		notes = append(notes, codec.SafetyRatingsDropNote(safetyRatings))
 	}
 	return out, codec.DedupeNotes(notes), nil
 }

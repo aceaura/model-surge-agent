@@ -211,6 +211,24 @@ type wireCandidate struct {
 	// 的保全纪律不一致。只采 SUCCESS/UNSPECIFIED 状态的 retrievedUrl 映进
 	// ir.Citation；非成功状态（ERROR/PAYWALL/UNSAFE）的 URL 模型没用到，不是引用。
 	UrlContextMetadata *wireUrlContextMetadata `json:"urlContextMetadata,omitempty"`
+	// SafetyRatings 是上游对候选的按类别内容安全评级（官方 Candidate.safetyRatings，
+	// Output only，「List of ratings for the safety of a response candidate」）。
+	// 此前未建模→json.Unmarshal 静默吞掉，与同为 Output only 的 logprobsResult /
+	// citationMetadata / groundingMetadata / urlContextMetadata 都已建模并报出的
+	// 纪律不一致。IR 响应模型没有结构化安全评级槽位（gemini 形状与 chat/responses
+	// 的 moderation 回执不同构，硬塞会让客户端误解析），故只探测计数经
+	// SafetyRatingsDropNote 报出——含 finishReason=SAFETY 被拦时的类别/概率/拦截
+	// 明细，也含正常完成时的信息性评级。
+	SafetyRatings []wireSafetyRating `json:"safetyRatings,omitempty"`
+}
+
+// wireSafetyRating 是单条按类别的内容安全评级（官方 Candidate.safetyRatings[]
+// 的元素，v1beta SafetyRating：category 危害类别 / probability 命中概率档 /
+// blocked 是否因此拦截）。只用于探测存在性并计数，字段内容不进 IR。
+type wireSafetyRating struct {
+	Category    string `json:"category,omitempty"`
+	Probability string `json:"probability,omitempty"`
+	Blocked     bool   `json:"blocked,omitempty"`
 }
 
 // wireCitationMetadata 是候选级引用集合（官方 CitationMetadata.citationSources）。
