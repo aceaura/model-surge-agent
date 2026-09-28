@@ -377,6 +377,11 @@ func decodeBlock(b wireBlock, raw json.RawMessage) (ir.Block, bool, error) {
 			ToolUseID: b.ToolUseID,
 			Content:   content,
 			IsError:   b.IsError,
+			// toolset_name 同族逐字往返：与 tool_use 的 caller/toolset_name 同规矩
+			//（见上方 blockToolUse 分支），纯 provenance，本网关不据其分支，但同族
+			// 往返必须原样带回。此前 wireBlock 已建模该键、解码却不读，被
+			// json.Unmarshal 静默吞掉——与 tool_use 侧（轮次28）不对称。
+			ToolsetName: b.ToolsetName,
 		}
 	case blockThinking:
 		out.Type = ir.BlockThinking

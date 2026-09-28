@@ -489,6 +489,14 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 				note("tool call caller/namespace/async", respCallerWhy)
 			}
 			if b.ToolResult != nil {
+				if name != ProtocolAnthropic && b.ToolResult.ToolsetName != "" {
+					// toolset_name 是 anthropic tool_result 块独有的 beta toolsets
+					// 归属名（配对 tool_use 所属的 toolset 家族），纯 provenance。
+					// 同族逐字往返无损；投给外族（chat/responses/gemini 的工具结果
+					// 形状都没有 toolset 槽位）整维丢弃——与 tool_use 的
+					// caller/toolset_name 同一处置口径，报一条而不是静默蒸发。
+					note("tool result toolset_name", toolResultToolsetWhy)
+				}
 				describeBlocksLossy(b.ToolResult.Content, name, caps, note)
 			}
 		case b.Type == ir.BlockServerToolUse:
@@ -512,6 +520,12 @@ const emptyMediaWhy = "the part carries no payload the target protocol can expre
 // 发起，toolset_name 是 beta toolsets 归属名——都是纯 provenance/可观测信息，
 // 外族没有对应槽位。tool_use 与 server_tool_use 共用此串以免两处漂移。
 const toolCallerWhy = "the tool call carries an anthropic-only caller/toolset_name provenance marker that the target protocol has no field for; it is dropped"
+
+// toolResultToolsetWhy 是「anthropic tool_result 块的 toolset_name 投给外族被丢」
+// 的措辞。与 toolCallerWhy 分立：tool_result 官方只有 toolset_name（无 caller），
+// 且它是工具「结果」而非工具「调用」，措辞各表其形以免误导。toolset_name 是配对
+// tool_use 所属的 beta toolsets 家族名，纯 provenance，外族工具结果形状没有槽位。
+const toolResultToolsetWhy = "the tool result carries an anthropic-only toolset_name provenance marker (the toolset family of the paired tool_use) that the target protocol has no field for; it is dropped"
 
 // respCallerWhy 是「responses function_call/custom_tool_call 条目的 caller /
 // namespace / async 投给外族被丢」的统一措辞。caller 是发起方标记（union

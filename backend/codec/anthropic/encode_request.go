@@ -346,6 +346,10 @@ func encodeBlock(b ir.Block) (wireBlock, bool, error) {
 		out.ToolUseID = b.ToolResult.ToolUseID
 		out.Content = content
 		out.IsError = b.ToolResult.IsError
+		// toolset_name 同族逐字回吐：与 tool_use 的 caller/toolset_name 同规矩（见
+		// 上方 blockToolUse 分支），纯 provenance，本网关不据其分支，但同族往返必须
+		// 原样带回。omitempty：外族投影或客户端未给时为零值，自然不写。
+		out.ToolsetName = b.ToolResult.ToolsetName
 	case ir.BlockThinking:
 		if b.Thinking == nil {
 			return out, false, nil

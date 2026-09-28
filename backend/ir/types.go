@@ -395,6 +395,13 @@ type ToolResult struct {
 	Kind    ToolKind `json:"kind,omitempty"`
 	Content []Block  `json:"content,omitempty"`
 	IsError bool     `json:"is_error,omitempty"`
+	// ToolsetName 是 Anthropic tool_result 块上的 beta toolsets 归属名（可选，
+	// 官方 tool_result_block_param.toolset_name：「配对 tool_use 所属的 toolset
+	// 家族」）。与 ToolUse.ToolsetName 同规矩：纯 provenance，本网关不据其分支，
+	// 但同族（anthropic↔anthropic）往返必须逐字带回，否则上游 store 的条目与
+	// 续话校验对不回去。外族协议（chat/responses/gemini）的工具结果形状没有
+	// toolset 槽位，跨族整维丢弃由有损诊断报出。
+	ToolsetName string `json:"toolset_name,omitempty"`
 }
 
 // Thinking 是推理内容。SignatureFrom 记录签名的来源协议，
