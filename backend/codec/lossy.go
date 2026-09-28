@@ -2254,6 +2254,18 @@ func SafetyRatingsDropNote(n int) string {
 		"dropped %d per-category safety rating(s) from the upstream candidate: the internal response model has no slot for structured content-safety assessments (harm category, probability, blocked), so the client cannot see which categories the upstream flagged or how strongly", n)
 }
 
+// PromptSafetyRatingsDropNote gemini 上游 **prompt 级** 按类别内容安全评级丢弃注记。
+// 官方 PromptFeedback.safetyRatings（「Ratings for safety of the prompt」）评的是用户
+// 输入本身，与 SafetyRatingsDropNote 评的模型输出候选（Candidate.safetyRatings）同维异源。
+// 独立一条而不复用候选措辞：候选那条写死「from the upstream candidate」，套到 prompt 级会
+// 把「评的是 prompt」误说成「评的是输出」，措辞与实际处置对不上（违反规则 a）。prompt 被安全
+// 拦截时（candidates 为空）这段评级是客户端唯一能拿到的「命中哪些类别、多强、是否拦截」明细，
+// 此前连同 blockReason 之外的一切被静默吞掉。流式 Notes() 与非流式 DecodeResponseLossy 共用。
+func PromptSafetyRatingsDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped %d per-category safety rating(s) from the upstream prompt feedback: the internal response model has no slot for structured content-safety assessments (harm category, probability, blocked), so the client cannot see which categories the upstream flagged on the prompt itself or how strongly", n)
+}
+
 // UsageDetailDropNote usage 细分维度跨族丢弃注记（聚合 token 总量不丢）。
 func UsageDetailDropNote(dims []string) string {
 	return "dropped usage detail(s) (" + strings.Join(dims, ", ") +

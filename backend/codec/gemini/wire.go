@@ -289,6 +289,18 @@ type wireUrlMetadata struct {
 // 此时 candidates 为空，错误只能从这里读出。
 type wireFeedback struct {
 	BlockReason string `json:"blockReason,omitempty"`
+	// SafetyRatings 是上游对 **prompt 本身**（而非输出候选）算出的按类别内容
+	// 安全评级（官方 PromptFeedback.safetyRatings：「Ratings for safety of the
+	// prompt. There is at most one rating per category.」）。与 Candidate.safetyRatings
+	// 同维（都是 wireSafetyRating 形状）但异源：那一条评的是模型输出、这一条评的是
+	// 用户输入。此前未建模→promptFeedback 只读了 blockReason，整段 prompt 级评级被
+	// json.Unmarshal 静默吞掉：prompt 被安全拦截时（candidates 为空）客户端只拿到一个
+	// blockReason 枚举，看不到具体命中哪些危害类别、概率多强、是否因此拦截。IR 无结构
+	// 化安全评级槽位（同 Candidate.safetyRatings 的取舍），故只探测计数，经 Notes()/
+	// DecodeResponseLossy 用 **prompt 专属措辞** 报出（PromptSafetyRatingsDropNote），
+	// 与候选级分账——共用候选措辞会把「评的是 prompt」误说成「评的是 candidate」。
+	// 官方 blockReasonMessage 字段不在 v1beta discovery 文档里（未证实存在），不建模。
+	SafetyRatings []wireSafetyRating `json:"safetyRatings,omitempty"`
 }
 
 type wireUsage struct {

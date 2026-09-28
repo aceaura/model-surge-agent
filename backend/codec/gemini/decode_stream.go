@@ -78,6 +78,11 @@ type streamDecoder struct {
 	// Candidate.safetyRatings，Output only）：IR 无结构化安全评级槽位，与
 	// droppedLogprobs 同款处置，经 Notes() 报出。
 	droppedSafetyRatings int
+	// droppedPromptSafetyRatings 计 promptFeedback 携带的 **prompt 级** 按类别内容
+	// 安全评级条数（官方 PromptFeedback.safetyRatings）：与 droppedSafetyRatings 同维
+	// 异源（评的是用户输入而非输出候选），故独立计数、用 PromptSafetyRatingsDropNote 的
+	// prompt 专属措辞报出，不与候选级混账（共用候选措辞会把 prompt 误说成 candidate）。
+	droppedPromptSafetyRatings int
 }
 
 type openBlock struct {
@@ -137,6 +142,10 @@ func (d *streamDecoder) Notes() []string {
 		notes = append(notes, codec.SafetyRatingsDropNote(d.droppedSafetyRatings))
 		d.droppedSafetyRatings = 0
 	}
+	if d.droppedPromptSafetyRatings > 0 {
+		notes = append(notes, codec.PromptSafetyRatingsDropNote(d.droppedPromptSafetyRatings))
+		d.droppedPromptSafetyRatings = 0
+	}
 	return codec.DedupeNotes(notes)
 }
 
@@ -190,10 +199,16 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 		}
 	}
 	// 整个请求被安全策略拒了：candidates 为空，只能从 promptFeedback 读出原因。
-	if frame.PromptFeedback != nil && frame.PromptFeedback.BlockReason != "" {
-		d.stopReason = ir.StopContentFilter
-		// 停因只说「被内容过滤挡了」，具体哪条策略命中在原文串里，带出。
-		d.notes = append(d.notes, codec.BlockReasonNote(frame.PromptFeedback.BlockReason))
+	if frame.PromptFeedback != nil {
+		if frame.PromptFeedback.BlockReason != "" {
+			d.stopReason = ir.StopContentFilter
+			// 停因只说「被内容过滤挡了」，具体哪条策略命中在原文串里，带出。
+			d.notes = append(d.notes, codec.BlockReasonNote(frame.PromptFeedback.BlockReason))
+		}
+		// prompt 级按类别安全评级：与候选级同维、异源（评的是 prompt 本身），IR 无
+		// 结构化槽位，累计计数经 Notes() 用 prompt 专属措辞报出。不以 blockReason 为
+		// 前提——未拦截时的信息性评级同样被丢弃，与候选级 safetyRatings 同款处置。
+		d.droppedPromptSafetyRatings += len(frame.PromptFeedback.SafetyRatings)
 	}
 
 	for _, cand := range frame.Candidates {
@@ -580,10 +595,18 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 		// 的 MapServiceTierEcho/TierEchoDropNote 处理。
 		out.ServiceTier = normalizeServiceTier(w.UsageMetadata.ServiceTier)
 	}
-	if w.PromptFeedback != nil && w.PromptFeedback.BlockReason != "" {
-		out.StopReason = ir.StopContentFilter
-		// 与流式同一处置：具体阻断原因串带出，不只留一个 content_filter 停因。
-		notes = append(notes, codec.BlockReasonNote(w.PromptFeedback.BlockReason))
+	if w.PromptFeedback != nil {
+		if w.PromptFeedback.BlockReason != "" {
+			out.StopReason = ir.StopContentFilter
+			// 与流式同一处置：具体阻断原因串带出，不只留一个 content_filter 停因。
+			notes = append(notes, codec.BlockReasonNote(w.PromptFeedback.BlockReason))
+		}
+		// prompt 级按类别安全评级：与流式同一处置、同一措辞。不以 blockReason 为前提，
+		// 未拦截时的信息性评级同样报出。非流式 promptFeedback 只到达一次，直接就地报，
+		// 不需像候选级那样先累计再在末尾统一 append。
+		if n := len(w.PromptFeedback.SafetyRatings); n > 0 {
+			notes = append(notes, codec.PromptSafetyRatingsDropNote(n))
+		}
 	}
 
 	var calls int
