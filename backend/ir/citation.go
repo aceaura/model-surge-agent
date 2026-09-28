@@ -84,6 +84,30 @@ func CountCitations(r *Request) int {
 	return n
 }
 
+// CountStrayPortableCitations 统计「挂在非 assistant 消息上的可移植引用」条数。
+// 可移植（有 URL）不等于能落地：chat 只在 assistant 消息上开 annotations 槽位，
+// user/system/tool 消息即便带了合法 URL 引用，出站 chat 编码器也无处可写只能丢弃
+// （chatcompletions/encode_request.go 的 `m.Role == ir.RoleAssistant` 门控）。
+// CountNonPortableCitations 只数「引用形态本身装不下（文档下标）」的那一类，
+// 看不见「形态没问题、只是挂错了角色」的这一类，必须单独数。
+// 与角色无关的形态损耗（CountNonPortableCitations）不重叠：可移植与非可移植互斥。
+func CountStrayPortableCitations(r *Request) int {
+	n := 0
+	for _, m := range r.Messages {
+		if m.Role == RoleAssistant {
+			continue
+		}
+		for _, b := range m.Content {
+			for _, c := range b.Citations {
+				if c.Portable() {
+					n++
+				}
+			}
+		}
+	}
+	return n
+}
+
 // CountNonPortableCitations 统计请求里目标协议装不下的引用条数（用于有损诊断）。
 // 与 CountCitations 分开：后者只在目标协议根本没有标注槽位时才非零，
 // 而文档类引用是「有槽位但槽位以 URL 为身份」，三个外族都装不下。

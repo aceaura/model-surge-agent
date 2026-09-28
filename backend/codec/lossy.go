@@ -392,6 +392,17 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 		if n := ir.CountNonPortableCitations(req); n > 0 {
 			notes["citations"] = CitationDropNote(n)
 		}
+		// chat 独有的一类：可移植引用（有 URL）挂在非 assistant 消息上时，
+		// 编码器只在 assistant 消息写 annotations（encode_request.go 的 role
+		// 门控），user/system/tool 消息的引用被静默丢弃。这类引用形态没问题、
+		// CountNonPortableCitations 数不到，必须按角色单独数。
+		// responses 不分角色一律写 annotations（input_text 也带）、anthropic
+		// 同族原样往返、gemini 已由上面 !caps.Citations 分支整体报过，都不重复报。
+		if name == ProtocolChatCompletions {
+			if n := ir.CountStrayPortableCitations(req); n > 0 {
+				notes["stray citations"] = StrayCitationDropNote(n)
+			}
+		}
 	}
 
 	if len(notes) == 0 {
@@ -1883,6 +1894,16 @@ func CountNonPortableCitations(cs []ir.Citation) int {
 func CitationDropNote(n int) string {
 	return fmt.Sprintf(
 		"dropped %d document citation(s): this protocol identifies an annotation source by URL, and these citations point at a document index with page/block/character offsets instead, so the client cannot see which passage was cited", n)
+}
+
+// StrayCitationDropNote 「角色错位的可移植引用」丢失注记：引用本身带 URL、形态
+// 完全可移植，但挂在了非 assistant 的历史消息上。chat 只在 assistant 消息上开
+// annotations 槽位，出站编码器对 user/system/tool 消息的引用无处可写只能丢弃。
+// 与 CitationDropNote 分账——那是「引用形态（文档下标）本协议渲染不下」，
+// 这里是「形态没问题、只是挂错了角色，而本协议只有助手消息能标注」。
+func StrayCitationDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped %d source annotation(s) on non-assistant message(s): this protocol only annotates assistant messages, so citations the client attached to user/system/tool history have no slot and cannot be re-encoded", n)
 }
 
 // NonURLCitationDropNote 解码侧「非 url_citation 标注」丢失注记：responses 上游
