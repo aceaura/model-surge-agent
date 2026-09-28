@@ -718,8 +718,9 @@ func (d *streamDecoder) completeItemParts(oi int, raw json.RawMessage) []ir.Even
 	for n := range parts {
 		switch parts[n].Type {
 		case partOutputText, partRefusal, "":
-			// 逐 token 概率没有 IR 槽位：只探测计数、经 Notes() 报出。
-			if len(parts[n].LogProbs) > 0 && string(parts[n].LogProbs) != "null" {
+			// 逐 token 概率没有 IR 槽位：只探测计数、经 Notes() 报出。空数组 [] 是
+			// 未请求 top_logprobs 时的规范值，不算载荷（见 hasLogProbsPayload）。
+			if hasLogProbsPayload(parts[n].LogProbs) {
 				d.droppedLogprobs++
 			}
 			kind := ir.BlockText
@@ -1025,6 +1026,28 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	return out, notes, nil
 }
 
+// hasLogProbsPayload 判定一个 part 的 logprobs 字段是否真的带了逐 token 概率载荷。
+// responses 官方把 output_text.logprobs 建模为必填、非空的 LogProb 数组，未请求
+// top_logprobs 时其规范值是空数组 []——空数组意味着「上游根本没给概率」，不能计入
+// 丢弃，否则每条普通 output_text 响应都会误报 LogProbsDropNote，违反「注记当且仅当
+// 真实丢弃」这条不变量（误报与漏报同样是缺口）。只有解析出至少一个数组元素才算真
+// 载荷；无法解析成数组时（异形/损坏）按「存在」保守计数，交由内容解码路径负责报错，
+// 真实丢弃宁可报、不可漏。字符串比较只用来剔掉 null 字面量，不用来判空数组——避免
+// 对 `[ ]` 这类带空白的合法空数组漏判。
+func hasLogProbsPayload(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	if s := strings.TrimSpace(string(raw)); s == "" || s == "null" {
+		return false
+	}
+	var entries []json.RawMessage
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return true
+	}
+	return len(entries) > 0
+}
+
 // countLogprobsParts 数 content 数组里带 logprobs 载荷的 part 数（逐 token
 // 概率没有 IR 槽位，只探测计数）。解析失败按零计：内容解码由调用方负责，
 // 这里不因同一份原文报两次错。
@@ -1038,7 +1061,7 @@ func countLogprobsParts(raw json.RawMessage) int {
 	}
 	n := 0
 	for _, p := range parts {
-		if len(p.LogProbs) > 0 && string(p.LogProbs) != "null" {
+		if hasLogProbsPayload(p.LogProbs) {
 			n++
 		}
 	}
