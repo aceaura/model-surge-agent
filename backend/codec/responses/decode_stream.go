@@ -164,8 +164,7 @@ func (d *streamDecoder) Notes() []string {
 		d.droppedBadFrames = 0
 	}
 	if n := len(d.contentChannel); n > 0 {
-		notes = append(notes, fmt.Sprintf(
-			"re-labeled %d content-channel reasoning block(s) (reasoning_text, the model's internal reasoning) as summary-channel in streaming: the text is preserved, but the channel distinction the non-streaming path keeps via Thinking.ContentChannel has no slot in the streaming event model", n))
+		notes = append(notes, codec.ContentChannelStreamNote(n))
 		d.contentChannel = map[string]struct{}{}
 	}
 	return codec.DedupeNotes(notes)

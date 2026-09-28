@@ -1425,6 +1425,21 @@ func RedactedDropNote(n int) string {
 		"dropped %d redacted_thinking block(s): the encrypted reasoning payload has no slot in this protocol, so the receiving side cannot replay it verbatim and Anthropic extended-thinking continuity breaks across the conversion", n)
 }
 
+// ContentChannelStreamNote 是「content 通道推理正文在流式输出里被改标成
+// summary 通道」的说明。responses 的 reasoning 条目有两条正文通道：content
+// （reasoning_text，模型内部推理原文）与 summary（reasoning_summary_text，
+// 给用户看的摘要）。非流式路径靠 ir.Thinking.ContentChannel 原样回吐，逐字
+// 无损；流式的事件模型没有这个通道标记，一律渲染成 summary，于是 content
+// 通道的推理塌缩进 summary：正文保留、通道语义丢失。
+//
+// 两条流式路径共用这一份措辞（规则 b：同损同措辞）——真流式在解码器侧计数
+// （reasoning_text.delta 帧），整份响应投影（ir.ResponseEvents）在编码器侧计数
+// （block_start 骨架上的 ContentChannel）。判据同源，措辞必须逐字一致。
+func ContentChannelStreamNote(n int) string {
+	return fmt.Sprintf(
+		"re-labeled %d content-channel reasoning block(s) (reasoning_text, the model's internal reasoning) as summary-channel in streaming: the text is preserved, but the channel distinction the non-streaming path keeps via Thinking.ContentChannel has no slot in the streaming event model", n)
+}
+
 // CumulativeTextNote 是累计式文本帧被改写的说明：部分上游每帧重发迄今
 // 全部正文而非只发增量，逐字转发会让客户端文本按帧数重复膨胀（最轻句子
 // 复读，最重 token 用量翻倍）。按前缀比对识别，只下发新增后缀。

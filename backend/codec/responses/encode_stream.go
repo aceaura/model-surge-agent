@@ -80,6 +80,14 @@ type streamEncoder struct {
 	// droppedRedacted 被跳过的涂抹思考块（redacted_thinking）数：密文只有
 	// anthropic 同族槽位能逐字承载，本协议没有对应形态，整块跳过，Notes() 报出。
 	droppedRedacted int
+	// contentChannel 记「整份响应投影（ir.ResponseEvents）路径里，content 通道
+	// 推理块（block_start 骨架上 ContentChannel=true）被流式编码器一律渲染成
+	// summary 通道」的块数。真流式路径的同类损耗在解码器侧计数报出
+	// （decode_stream.go 的 contentChannel map），但投影路径的解码走非流式
+	// DecodeResponseLossy——它保全 ContentChannel 且不报（非流式编码器原样回吐），
+	// 于是这份改标只可能在这里被发现。不报就与真流式路径同损不同报（违反规则 b）。
+	// 措辞共用 codec.ContentChannelStreamNote，与解码器侧逐字一致。
+	contentChannel int
 	// badToolArgs 是关块时判定畸形的函数调用入参数（增量已发出、改写
 	// 不了，只能计数），Notes() 报出。
 	badToolArgs int
@@ -124,6 +132,10 @@ func (e *streamEncoder) Notes() []string {
 	}
 	if e.droppedRedacted > 0 {
 		notes = append(notes, codec.RedactedDropNote(e.droppedRedacted))
+	}
+	if e.contentChannel > 0 {
+		notes = append(notes, codec.ContentChannelStreamNote(e.contentChannel))
+		e.contentChannel = 0
 	}
 	if e.droppedTier != "" {
 		notes = append(notes, codec.TierEchoDropNote(e.droppedTier))
@@ -528,6 +540,13 @@ func (e *streamEncoder) openBlock(index int, kind ir.BlockType, block *ir.Block)
 	}
 	if block != nil && block.Thinking != nil {
 		item.itemID = block.Thinking.ItemID
+		// 投影路径的 content 通道推理块：骨架上 ContentChannel=true，本编码器
+		// 一律渲染成 summary 通道（reasoning_summary_text.delta），通道语义丢失。
+		// openBlock 每个块索引只进一次（顶部 items[index] 已存在即返回），故此处
+		// 计数天然按块去重。真流式路径骨架不带 ContentChannel，不会误计。
+		if block.Thinking.ContentChannel {
+			e.contentChannel++
+		}
 	}
 
 	out, err := e.frame(evOutputItemAdded, wireStreamEvent{
