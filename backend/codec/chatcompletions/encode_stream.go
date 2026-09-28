@@ -90,6 +90,13 @@ type streamEncoder struct {
 	// 计数在 Notes() 收尾时报出。
 	droppedImages int
 	droppedFiles  int
+	// droppedDocCtx / droppedDocCites 被丢弃的文档块配置计数（context 用途旁注 /
+	// citations.enabled 引用开关）：这是独立于附件本体的一维——本体已按 droppedFiles
+	// 整块跳过，配置同样无处落脚。与非流式 EncodeResponseLossy 的 CountResponseDocConfig
+	// 同源同措辞（DocumentConfigDropNote），流式此前只报本体注记、漏报配置维度，
+	// 属规则 b（流式/非流式同损同报）缺口。开块丢弃时经 DocConfigOf 累加。
+	droppedDocCtx   int
+	droppedDocCites int
 	// droppedServerCalls / droppedServerResults 被跳过的托管工具块数：
 	// 本族编码器没有为 Anthropic 的 server_tool_use /
 	// web_search_tool_result 输出任何对应形态，同上。两种块型分开计数，
@@ -153,6 +160,13 @@ func (e *streamEncoder) Notes() []string {
 	notes := e.notes
 	if e.droppedImages > 0 || e.droppedFiles > 0 {
 		notes = append(notes, codec.MediaOutputDropNote(e.droppedImages, e.droppedFiles))
+	}
+	// 文档块配置（context 用途旁注 / citations.enabled 引用开关）是独立于附件本体
+	// 的一维：本体已按 MediaOutputDropNote 报出，配置维度单报一条不与本体重复计数。
+	// 判据与非流式 EncodeResponseLossy 的 CountResponseDocConfig 同源、措辞一致，
+	// 补齐流式此前只报本体、漏报配置的规则 b 缺口。
+	if e.droppedDocCtx > 0 || e.droppedDocCites > 0 {
+		notes = append(notes, codec.DocumentConfigDropNote(e.droppedDocCtx, e.droppedDocCites))
 	}
 	if e.droppedServerCalls > 0 || e.droppedServerResults > 0 {
 		notes = append(notes, codec.ServerToolDropNote(e.droppedServerCalls, e.droppedServerResults))
@@ -243,6 +257,19 @@ func (e *streamEncoder) Notes() []string {
 	return codec.DedupeNotes(notes)
 }
 
+// countDocConfig 累加被丢弃媒体块所带的 Anthropic 文档配置（context 用途旁注 /
+// citations.enabled 引用开关）。与非流式 CountResponseDocConfig 共用 codec.DocConfigOf
+// 判据，保证流式/非流式对同一损类同报（规则 b）。非文档块的 Media 不带此二配置，
+// DocConfigOf 返回 (0,0)，累加无副作用。
+func (e *streamEncoder) countDocConfig(b *ir.Block) {
+	if b == nil {
+		return
+	}
+	ctx, cites := codec.DocConfigOf(b.Media)
+	e.droppedDocCtx += ctx
+	e.droppedDocCites += cites
+}
+
 // mapTier 映射档位回显：值集装不下的（anthropic 的 batch、responses 的
 // ultrafast）丢弃，Notes() 报出。重复到达时先到先得，不覆盖不重复报。
 func (e *streamEncoder) mapTier(raw string) {
@@ -323,9 +350,11 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		case ir.BlockImage:
 			// 模型产出的附件没有本族增量形态：整块跳过但计数，Notes() 报出。
 			e.droppedImages++
+			e.countDocConfig(ev.Block)
 			return nil, nil
 		case ir.BlockAudio, ir.BlockDocument, ir.BlockFile:
 			e.droppedFiles++
+			e.countDocConfig(ev.Block)
 			return nil, nil
 		case ir.BlockServerToolUse:
 			// 服务端托管工具块没有本族形态：整块跳过但计数，Notes() 报出。
