@@ -248,9 +248,11 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 				d.droppedCitations += len(cits)
 			}
 		}
-		// 逐 token 对数概率：IR 没有槽位，探测存在性后计数报出（与 chat/responses
-		// 解码器同款处置）。只认 logprobsResult（主载荷），avgLogprobs 是其摘要。
-		if len(cand.LogprobsResult) > 0 && string(cand.LogprobsResult) != "null" {
+		// 逐 token 对数概率：IR 没有槽位，探测真载荷后计数报出（与 chat/responses
+		// 解码器同款载荷感知判据，见 hasGeminiLogProbsPayload）。空壳对象
+		// （topCandidates/chosenCandidates 皆空）不算丢弃、不计数——朴素存在性判据
+		// 会把它误报成 LogProbsDropNote（假阳性，违反规则 a）。
+		if hasGeminiLogProbsPayload(cand.LogprobsResult) {
 			d.droppedLogprobs++
 		}
 		// 按类别内容安全评级：IR 无结构化槽位，探测计数报出（与 logprobsResult
@@ -502,6 +504,42 @@ func countCitationLicenses(c wireCandidate) int {
 	return n
 }
 
+// hasGeminiLogProbsPayload 判定候选的 logprobsResult 是否真的带了逐 token 概率载荷。
+//
+// 官方 Candidate.logprobsResult 是一个**对象**（不同于 responses 把 output_text.logprobs
+// 建模成顶层数组）：真载荷落在数组子字段 topCandidates / chosenCandidates 上，外加一个
+// 标量摘要 logProbabilitySum。空壳形如 `{}` 或 `{"topCandidates":[],"chosenCandidates":[]}`
+// ——字段在、数组空，意味着「上游根本没给概率」。
+//
+// 此前的判据是朴素的 `len(raw)>0 && string(raw)!="null"`，它把上述空壳对象也算一次丢弃，
+// 于是每个带空 logprobsResult 的候选都会误报 LogProbsDropNote——违反「注记当且仅当真实
+// 丢弃」这条不变量（误报与漏报同样是缺口，规则 a）。这与同族的 responses
+// （hasLogProbsPayload，防空数组）、chat_completions（hasChatLogProbsPayload，轮次68 修）
+// 早已是载荷感知形成**跨族不对称**：gemini 是最后一个仍用朴素存在性判据的族。
+//
+// 只有解析出至少一个数组元素（或一个显式的 logProbabilitySum 标量，说明上游确实算了概率）
+// 才算真载荷；无法解析成对象时（异形/损坏）按「存在」保守计数，交由内容解码路径负责报错，
+// 真实丢弃宁可报、不可漏。字符串比较只用来剔掉 null 字面量，不用来判空——避免对 `{ }`
+// 这类带空白的合法空对象漏判。流式（decode_stream.go 候选循环）与非流式
+// （DecodeResponseLossy）两条路径共用本函数，保证同损同判（规则 b）。
+func hasGeminiLogProbsPayload(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	if s := strings.TrimSpace(string(raw)); s == "" || s == "null" {
+		return false
+	}
+	var obj struct {
+		TopCandidates     []json.RawMessage `json:"topCandidates"`
+		ChosenCandidates  []json.RawMessage `json:"chosenCandidates"`
+		LogProbabilitySum *float64          `json:"logProbabilitySum"`
+	}
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return true // 异形/损坏：保守按存在计，宁报勿漏。
+	}
+	return len(obj.TopCandidates) > 0 || len(obj.ChosenCandidates) > 0 || obj.LogProbabilitySum != nil
+}
+
 // switchTo 保证当前开着的块是指定种类：种类变了就先闭合旧块再开新块。
 // 本协议的 parts 没有索引，块边界只能这样推出来。
 func (d *streamDecoder) switchTo(kind ir.BlockType) []ir.Event {
@@ -727,7 +765,9 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 				droppedCitations += len(cits)
 			}
 		}
-		if len(cand.LogprobsResult) > 0 && string(cand.LogprobsResult) != "null" {
+		// 逐 token 对数概率：与流式同一载荷感知判据（hasGeminiLogProbsPayload），
+		// 空壳对象不计数，避免假阳性 LogProbsDropNote（规则 a/b）。
+		if hasGeminiLogProbsPayload(cand.LogprobsResult) {
 			logprobs++
 		}
 		// 按类别内容安全评级：IR 无结构化槽位，探测计数报出（与流式同判据）。

@@ -202,8 +202,11 @@ type wireCandidate struct {
 	GroundingMetadata *wireGroundingMetadata `json:"groundingMetadata,omitempty"`
 	// LogprobsResult 是上游按 responseLogprobs=true 计算出的逐 token 对数概率
 	// （官方 Candidate.logprobsResult，Output only）。IR 响应模型没有逐 token
-	// 概率槽位，只探测存在性并计数报出——与 chat/responses 解码器同款处置
-	// （LogProbsDropNote）。不建模内部结构：只需知道「有没有」，不需解析内容。
+	// 概率槽位，只探测**真载荷**并计数报出——与 chat/responses 解码器同款载荷
+	// 感知处置（LogProbsDropNote）。判据见 hasGeminiLogProbsPayload：logprobsResult
+	// 是对象（topCandidates/chosenCandidates 数组 + logProbabilitySum 标量），空壳
+	// 对象不算丢弃、不计数，避免朴素存在性判据的假阳性。不建模内部结构：只需知道
+	// 「有没有真载荷」，不需解析内容。
 	LogprobsResult json.RawMessage `json:"logprobsResult,omitempty"`
 	// UrlContextMetadata 是 url_context 工具的检索确认（Output only）：上游
 	// 成功取回的 URL 是来源归属（与 groundingChunks.web 同维），此前未建模→
