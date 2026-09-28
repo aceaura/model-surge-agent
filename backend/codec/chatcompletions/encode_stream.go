@@ -62,6 +62,11 @@ type streamEncoder struct {
 	// 此后的每个 chunk 上。chat 专属维度，异族来源给不出，跨族丢弃
 	// 不报——排障信号，不是计费或内容维度。
 	fingerprint string
+	// moderation 上游的审核回执（ir.Response.ResponsesModeration 经事件投影而来）：
+	// 官方 chat.completion.chunk 有 moderation 字段，收尾时单独成帧回写给客户端
+	//（moderation chunk 形态：choices 为空）。先到先得，不覆盖。metadata 不在此列
+	// ——官方 chunk 无 metadata 字段，流式客户端本就收不到，属协议固有缺席。
+	moderation json.RawMessage
 	// usage 跨帧累积：input 与 output 可能来自不同的 IR 事件。
 	usage ir.Usage
 	// droppedImages / droppedFiles 被跳过的模型产出附件块数（image /
@@ -193,6 +198,10 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		e.mapTier(ev.ServiceTier)
 		if ev.SystemFingerprint != "" && e.fingerprint == "" {
 			e.fingerprint = ev.SystemFingerprint
+		}
+		// 审核回执可能随首帧（整份响应投影）抵达，先到先得收下。
+		if len(ev.Moderation) > 0 && e.moderation == nil {
+			e.moderation = ev.Moderation
 		}
 		if ev.Container != nil {
 			e.droppedContainer = true
@@ -380,6 +389,10 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		if ev.SystemFingerprint != "" && e.fingerprint == "" {
 			e.fingerprint = ev.SystemFingerprint
 		}
+		// 真流式时审核回执随收尾帧抵达（chat 解码器攒到 finish 交付），补得上。
+		if len(ev.Moderation) > 0 && e.moderation == nil {
+			e.moderation = ev.Moderation
+		}
 		if ev.Container != nil {
 			e.droppedContainer = true
 		}
@@ -449,6 +462,19 @@ func (e *streamEncoder) finish() ([][]byte, error) {
 		return nil, err
 	}
 	out = append(frames, out...)
+	// 审核回执单独成帧（官方 moderation chunk 形态：choices 为空 + moderation 顶层键）。
+	// 独立于 usage 帧发送——即便客户端 suppress 了 usage 帧，审核结果也要送达，
+	// 否则 moderated completions 的门控信息在流式路径上静默丢失。
+	if len(e.moderation) > 0 {
+		frame, err := e.marshal(wireResponse{
+			ID: e.messageID(), Object: chunkObject, Created: e.created,
+			Model: e.model, Choices: []wireChoice{}, Moderation: e.moderation,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, frame)
+	}
 	if !e.suppressUsageFrame {
 		u := renderUsage(e.usage)
 		frame, err := e.marshal(wireResponse{

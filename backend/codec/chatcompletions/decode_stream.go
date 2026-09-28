@@ -48,6 +48,11 @@ type streamDecoder struct {
 	// fingerprint 后端配置指纹：与档位同样的到达规律（chunk 顶层，可能
 	// 晚于首帧），随首帧与收尾帧两处交付。
 	fingerprint string
+	// moderation 上游的审核回执（官方 chat.completion.chunk.moderation，随独立的
+	// moderation chunk 抵达，可能晚于内容帧）。攒到收尾帧交付：聚合器在
+	// EvMessageDelta 上读 ev.Moderation 落进 ir.Response.ResponsesModeration。
+	// chunk 无 metadata 字段（官方流式不回显 metadata），故流式只保全 moderation。
+	moderation json.RawMessage
 	// droppedLogprobs 携带 logprobs 载荷的 chunk 数：逐 token 概率没有 IR
 	// 槽位，内容带不走，计数经 Notes() 报出，不再静默。
 	droppedLogprobs int
@@ -142,6 +147,11 @@ func (d *streamDecoder) feedOne(_, data string) ([]ir.Event, error) {
 	}
 	if chunk.SystemFingerprint != "" {
 		d.fingerprint = chunk.SystemFingerprint
+	}
+	// 审核回执随独立的 moderation chunk 抵达（choices 为空、顶层带 moderation），
+	// 可能出现在流的任意位置：攒下最后一次非空值，收尾帧统一交付。显式 null 不算回执。
+	if len(chunk.Moderation) > 0 && string(chunk.Moderation) != "null" {
+		d.moderation = chunk.Moderation
 	}
 
 	var out []ir.Event
@@ -491,7 +501,7 @@ func (d *streamDecoder) finish() []ir.Event {
 	d.done = true
 	out := d.closeAll()
 	delta := ir.Event{Type: ir.EvMessageDelta, StopReason: d.stopReason, Usage: d.usage,
-		ServiceTier: d.serviceTier, SystemFingerprint: d.fingerprint}
+		ServiceTier: d.serviceTier, SystemFingerprint: d.fingerprint, Moderation: d.moderation}
 	if delta.StopReason == "" {
 		delta.StopReason = ir.StopEndTurn
 	}
