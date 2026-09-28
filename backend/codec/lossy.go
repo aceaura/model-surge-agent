@@ -1308,25 +1308,50 @@ func ResponseClientMetadataDropNote() string {
 	return "dropped the echoed client metadata: this protocol's response has no metadata field, so a client relying on its custom key-values for async correlation or idempotency cannot read them back"
 }
 
-// DescribeResponseClientMetaLoss 非流式响应侧的审核回执 / 客户端关联键值回声
-// 损耗扫描：承载族（chat_completions / responses）编码时原样带回、无损耗；非
-// 承载族没有对应槽位，跨族投影来的一律静默丢弃，这里照实报出。请求侧同类丢弃
-// 已由 describeRequestLossy 报出（moderation / metadata 两处），响应侧此前静默，
-// 判据与流式编码器 Notes() 同源。字段仅在真非空（且 moderation 非显式 null）时
-// 报出，回声不可达时不误报。
+// ResponsePromptCacheDiagnosticsDropNote 是提示缓存诊断回执丢失的说明。诊断回执
+// （官方 responses 的 response.prompt_cache_diagnostics：cache_miss / cache_hit /
+// comparison_response_not_found / unavailable 四形态判别式联合）由客户端在请求侧
+// 用 prompt_cache_options.comparison_response_id 主动索要（「supplying this field
+// requests prompt cache diagnostics」）。仅 responses 一族响应有槽位承载它——官方
+// ChatCompletion 响应无 prompt_cache_diagnostics 字段，anthropic 更没有。故
+// chat_completions / anthropic 客户端经本网关路由到 responses 上游、上游返回诊断时，
+// 出站协议无处安放，整体丢弃：客户端索要的缓存命中/未命中判定连同成因（model_changed
+// / prompt_cache_key_changed / input_changed 等）一并看不到，缓存调优失去反馈。
+// 与 moderation/metadata 分账——那两族 chat 也是承载族、只 anthropic 丢；诊断回执
+// chat 同样装不下，承载族只有 responses 一家。回执正文属会话内容，不进说明。
+// 同款对称防御：字段一旦非空即照实报，空值绝不误报。
+func ResponsePromptCacheDiagnosticsDropNote() string {
+	return "dropped the upstream prompt cache diagnostics receipt: this protocol's response has no prompt_cache_diagnostics field, so a client that requested cache-reuse diagnostics via prompt_cache_options.comparison_response_id cannot see the cache hit/miss verdict or its cause"
+}
+
+// DescribeResponseClientMetaLoss 非流式响应侧的审核回执 / 客户端关联键值回声 /
+// 提示缓存诊断回执损耗扫描：承载族编码时原样带回、无损耗；非承载族没有对应槽位，
+// 跨族投影来的一律静默丢弃，这里照实报出。请求侧同类丢弃已由 describeRequestLossy
+// 报出，响应侧此前静默，判据与流式编码器 Notes() 同源。字段仅在真非空（且 RawMessage
+// 非显式 null）时报出，回声不可达时不误报。
+//
+// 承载族按字段分账，不是单一门控：
+//   - moderation / metadata：chat_completions 与 responses 两族都有响应级槽位，
+//     故只 anthropic / gemini 丢；
+//   - prompt_cache_diagnostics：只有 responses 一族有槽位（chat 也装不下），故
+//     chat_completions / anthropic / gemini 都丢。
 func DescribeResponseClientMetaLoss(resp *ir.Response, name string) []string {
 	if resp == nil {
 		return nil
 	}
-	if name == ProtocolChatCompletions || name == ProtocolResponses {
-		return nil // 承载族原样带回，无损耗
-	}
 	var notes []string
-	if len(resp.ResponsesModeration) > 0 && string(resp.ResponsesModeration) != "null" {
-		notes = append(notes, ResponseModerationDropNote())
+	if name != ProtocolChatCompletions && name != ProtocolResponses {
+		if len(resp.ResponsesModeration) > 0 && string(resp.ResponsesModeration) != "null" {
+			notes = append(notes, ResponseModerationDropNote())
+		}
+		if len(resp.ClientMetadata) > 0 {
+			notes = append(notes, ResponseClientMetadataDropNote())
+		}
 	}
-	if len(resp.ClientMetadata) > 0 {
-		notes = append(notes, ResponseClientMetadataDropNote())
+	if name != ProtocolResponses {
+		if len(resp.ResponsesPromptCacheDiagnostics) > 0 && string(resp.ResponsesPromptCacheDiagnostics) != "null" {
+			notes = append(notes, ResponsePromptCacheDiagnosticsDropNote())
+		}
 	}
 	return notes
 }

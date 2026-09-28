@@ -67,6 +67,12 @@ type streamEncoder struct {
 	//（moderation chunk 形态：choices 为空）。先到先得，不覆盖。metadata 不在此列
 	// ——官方 chunk 无 metadata 字段，流式客户端本就收不到，属协议固有缺席。
 	moderation json.RawMessage
+	// sawPromptCacheDiagnostics 记上游流里是否到达过提示缓存诊断回执
+	//（ir.Response.ResponsesPromptCacheDiagnostics 经事件投影而来，源自 responses
+	// 上游按请求侧 prompt_cache_options.comparison_response_id 索要而回）。官方
+	// chat.completion.chunk 无 prompt_cache_diagnostics 字段，本协议装不下，到达即丢，
+	// 记位由 Notes() 收尾报出。与非流式 DescribeResponseClientMetaLoss 同源、措辞一致。
+	sawPromptCacheDiagnostics bool
 	// usage 跨帧累积：input 与 output 可能来自不同的 IR 事件。
 	usage ir.Usage
 	// droppedImages / droppedFiles 被跳过的模型产出附件块数（image /
@@ -159,6 +165,13 @@ func (e *streamEncoder) Notes() []string {
 	// 命中的停止序列原文：本协议 chunk 只有 finish_reason、无字段回显具体哪条序列。
 	// 判据与非流式 EncodeResponseLossy 同源。
 	notes = append(notes, codec.DescribeResponseStopSequenceLoss(e.stopReason, e.stopSequence, Name)...)
+	// 提示缓存诊断回执（responses 上游按请求侧 comparison_response_id 索要而回）：
+	// 本协议流式帧无对应槽位，到达即丢。判据与非流式 DescribeResponseClientMetaLoss
+	// 同源、措辞一致，报出即抽干避免二次重复。
+	if e.sawPromptCacheDiagnostics {
+		notes = append(notes, codec.ResponsePromptCacheDiagnosticsDropNote())
+		e.sawPromptCacheDiagnostics = false
+	}
 	return codec.DedupeNotes(notes)
 }
 
@@ -202,6 +215,10 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		// 审核回执可能随首帧（整份响应投影）抵达，先到先得收下。
 		if len(ev.Moderation) > 0 && e.moderation == nil {
 			e.moderation = ev.Moderation
+		}
+		// 提示缓存诊断回执本协议装不下，只记到达位、收尾报出（不回填）。
+		if len(ev.PromptCacheDiagnostics) > 0 && string(ev.PromptCacheDiagnostics) != "null" {
+			e.sawPromptCacheDiagnostics = true
 		}
 		if ev.Container != nil {
 			e.droppedContainer = true
@@ -392,6 +409,10 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		// 真流式时审核回执随收尾帧抵达（chat 解码器攒到 finish 交付），补得上。
 		if len(ev.Moderation) > 0 && e.moderation == nil {
 			e.moderation = ev.Moderation
+		}
+		// 提示缓存诊断回执同理随收尾帧抵达，本协议装不下，只记到达位。
+		if len(ev.PromptCacheDiagnostics) > 0 && string(ev.PromptCacheDiagnostics) != "null" {
+			e.sawPromptCacheDiagnostics = true
 		}
 		if ev.Container != nil {
 			e.droppedContainer = true

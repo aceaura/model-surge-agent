@@ -84,6 +84,10 @@ type streamEncoder struct {
 	// 收尾报出——判据与非流式 DescribeResponseClientMetaLoss 同源、措辞一致。
 	sawModeration     bool
 	sawClientMetadata bool
+	// sawPromptCacheDiagnostics 记上游流里是否到达过提示缓存诊断回执（responses
+	// 专属响应级槽位，官方 ChatCompletion 也没有）。本协议响应无落点，到达即丢，
+	// Notes() 收尾报出——判据与非流式 DescribeResponseClientMetaLoss 同源、措辞一致。
+	sawPromptCacheDiagnostics bool
 }
 
 // Notes 实现 codec.StreamNotes。
@@ -140,6 +144,12 @@ func (e *streamEncoder) Notes() []string {
 		notes = append(notes, codec.ResponseClientMetadataDropNote())
 		e.sawClientMetadata = false
 	}
+	// 提示缓存诊断回执（responses 专属响应级槽位）：本协议流式帧无对应事件，
+	// 到达即丢。判据与非流式 DescribeResponseClientMetaLoss 同源、措辞一致。
+	if e.sawPromptCacheDiagnostics {
+		notes = append(notes, codec.ResponsePromptCacheDiagnosticsDropNote())
+		e.sawPromptCacheDiagnostics = false
+	}
 	// usage 细分维度：chat 专属的音频/预测四位本协议没有槽位，聚合
 	// 总量不丢，细分蒸发要报出，判据与非流式 EncodeResponseLossy 同源。
 	if dims := codec.UsageDropDims(&e.usage, Name); len(dims) > 0 {
@@ -185,6 +195,10 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 	}
 	if len(ev.Metadata) > 0 {
 		e.sawClientMetadata = true
+	}
+	// 提示缓存诊断回执（responses 专属）本协议也无落点，到达即记位、收尾报出。
+	if len(ev.PromptCacheDiagnostics) > 0 && string(ev.PromptCacheDiagnostics) != "null" {
+		e.sawPromptCacheDiagnostics = true
 	}
 	switch ev.Type {
 	case ir.EvMessageStart:

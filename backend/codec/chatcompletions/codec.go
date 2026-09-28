@@ -98,6 +98,11 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	// 命中的停止序列原文：本协议只有 finish_reason、无字段回显具体是哪条序列，
 	// 客户端发了多条 stop 时无法区分命中哪条。判据与流式 Notes() 同源。
 	notes = append(notes, codec.DescribeResponseStopSequenceLoss(resp.StopReason, resp.StopSequence, Name)...)
+	// 提示缓存诊断回执（responses 上游按请求侧 prompt_cache_options.
+	// comparison_response_id 索要而回）：本协议响应无 prompt_cache_diagnostics
+	// 槽位，整体丢弃。moderation / metadata 两维本协议是承载族、原样带回不报，
+	// 故这里只会渲染诊断回执一维。判据与流式 Notes() 同源。
+	notes = append(notes, codec.DescribeResponseClientMetaLoss(resp, Name)...)
 	return body, codec.DedupeNotes(notes), nil
 }
 
