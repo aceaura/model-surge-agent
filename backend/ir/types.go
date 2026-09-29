@@ -223,9 +223,10 @@ type ServerToolUse struct {
 	Name  string `json:"name"`
 	Input string `json:"input,omitempty"`
 	// Caller 与 ToolUse.Caller 同规矩：Anthropic server_tool_use 块的发起方
-	// 标记（响应侧必填、请求侧可选，union），同族逐字往返、跨族丢弃由有损诊断
-	// 报出。字节按 RawMessage 不可变惯例随 Clone 值共享。server_tool_use 官方
-	// 无 toolset_name 字段，故这里不设该维。
+	// 标记（响应侧必填、请求侧可选，union），同族逐字往返、跨族随整块被外族
+	// 编码器跳过（已由 ServerToolDropNote 统一报出，故不再单设 caller 专项说明——
+	// 与下方 WebSearchToolResult.Caller 同款处置）。字节按 RawMessage 不可变惯例
+	// 随 Clone 值共享。server_tool_use 官方无 toolset_name 字段，故这里不设该维。
 	Caller json.RawMessage `json:"caller,omitempty"`
 }
 

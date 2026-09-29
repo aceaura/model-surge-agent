@@ -476,12 +476,17 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 			}
 			if b.Type == ir.BlockImage {
 				describeImageLossy(b.Media, caps, note)
-				if name != ProtocolAnthropic && b.Media != nil && b.Media.OversizedImage != "" {
+				if name != ProtocolAnthropic && b.Media != nil && b.Media.OversizedImage != "" &&
+					imageDelivered(b.Media, caps) {
 					// transformations.oversized_image 是 anthropic 图片块独有的渲染
 					// 指令（图片超大时 downsize|error），纯指令性 provenance。同族
 					// 逐字往返无损；投给外族（chat/responses/gemini 的图片形状都没有
 					// 对应字段）整维丢弃——与 tool_use 的 caller/toolset_name 同一
 					// 处置口径，报一条而不是静默蒸发。
+					//
+					// imageDelivered 门控（轮次74）：图片整块没送达（空载荷 / 降级为
+					// 文本 / file_id 无从投递）时不报——超大图处置指令对一张根本没送到
+					// 的图无意义，且整块丢弃已由 describeImageLossy 报出，叠报属过报。
 					note("image transformations", oversizedImageWhy)
 				}
 			} else if b.Media != nil && !b.Media.HasPayload() {
@@ -558,10 +563,11 @@ func describeBlocksLossy(blocks []ir.Block, name string, caps Capabilities, note
 				}
 				describeBlocksLossy(b.ToolResult.Content, name, caps, note)
 			}
-		case b.Type == ir.BlockServerToolUse:
-			if b.ServerToolUse != nil && name != ProtocolAnthropic && len(b.ServerToolUse.Caller) > 0 {
-				note("server tool call caller", toolCallerWhy)
-			}
+			// server_tool_use / web_search_tool_result 的 caller 发起方标记不在此单列：
+			// 两种块型跨族都被外族编码器整块跳过，已由 DescribeLossy 的 ServerToolDropNote
+			// 统一报出（整块都没了，caller 随之消失）。再叠一条 caller 专项注记会与整块
+			// 注记重复计报同一次丢弃（轮次74 去过报），也与 ir.WebSearchToolResult.Caller
+			// 早就采用的「随整块统一报出、不单设 caller 说明」处置对称。
 		}
 	}
 }
@@ -606,6 +612,32 @@ const respCallerWhy = "the tool call carries a responses-only caller/namespace/a
 // 与「整张图没了」区分开。gemini 的 displayName 接得住，不报此条。
 const imageFilenameWhy = "the image part carries a filename but this target's image slot has no filename field (only the bytes/URL are sent); the name is dropped"
 
+// imageDelivered 判定一张图片是否会以「图片」形态真正投递到目标，而不是被整块
+// 跳过或降级成文本。判据与 describeImageLossy 的提前 return 逐一对齐（同一出处，
+// 避免漂移）：空载荷（无字节、无 URL、无 file_id）、有载荷但类型不被接受（降级为
+// 文本）、以及只带 file_id 但目标不认图片文件引用（字节无从恢复）三种都算未投递。
+//
+// detail 档位与 transformations.oversized_image 都是「图片确实送达、上游据以切图」
+// 才有意义的渲染维度。图片整块没了却仍报这两维，措辞会与实际处置对不上（规则 a：
+// 「上游会按默认档切图、计费可能不同」对一张根本没送达的图是假话），且与整块丢弃
+// 注记重复计报同一件事。轮次73 已就空载荷图片去过 detail 的重复注记，轮次74 用本
+// 判据把「降级为文本」与「file_id 无从投递」两种未投递情形一并覆盖。
+func imageDelivered(m *ir.Media, caps Capabilities) bool {
+	if m == nil {
+		return false
+	}
+	if !m.HasPayload() && m.FileID == "" {
+		return false
+	}
+	if !caps.AcceptsMedia(SniffMediaType(m)) && m.FileID == "" {
+		return false
+	}
+	if m.HasPayload() {
+		return true
+	}
+	return caps.ImageFileRef
+}
+
 // describeImageLossy 报一张图片相对目标协议丢掉的三维：detail 档位、file_id
 // 引用、以及整个部件没有任何可投递载荷。与能力位判定同一出处，编码器的跳过
 // 判据（HasPayload）与这里的「确实丢了」口径一致。
@@ -633,12 +665,16 @@ func describeImageLossy(m *ir.Media, caps Capabilities, note func(field, why str
 		// 「降级为文本」由 describeBlocksLossy 统一报出。
 		return
 	}
-	if m.Detail != "" && !caps.ImageDetail {
+	if m.Detail != "" && !caps.ImageDetail && imageDelivered(m, caps) {
 		// 档位决定上游怎么切图、进而决定输入 token 计费。丢掉之后上游一律
 		// 按自己的默认档处理，账单上看得出、请求里看不出。这是 detail 丢弃的
 		// 唯一注记点：describeBlocksLossy 逐块经此报出，覆盖 Messages/System/
 		// tool_result 内嵌图片。勿再在 describeParamsLossy 加请求级 hasImageDetail
 		// 门控——那只遍历 Messages 顶层、对空载荷图片仍会与此处叠报（轮次73 去过报）。
+		//
+		// imageDelivered 门控（轮次74）：图片整块没送达（空载荷 / 降级为文本 /
+		// file_id 无从投递）时不报——此时「上游会按默认档切图、计费可能不同」是假话，
+		// 且整块丢弃已由本函数下方或 describeBlocksLossy 报出，叠一条 detail 属过报。
 		note("image detail", "no detail slot, the upstream will tile it at its own default level and may be billed differently")
 	}
 	if m.Name != "" && m.HasPayload() && !caps.ImageFilename {
