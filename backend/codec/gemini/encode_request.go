@@ -187,7 +187,7 @@ func encodeMessage(m ir.Message, names map[string]string) ([]wireContent, error)
 			parts = append(parts, wirePart{InlineData: &wireBlob{
 				MimeType: media, Data: b.Media.Data, DisplayName: b.Media.Name}})
 		case ir.BlockThinking:
-			if b.Thinking == nil || b.Thinking.Text == "" {
+			if b.Thinking == nil {
 				continue
 			}
 			// 推理是带 thought 标记的 text part，不是独立的 part 类型。
@@ -195,6 +195,19 @@ func encodeMessage(m ir.Message, names map[string]string) ([]wireContent, error)
 			// 签名只在同族协议间有效，别家的发过来会被拒。判定与有损诊断共用一处出处。
 			if !codec.ForeignSignature(b.Thinking, Name) {
 				part.ThoughtSignature = b.Thinking.Signature
+			}
+			// 空壳判据与 anthropic 编码器同口径（anthropic/encode_request.go:416）：
+			// 正文为空且没有可写回的同族签名才整块跳过。空正文但签名可写回**不是**
+			// 空壳——签名本身就是 gemini 扩展思考续话的载荷，gemini 自己的解码器
+			// （decode_stream.go:727-734，case p.Thought 不带 text!="" 门控）就会从
+			// 无正文的 thought part 产出这种形状；多轮历史回放时丢掉它等于丢掉续话
+			// 凭据。此前这里只判 Text=="" 就 continue，把同族签名一并静默丢弃（违
+			// 规则 a），且与保全同形状的 anthropic/responses 不对称（违规则 c）。诊断
+			// 侧空壳注记按 name==anthropic 门控（lossy.go:457）、同族签名本就不报
+			// （sigDropReason 判 no-drop），故保全后不会双报；异族签名仍被上面门控
+			// 成空、在此跳过，其丢弃由 lossy.go:468 的 thinking signature 注记报出。
+			if part.Text == "" && part.ThoughtSignature == "" {
+				continue
 			}
 			parts = append(parts, part)
 		case ir.BlockToolUse:
