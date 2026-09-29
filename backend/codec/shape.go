@@ -345,6 +345,43 @@ func forcedToolChoice(tc *ir.ToolChoice) bool {
 	return tc.Mode == ir.ToolChoiceAny || tc.Mode == ir.ToolChoiceTool
 }
 
+// thinkingSurvivesShaping 报告 shapeParams 之后思考配置是否仍然存在。
+//
+// 它是下面 shapeParams 里两处 `c.drop("thinking", …)` 判定（max_tokens 容不下
+// 协议最小推理预算、协议不允许推理与强制工具调用并存）的只读镜像，供诊断侧
+// describeThinkingModernLossy 使用。为什么诊断侧要问它：出站编码（如 anthropic
+// 的 EncodeRequestLossy）刻意按「原始请求」推导有损说明，以免漏报 shape 降级掉
+// 的字段；但「合成了一个思考预算」这条 filled 说明描述的是编码器在 shape 之后
+// 的行为——shape 已把 thinking 整块丢掉时根本不会合成，那条 filled 就成了与
+// shapeNotes 的 "dropped thinking" 自相矛盾的假阳性（违规则 a）。用这一个判定
+// 门控，filled 就只在思考确实活到编码那一步时才报。
+//
+// 必须与 shapeParams 的两处丢弃条件逐字保持同步：条件漂移会让门控要么漏掉假阳
+// （shape 丢了却仍报 filled），要么误杀真阳（shape 没丢却不报）。端到端回归测试
+// TestShapedOutThinkingByForcedToolNotReportedAsFilled、
+// TestShapedOutThinkingByMinBudgetNotReportedAsFilled 走真实 EncodeRequestLossy
+// 路径钉住「shape 丢了就不报 filled」，TestSurvivingThinkingStillReportsFilledBudget
+// 钉住「shape 没丢就仍报 filled」，三者合起来是本镜像不漂移的守卫。
+func thinkingSurvivesShaping(req *ir.Request, caps Capabilities) bool {
+	if !req.Thinking.On() || !caps.Thinking {
+		return false
+	}
+	// 镜像 shapeParams 的「推理与强制工具调用互斥」丢弃条件。
+	if caps.ThinkingExcludesForcedTools && forcedToolChoice(req.ToolChoice) {
+		return false
+	}
+	// 镜像 shapeParams 的「max_tokens 容不下最小推理预算」丢弃条件：取协议有效
+	// 上限（与 shapeParams 同一个 MaxTokensFor），err 时 hasMax 视为假、不丢，
+	// 与 shapeParams 把 err 落成 (0,false) 后跳过该支的行为一致。
+	if caps.MinThinkingBudget > 0 {
+		effMax, hasMax, err := MaxTokensFor(req.MaxTokens, caps)
+		if err == nil && hasMax && effMax-1 < caps.MinThinkingBudget {
+			return false
+		}
+	}
+	return true
+}
+
 // shapeParams 解开参数互斥并套上数量上限。
 func shapeParams(req *ir.Request, caps Capabilities, c *noteCollector) {
 	thinkingOn := req.Thinking.On() && caps.Thinking

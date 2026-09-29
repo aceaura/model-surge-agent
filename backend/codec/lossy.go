@@ -1204,6 +1204,9 @@ func describeParamsLossy(req *ir.Request, name string, caps Capabilities, note, 
 //     缺预算会被拒，编码器用 budgetForEffort 合成一个——是兜底（filled）。
 //
 // 各分支的触发条件与对应编码器严格同条件（含 BudgetTokens 的符号），避免假阳/漏报。
+// 唯一需要额外门控的是 effort→budget 合成那条：编码器在 shape 之后才跑，shape 可能
+// 已把 thinking 整块丢掉，故那条用 thinkingSurvivesShaping 与编码器的真实行为对齐
+// （详见该分支注释）。
 func describeThinkingModernLossy(req *ir.Request, name string, caps Capabilities, note, filled, rewrote func(field, why string)) {
 	t := req.Thinking
 	if t == nil {
@@ -1230,8 +1233,15 @@ func describeThinkingModernLossy(req *ir.Request, name string, caps Capabilities
 	// effort→budget：目标用 token 预算表达强度、缺预算会被拒，编码器合成一个。
 	// gemini 恒用预算；anthropic 仅非 adaptive 的 enabled 档需要预算（adaptive
 	// 由模型自主决定思考量、不带预算）。与两编码器的 budgetForEffort 兜底同条件。
+	//
+	// 还要 thinkingSurvivesShaping 门控：编码器在 shape 之后才跑，而 shape 会在
+	// 「max_tokens 容不下最小推理预算」或「推理与强制工具调用互斥」时把 thinking
+	// 整块丢掉（anthropic 两位都开，故只有它可达）。诊断按原始请求推导，不加这道
+	// 门就会在思考已被丢弃时仍报「合成了预算」——与 shapeNotes 的 "dropped
+	// thinking" 自相矛盾的假阳性。门控后本条与编码器「真的合成了」严格同条件。
 	if t.On() && t.BudgetTokens <= 0 &&
-		(name == ProtocolGemini || (name == ProtocolAnthropic && !t.Adaptive)) {
+		(name == ProtocolGemini || (name == ProtocolAnthropic && !t.Adaptive)) &&
+		thinkingSurvivesShaping(req, caps) {
 		filled("thinking budget", "the target protocol expresses reasoning depth as a token budget, so one was synthesized because the request carried none")
 	}
 	// reasoning 子参数三维（summary / context / mode）只有 responses 族有
