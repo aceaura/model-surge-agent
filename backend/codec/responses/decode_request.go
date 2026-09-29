@@ -130,7 +130,14 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	// 值就是这么读的，两族口径必须一致，否则同一个 vendor 值换个入口就变成
 	// 相反语义（出站按 Off 写 effort=none，彻底掐掉客户端要的思考）。
 	if w.Reasoning != nil {
-		th := &ir.ThinkingConfig{Summary: w.Reasoning.Summary}
+		// generate_summary 是 summary 的官方废弃别名：Summary 为空时回落到它，
+		// 两者都给时现代键 summary 胜出（同 chat functions/function_call 折进
+		// 现代槽位）。编码侧只写 summary，故这是废弃→现代的归一，功能等价无需注记。
+		summary := w.Reasoning.Summary
+		if summary == "" {
+			summary = w.Reasoning.GenerateSummary
+		}
+		th := &ir.ThinkingConfig{Summary: summary}
 		switch w.Reasoning.Effort {
 		case "":
 			// 没表态开关，Effort 留空。

@@ -112,6 +112,13 @@ type wireReasoning struct {
 	// Summary 控制是否返回推理摘要。本协议不返回原始思维链，
 	// 只在开启 summary 时给出摘要文本。
 	Summary string `json:"summary,omitempty"`
+	// GenerateSummary 是 Summary 的官方废弃别名（openai-python
+	// shared/reasoning.py：generate_summary 明标「Deprecated: use summary
+	// instead」，与 summary 同为 Literal["auto","concise","detailed"]）。只在
+	// 解码侧收下、Summary 为空时回落到它；编码侧一律写现代键 summary——同 chat
+	// 的 functions/function_call 折进现代槽位（r109_test 钉住），功能等价无需
+	// 注记。此前不认这个键，客户端只发 generate_summary 会让整份摘要配置静默消失。
+	GenerateSummary string `json:"generate_summary,omitempty"`
 	// Context 推理带多少会话上下文（auto/current_turn/all_turns）。
 	// Mode 推理模式（standard/pro）。两者值形态仍在演进，按原文透传不解析。
 	Context json.RawMessage `json:"context,omitempty"`
