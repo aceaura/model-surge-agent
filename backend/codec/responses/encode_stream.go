@@ -85,6 +85,11 @@ type streamEncoder struct {
 	// droppedContainer 容器回显（anthropic 专属维度）被丢标记：本协议响应
 	// 没有 container 槽位。首帧或收尾帧任一带到即置位，Notes() 报一次。
 	droppedContainer bool
+	// droppedDiagnostics anthropic 请求级诊断回执（Message.diagnostics，anthropic
+	// 专属维度）被丢标记：本协议虽有 prompt_cache_diagnostics，但那是不同族、不同
+	// 线格式的另一机制，承载不了 cache_miss_reason。官方只随 message_start 抵达，
+	// 带到即置位，Notes() 报一次。
+	droppedDiagnostics bool
 	// droppedAudio 完整音频输出（chat 非流式响应投影而来）被丢标记：
 	// 本协议的流式 item 没有完整音频形态，Notes() 报一次。
 	droppedAudio bool
@@ -153,6 +158,12 @@ func (e *streamEncoder) Notes() []string {
 	}
 	if e.droppedContainer {
 		notes = append(notes, codec.ContainerDropNote())
+	}
+	// anthropic 响应级诊断回执只随 message_start 抵达一次，报出即抽干，避免
+	// 二次 Notes() 重复报出（与 sibling sawPromptCacheDiagnostics 同款纪律）。
+	if e.droppedDiagnostics {
+		notes = append(notes, codec.ResponseAnthropicDiagnosticsDropNote())
+		e.droppedDiagnostics = false
 	}
 	if e.droppedAudio {
 		notes = append(notes, codec.AudioOutputDropNote())
@@ -284,6 +295,11 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		e.mapTier(ev.ServiceTier)
 		if ev.Container != nil {
 			e.droppedContainer = true
+		}
+		// anthropic 请求级诊断回执本协议装不下（prompt_cache_diagnostics 是另一
+		// 机制），只记到达位、收尾报出（不回填）。
+		if len(ev.AnthropicDiagnostics) > 0 && string(ev.AnthropicDiagnostics) != "null" {
+			e.droppedDiagnostics = true
 		}
 		if ev.Audio != nil {
 			e.droppedAudio = true

@@ -1431,6 +1431,22 @@ func ContainerDropNote() string {
 	return "dropped container info: this protocol's response has no container field, the client cannot see or reuse the code-execution container that served the request"
 }
 
+// ResponseAnthropicDiagnosticsDropNote 是 anthropic 请求级诊断回执丢失的说明。
+// 该回执（官方 Message.diagnostics={cache_miss_reason}）由客户端在请求侧用
+// diagnostics.previous_message_id 主动索要（ir.Request.Diagnostics），上游据此
+// 回填「prompt-cache 前缀为何未能复用」的归因（model_changed / system_changed /
+// tools_changed / messages_changed / previous_message_not_found / unavailable）。
+// 仅 anthropic 一族响应有 diagnostics 槽位，chat_completions / responses 都没有
+// （responses 的 prompt_cache_diagnostics 是不同族、不同线格式的另一机制，不互映），
+// 故跨族投影来的回执整体丢弃：索要过诊断的客户端看不到缓存失配成因，缓存调优失去
+// 反馈。与 ContainerDropNote 同属「anthropic 专属回显被外族丢」一档，非流式与流式
+// 两条路径共用。回执正文属会话内容，不进说明。同款对称防御：字段一旦非空即照实报，
+// 空值绝不误报——实践中外族客户端无从索要（请求侧无对应槽位、丢弃另由
+// describeRequestLossy 报出），故这条几乎不可达，只为字段非空时不静默。
+func ResponseAnthropicDiagnosticsDropNote() string {
+	return "dropped the upstream request-level diagnostics receipt: this protocol's response has no diagnostics field, so a client that requested prompt-cache divergence reporting via diagnostics.previous_message_id cannot see the cache_miss_reason explaining why the cache prefix was not reused"
+}
+
 // ResponseModerationDropNote 是上游审核回执丢失的说明。审核回执（官方 chat 的
 // ChatCompletion.moderation、responses 的 response.moderation）是 chat/responses
 // 两族专属的响应级槽位，由上游内容安全侧产出、不是客户端回声：开了 moderated

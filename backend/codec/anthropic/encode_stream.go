@@ -513,6 +513,9 @@ func (e *streamEncoder) encodeStart(ev ir.Event) ([][]byte, error) {
 	}
 	// container 是本家维度，直接下发。
 	msg.Container = encodeContainerInfo(ev.Container)
+	// 请求级诊断回执是本家维度（官方随 message_start 的完整 Message 下发），
+	// 同族直接回写；跨族客户端的入站编码器没有这个槽位，由各自的 Notes() 报出。
+	msg.Diagnostics = ev.AnthropicDiagnostics
 	// 模型音频输出（chat 非流式投影而来）没有本协议槽位：丢弃并报出。
 	if ev.Audio != nil {
 		e.notes = append(e.notes, codec.AudioOutputDropNote())
@@ -708,6 +711,9 @@ func EncodeResponse(resp *ir.Response) ([]byte, error) {
 		StopDetails:  encodeStopDetails(resp.StopDetails),
 		Usage:        renderUsage(resp.Usage),
 		Container:    encodeContainerInfo(resp.Container),
+		// 请求级诊断回执同族原样回写（跨族到不了这里——别的入站编码器没有这个
+		// 槽位，丢弃由 DescribeResponseClientMetaLoss 报出）。
+		Diagnostics: resp.AnthropicDiagnostics,
 	}
 	// 实际执行档位回显：官方置于 usage.service_tier，不是 Message 顶层。
 	// 跨族按回显值集翻译，装不下的（OpenAI 系的 flex/scale/fast/ultrafast

@@ -70,6 +70,12 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	if resp.Container != nil {
 		notes = append(notes, codec.ContainerDropNote())
 	}
+	// anthropic 请求级诊断回执（Message.diagnostics）是 anthropic 专属：本协议
+	// 虽有 prompt_cache_diagnostics，但那是不同族、不同线格式的另一机制，承载不了
+	// cache_miss_reason，索要过诊断的客户端看不到归因。空/显式 null 不报。
+	if len(resp.AnthropicDiagnostics) > 0 && string(resp.AnthropicDiagnostics) != "null" {
+		notes = append(notes, codec.ResponseAnthropicDiagnosticsDropNote())
+	}
 	// 容器文件引用块（container_upload）同理：本协议没有 file_id 槽位，
 	// 编码器整块跳过，丢了要报出来。
 	if n := codec.CountResponseContainerUploads(resp); n > 0 {

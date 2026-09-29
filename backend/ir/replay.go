@@ -16,6 +16,9 @@ func ResponseEvents(resp *Response) []Event {
 	out := []Event{{Type: EvMessageStart, MessageID: resp.ID, Model: resp.Model,
 		ServiceTier: resp.ServiceTier, Container: resp.Container, Audio: resp.Audio,
 		SystemFingerprint: resp.SystemFingerprint,
+		// anthropic 响应级诊断回执随首帧投影：官方只把它放在完整 Message 上，
+		// 整份响应路径没有 message_delta 可承载，漏掉它同族往返会丢缓存失配归因。
+		AnthropicDiagnostics: resp.AnthropicDiagnostics,
 		// 创建时间也要投影：整份响应路径的出站编码器同样从首帧取
 		// Created，漏掉它上游的真实创建时间会被代理本地钟顶替——
 		// 正是 created 保真要防的那件事。

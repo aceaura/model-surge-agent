@@ -297,6 +297,10 @@ type wireResponse struct {
 	StopDetails *wireStopDetails `json:"stop_details,omitempty"`
 	// Container 代码执行容器回显（按需出场，缺键与 null 同义）。
 	Container *container `json:"container,omitempty"`
+	// Diagnostics 请求级诊断回执（官方 Message.diagnostics={cache_miss_reason}）：
+	// 原文透传，同族回写兑现、跨族丢弃由诊断报出（理由见 ir.Response.
+	// AnthropicDiagnostics）。显式 null（未索要诊断或比对未完成）在解码侧归一为没给。
+	Diagnostics json.RawMessage `json:"diagnostics,omitempty"`
 }
 
 // wireUsage 建模官方 Usage（message_start 与非流式响应的完整用量）。
@@ -470,6 +474,9 @@ type streamMsg struct {
 	Usage        wireUsage `json:"usage"`
 	// Container 代码执行容器回显（message_start 首帧携带，缺键与 null 同义）。
 	Container *container `json:"container,omitempty"`
+	// Diagnostics 请求级诊断回执（官方 message_start 的完整 Message 上携带，
+	// message_delta 的 Delta 无此字段）：原文透传，同族回写、跨族丢弃由诊断报出。
+	Diagnostics json.RawMessage `json:"diagnostics,omitempty"`
 }
 
 // streamDelta 既承载块内增量（text_delta 等），也承载 message_delta 的 stop_reason。

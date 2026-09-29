@@ -104,6 +104,11 @@ func (a *Aggregator) Add(ev Event) {
 		a.resp.Model = ev.Model
 		a.mergeServiceTier(ev.ServiceTier)
 		a.mergeContainer(ev.Container)
+		// anthropic 响应级诊断回执只随 message_start 抵达（官方 Delta 无此字段），
+		// 故只在首帧分支合并；非空才覆盖，缺这一维的帧不清零。
+		if len(ev.AnthropicDiagnostics) > 0 {
+			a.resp.AnthropicDiagnostics = ev.AnthropicDiagnostics
+		}
 		if ev.SystemFingerprint != "" {
 			a.resp.SystemFingerprint = ev.SystemFingerprint
 		}

@@ -239,6 +239,19 @@ type Response struct {
 	// 缓存前缀。判别式联合值域在演进，原文透传不建模；仅 responses 一族有
 	// 槽位，跨族不投影。
 	ResponsesPromptCacheDiagnostics json.RawMessage `json:"responses_prompt_cache_diagnostics,omitempty"`
+	// AnthropicDiagnostics 是 anthropic 响应侧的请求级诊断回执（官方
+	// Message.diagnostics：{cache_miss_reason}，解释为何 prompt-cache 前缀未能
+	// 复用，cache_miss_reason 为 null 表示后台比对尚未完成）。它是 ir.Request.
+	// Diagnostics（客户端用 diagnostics.previous_message_id 主动索要）的回执半边：
+	// 仅 anthropic 一族响应有槽位承载它。与 ResponsesPromptCacheDiagnostics 是
+	// 不同族、不同线格式、不同语义的两个东西（那是 responses 的
+	// prompt_cache_diagnostics={type,cached_tokens}），故独立建模、互不投影。
+	// cache_miss_reason 是判别式联合（model_changed/system_changed/tools_changed/
+	// messages_changed/previous_message_not_found/unavailable），值域在演进，原文
+	// 透传不建模。同族 anthropic→anthropic 逐字往返，跨族无槽位由有损诊断报出。
+	// 官方仅在完整 Message 上带它（流式随 message_start 抵达，message_delta 的
+	// Delta 无此字段），故只随 EvMessageStart 流转。
+	AnthropicDiagnostics json.RawMessage `json:"anthropic_diagnostics,omitempty"`
 	// ResponsesModeration 上游响应侧的审核结果回执（官方 responses 的
 	// response.moderation 与 chat 的 ChatCompletion.moderation，均 nullable）。
 	// 开了 moderated completions 的客户端靠它门控输入/输出审核结果。responses 与

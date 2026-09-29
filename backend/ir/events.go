@@ -59,6 +59,12 @@ type Event struct {
 	// Container 代码执行容器回显（EvMessageStart 首帧携带；anthropic 的
 	// message_delta 也可能晚到，EvMessageDelta 上也收，后值覆盖）。
 	Container *Container `json:"container,omitempty"`
+	// AnthropicDiagnostics 是 anthropic 响应级诊断回执（Message.diagnostics，
+	// 语义同 ir.Response.AnthropicDiagnostics）。官方只把它放在完整 Message 上，
+	// 流式随 message_start 抵达（message_delta 的 Delta 无此字段），故只在
+	// EvMessageStart 上有意义、也只随首帧流转。仅 anthropic 一族有槽位，跨族
+	// 出站不投影，由各自的响应侧有损诊断报出。
+	AnthropicDiagnostics json.RawMessage `json:"anthropic_diagnostics,omitempty"`
 	// Audio 非流式完整响应转事件流时随 EvMessageStart 携带。所有流式客户端
 	// 协议都没有官方的完整音频槽位，各编码器收下它只为记账并报出丢失。
 	Audio      *AudioOutput `json:"audio,omitempty"`

@@ -108,6 +108,9 @@ func (d *streamDecoder) feedOne(event, data string) ([]ir.Event, error) {
 			// 官方把 service_tier 放在 message_start 的 usage 下，不是 message 顶层。
 			out.ServiceTier = ev.Message.Usage.ServiceTier
 			out.Container = decodeContainer(ev.Message.Container)
+			// 诊断回执随 message_start 的完整 Message 抵达（官方 Delta 无此字段），
+			// 原文透传进 IR，同族回写、跨族由有损诊断报出。
+			out.AnthropicDiagnostics = normalizeDiagnostics(ev.Message.Diagnostics)
 			u := convertUsage(ev.Message.Usage)
 			out.Usage = &u
 		}
@@ -259,6 +262,11 @@ func DecodeResponse(body []byte) (*ir.Response, error) {
 		Container:   decodeContainer(w.Container),
 	}
 	out.StopSequence = adoptStopSequence(out.StopReason, w.StopSequence)
+	// 请求级诊断回执（Message.diagnostics={cache_miss_reason}）原文透传：客户端
+	// 在请求侧用 diagnostics.previous_message_id 索要（ir.Request.Diagnostics），
+	// 上游在此回填缓存失配归因。显式 null（未索要或后台比对未完成）归一为没给，
+	// 同族 anthropic→anthropic 逐字回写，跨族无槽位由有损诊断报出。
+	out.AnthropicDiagnostics = normalizeDiagnostics(w.Diagnostics)
 	blocks, err := decodeBlocks(w.Content)
 	if err != nil {
 		return nil, ir.NewError(ir.ErrUpstream, 0, "",
@@ -345,6 +353,17 @@ func decodeStopDetails(sd *wireStopDetails) *ir.StopDetails {
 	_ = json.Unmarshal(sd.Category, &out.Category)
 	_ = json.Unmarshal(sd.Explanation, &out.Explanation)
 	return out
+}
+
+// normalizeDiagnostics 把上游响应侧 diagnostics 原文归一：缺席或显式 null 都视为
+// 没给（返回 nil），避免 4 字节字面量被当成有效回执写回线上或触发跨族注记。
+// 非空对象（如 {cache_miss_reason:...} 或 {cache_miss_reason:null}——后者表示
+// 已索要、后台比对未完成）原样保留，同族逐字往返。
+func normalizeDiagnostics(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	return raw
 }
 
 // adoptStopSequence 只在终止原因确实是停止序列时采纳上游给的那条序列。
