@@ -39,6 +39,10 @@ type wireRequest struct {
 	// 同名字段注释）。显式 null 在解码侧归一为没给。
 	McpServers        json.RawMessage `json:"mcp_servers,omitempty"`
 	ContextManagement json.RawMessage `json:"context_management,omitempty"`
+	// Diagnostics 请求级诊断（官方 diagnostics={previous_message_id}）：原文透传，
+	// 同族回写兑现、跨族丢弃由诊断报出（理由见 ir.Request.Diagnostics）。显式 null
+	// 在解码侧归一为没给。
+	Diagnostics json.RawMessage `json:"diagnostics,omitempty"`
 	// ServiceTier 服务质量档位：auto / standard_only。OpenAI 方言值
 	//（default/flex/...）由出站编码按 codec.MapServiceTier 翻译或丢弃。
 	ServiceTier string `json:"service_tier,omitempty"`

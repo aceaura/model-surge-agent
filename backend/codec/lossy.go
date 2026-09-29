@@ -233,6 +233,14 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 	if !jsonContainerEmpty(req.ContextManagement) && name != ProtocolAnthropic {
 		note("context_management", "no context-editing slot: the requested context management (e.g. clearing old tool uses) is dropped, the upstream sends the full unpruned context and may hit the window limit the client expected to be pruned")
 	}
+	// 请求级诊断（diagnostics，anthropic：{previous_message_id}）：外族没有承载
+	// 「带上一轮 msg_id 以换取 prompt-cache 失配归因」的槽位，整条丢弃后客户端拿不到
+	// 响应里的 diagnostics.cache_miss_reason（responses 的 prompt_cache_options.
+	// comparison_response_id 是类似机制但线格式不同、不互映）。anthropic 同族原样
+	// 往返（RawMessage 透传），报了就是谎报。
+	if !jsonContainerEmpty(req.Diagnostics) && name != ProtocolAnthropic {
+		note("diagnostics", "no request-level diagnostics slot: the previous_message_id used to opt into prompt-cache divergence reporting is dropped, so the response cannot carry diagnostics.cache_miss_reason explaining why the prompt-cache prefix was not reused")
+	}
 	// 域专属访问计划（access_programs，responses 独有，{cyber: standard|
 	// daybreak_blue|daybreak_red}）：外族没有访问计划槽位，客户端显式选定的 cyber
 	// 档位整条丢弃，上游按模型 tier 与组织/项目权限自行解析默认计划（通常是

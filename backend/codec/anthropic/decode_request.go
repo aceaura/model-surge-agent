@@ -194,6 +194,10 @@ func DecodeRequest(body []byte) (*ir.Request, error) {
 	if len(w.ContextManagement) > 0 && string(w.ContextManagement) != "null" {
 		out.ContextManagement = w.ContextManagement
 	}
+	// diagnostics（请求级诊断，{previous_message_id}）同款原文透传 + 显式 null 归一。
+	if len(w.Diagnostics) > 0 && string(w.Diagnostics) != "null" {
+		out.Diagnostics = w.Diagnostics
+	}
 	return out, nil
 }
 

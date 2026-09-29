@@ -792,6 +792,18 @@ type Request struct {
 	// 拿得到全部输入即可执行，故透传而非拒收。
 	McpServers        json.RawMessage `json:"mcp_servers,omitempty"`
 	ContextManagement json.RawMessage `json:"context_management,omitempty"`
+	// Diagnostics 是 anthropic 的请求级诊断参数（官方 diagnostics，形如
+	// {previous_message_id}）：客户端带上上一轮响应的 msg_id，上游比对两次请求的
+	// prompt 指纹，在响应里回 diagnostics.cache_miss_reason 说明 prompt-cache 前缀
+	// 为何没能复用（首轮传 null 表示只订阅、无 prior 可比）。与 mcp_servers/
+	// context_management 同款：anthropic 专属、无跨族等价物（responses 的
+	// prompt_cache_options.comparison_response_id 是类似机制但线格式与语义都不同，
+	// 不互映），不解析、原文透传（json.RawMessage 不可变惯例，Clone 随值共享）；
+	// 同族 anthropic→anthropic 原样回写兑现，跨族整块丢弃并由诊断报出（谓词
+	// name!=anthropic）。它是纯诊断元数据、不承载会话状态：上游认不出这个 msg_id
+	// 至多让 cache_miss_reason 缺失，请求本身照常成功，故透传而非像 responses 的
+	// previous_response_id 那样拒收。
+	Diagnostics json.RawMessage `json:"diagnostics,omitempty"`
 	// ParallelToolCalls 是否允许一轮里并行多个工具调用。三态指针：
 	// 没给就不替客户端表态（同 ThinkingConfig.Enabled 的判据）。
 	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`

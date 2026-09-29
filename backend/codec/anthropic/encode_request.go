@@ -204,6 +204,9 @@ func EncodeRequest(req *ir.Request) ([]byte, error) {
 	// 跨族到不了这里——别的出站编码器没有这两个槽位，丢弃由 DescribeLossy 报出。
 	w.McpServers = req.McpServers
 	w.ContextManagement = req.ContextManagement
+	// diagnostics 同族原样回写（跨族到不了这里——别的出站编码器没有这个槽位，
+	// 丢弃由 DescribeLossy 报出）。
+	w.Diagnostics = req.Diagnostics
 	return json.Marshal(w)
 }
 
