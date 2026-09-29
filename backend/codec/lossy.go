@@ -2008,6 +2008,22 @@ func ResponseItemStatusDropNote(n int) string {
 		"dropped the non-completed status on %d upstream output item(s): the internal response model has no per-item status slot and same-family encoding rewrites every item to \"completed\", so a client cannot see which specific item the upstream marked in_progress or incomplete (e.g. a message truncated mid-item)", n)
 }
 
+// ResponseMergedSummaryNote 解码侧「多段 reasoning 摘要被折叠」的注记：官方
+// responses 的 reasoning 条目把思考摘要建模为 summary 数组，每个 part 带独立的
+// summary_index，多段之间是有边界、可按 index 寻址的。IR 的思考块只有一个 Text
+// 字段，joinSummary 把各段文本首尾相接成一条，文本本身保全了，但「几段、各段边界、
+// summary_index 寻址」丢失。流式路径对 summary_index>0 的帧计数并出注记；非流式的
+// 整份响应路径做的是同一次折叠（joinSummary），按规则 b（流式/非流式同损同措辞）
+// 必须出同一条注记——codec.go 里 DecodeResponseLossy 的注释也明写「与流式的 Notes()
+// 对称」。两条路径共用本函数以保证措辞逐字节一致，避免各自 Sprintf 漂移。
+//
+// 计数口径与流式对齐：n 是被折叠进首段的「额外」摘要帧/段数（summary_index>0 的
+// part 数），单段摘要 n=0 不出注记（无折叠、无丢失，误报即假阳性缺口）。
+func ResponseMergedSummaryNote(n int) string {
+	return fmt.Sprintf(
+		"merged %d reasoning summary frame(s) with summary_index>0 into the first summary part: the text is preserved, but the part boundaries and summary_index addressing of a multi-part reasoning item are not", n)
+}
+
 // CitationResolveDropNote 反推失败的引用丢失注记：跨协议投影来的引用没有原文
 // 可透传，编成 web_search_result_location 又必须带 cited_text，而它既没自带
 // cited_text、也无法按范围从所在块正文切出来时，整条只能丢弃（带空 cited_text

@@ -166,8 +166,7 @@ func (d *streamDecoder) Notes() []string {
 		d.droppedItemStatuses = 0
 	}
 	if d.mergedSummary > 0 {
-		notes = append(notes, fmt.Sprintf(
-			"merged %d reasoning summary frame(s) with summary_index>0 into the first summary part: the text is preserved, but the part boundaries and summary_index addressing of a multi-part reasoning item are not", d.mergedSummary))
+		notes = append(notes, codec.ResponseMergedSummaryNote(d.mergedSummary))
 		d.mergedSummary = 0
 	}
 	if d.droppedBadFrames > 0 {
@@ -961,6 +960,7 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	nonURLCites := 0
 	phases := 0
 	itemStatuses := 0
+	mergedSummary := 0
 	for _, item := range w.Output {
 		// 条目级 status 未完成标记（in_progress/incomplete）没有 IR 槽位，且同族
 		// 编码器把每个条目一律改写成 completed：探测计数、经注记报出，判据与流式
@@ -1010,6 +1010,14 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 			}})
 		case itemReasoning:
 			text := joinSummary(item.Summary)
+			// 多段摘要（官方 summary 数组按序给出多个 part）被 joinSummary 首尾
+			// 相接成一条：文本保全，但 part 边界与 summary_index 寻址丢失。这与
+			// 流式对 summary_index>0 帧计数（d.mergedSummary）是同一次折叠，按
+			// 规则 b 出同一条注记。聚合响应里 wireSummary 不带 index，「额外段数」
+			// 即 len-1；单段（len<=1）无折叠、不计数。
+			if len(item.Summary) > 1 {
+				mergedSummary += len(item.Summary) - 1
+			}
 			contentChannel := false
 			if text == "" {
 				// summary 为空时正文在 content 数组（reasoning_text）：
@@ -1049,6 +1057,9 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	}
 	if itemStatuses > 0 {
 		notes = append(notes, codec.ResponseItemStatusDropNote(itemStatuses))
+	}
+	if mergedSummary > 0 {
+		notes = append(notes, codec.ResponseMergedSummaryNote(mergedSummary))
 	}
 	return out, notes, nil
 }
