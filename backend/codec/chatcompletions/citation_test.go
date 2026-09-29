@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aceaura/model-surge-agent/backend/codec"
 	"github.com/aceaura/model-surge-agent/backend/ir"
 )
 
@@ -115,23 +116,29 @@ func TestDecodeAnnotationsRejectsUnknownType(t *testing.T) {
 	}
 }
 
-// 标注挂到最后一个文本块；没有文本块时整批丢弃。
+// 标注挂到最后一个文本块；没有文本块时整批丢弃并回传丢弃数（供调用方计注记）。
 func TestAttachCitations(t *testing.T) {
 	blocks := []ir.Block{
 		{Type: ir.BlockText, Text: "第一段"},
 		{Type: ir.BlockText, Text: "第二段"},
 	}
-	got := attachCitations(blocks, []ir.Citation{{URL: "https://a"}})
+	got, dropped := attachCitations(blocks, []ir.Citation{{URL: "https://a"}})
 	if len(got[0].Citations) != 0 {
 		t.Errorf("first block must stay clean: %+v", got[0])
 	}
 	if len(got[1].Citations) != 1 {
 		t.Errorf("want citation on last text block: %+v", got[1])
 	}
+	if dropped != 0 {
+		t.Errorf("挂得上时丢弃数应为 0，得到 %d", dropped)
+	}
 
-	mediaOnly := attachCitations([]ir.Block{{Type: ir.BlockImage}}, []ir.Citation{{URL: "https://a"}})
+	mediaOnly, dropped := attachCitations([]ir.Block{{Type: ir.BlockImage}}, []ir.Citation{{URL: "https://a"}})
 	if len(mediaOnly[0].Citations) != 0 {
 		t.Errorf("no text block, citations must be dropped: %+v", mediaOnly)
+	}
+	if dropped != 1 {
+		t.Errorf("无文本块时应回传丢弃数 1（供 DroppedCitationsNote），得到 %d", dropped)
 	}
 }
 
@@ -246,7 +253,8 @@ func TestStreamDecodeAnnotations(t *testing.T) {
 	}
 }
 
-// 没收到过正文就来的标注不分配块：客户端会多出一个空文本块。
+// 没收到过正文就来的标注不分配块：客户端会多出一个空文本块。整批引用被丢弃，
+// 但丢弃不能静默——须经 Notes() 报出（gemini 同损同报，规则 b/c）。
 func TestStreamDecodeAnnotationsWithoutTextBlock(t *testing.T) {
 	dec := newStreamDecoder()
 	got, err := dec.Feed("", chunk(`{"annotations":[{"type":"url_citation","url_citation":{
@@ -258,6 +266,9 @@ func TestStreamDecodeAnnotationsWithoutTextBlock(t *testing.T) {
 		if ev.Type == ir.EvCitation || ev.Type == ir.EvBlockStart {
 			t.Fatalf("annotations without text must not open blocks or emit citations: %+v", got)
 		}
+	}
+	if !anyNoteHas(dec.Notes(), codec.DroppedCitationsNote(1)) {
+		t.Errorf("无文本块丢弃引用应经 Notes() 报出：%q", dec.Notes())
 	}
 }
 

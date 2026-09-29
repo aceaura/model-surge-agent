@@ -237,7 +237,10 @@ func appendMessage(out *ir.Request, m wireMessage) error {
 			return err
 		}
 		// 消息级标注落到最后一个文本块：IR 的引用挂块上，本协议挂消息上。
-		blocks = attachCitations(blocks, decodeAnnotations(m.Annotations))
+		// 这是入站请求历史解码（客户端 → IR），没有响应侧注记通道；挂不上的
+		// 引用数在此忽略——请求历史的引用损耗由出站编码侧 DescribeLossy 统一
+		// 报出，与响应解码侧（decode_stream.go）的 DroppedCitationsNote 分账。
+		blocks, _ = attachCitations(blocks, decodeAnnotations(m.Annotations))
 		// 拒绝正文是独立槽位：官方在拒绝时把 content 置 null、正文放
 		// refusal。不读会让历史里的拒绝变成一条空消息，模型看不到自己
 		// 拒绝过，可能被同样的追问绕过。

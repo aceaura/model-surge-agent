@@ -1301,10 +1301,11 @@ func DroppedUnknownPartsNote(kinds []string, n int) string {
 }
 
 // DroppedCitationsNote 是响应带了来源标注（gemini 的 grounding/citation
-// metadata）却无处安放的说明：ir.Block.Citations 绑在文本块上，候选没产出
-// 任何文本块时引用挂不上去，只能丢弃并报出。n 是丢弃的引用数。带 URI 的
-// 引用在候选有文本块时正常保全（见 gemini.candidateCitations），这里只覆盖
-// 「有来源、无正文可挂」这一种真实丢弃。
+// metadata、chat 的 message.annotations）却无处安放的说明：ir.Block.Citations
+// 绑在文本块上，候选/选项没产出任何文本块时引用挂不上去，只能丢弃并报出。
+// n 是丢弃的引用数。带 URI 的引用在候选有文本块时正常保全（见 gemini.candidateCitations
+// 与 chat.attachCitations），这里只覆盖「有来源、无正文可挂」这一种真实丢弃。
+// gemini 与 chat 两族的流式/非流式解码共用本措辞，保证同损同报（规则 b/c）。
 func DroppedCitationsNote(n int) string {
 	return fmt.Sprintf("dropped %d response citation(s): the candidate carried no text block to attach them to", n)
 }

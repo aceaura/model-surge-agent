@@ -68,6 +68,12 @@ type streamDecoder struct {
 	// 无处安放只能丢——但丢弃不能静默。responses 的 droppedMsgParts、gemini
 	// 的 droppedUnknownParts 都计数报出，本协议此前唯独漏了，经 Notes() 补齐。
 	droppedContentParts int
+	// droppedCitations 计「响应带了来源标注却没产出任何文本块可挂」而被整批
+	// 丢弃的引用数：标注随 delta.annotations 到达，只挂到已存在的 text 槽位，
+	// 没收到过正文时挂不上（硬塞会多出一个空文本块、且偏移量全失效）。这一
+	// 丢弃不能静默——gemini 解码侧同损经 codec.DroppedCitationsNote 报出，本
+	// 协议流式/非流式同损同报（规则 b/c），经 Notes() 补齐。
+	droppedCitations int
 
 	// stopReason 与 usage 先攒着，到 [DONE] 才发一帧 message_delta。
 	// 本协议把它们分散在不同 chunk（finish_reason 一帧、usage 另一帧），
@@ -281,6 +287,10 @@ func (d *streamDecoder) decodeDelta(delta wireMessage) ([]ir.Event, error) {
 	if cs := decodeAnnotations(delta.Annotations); len(cs) > 0 {
 		if idx, ok := d.slots["text"]; ok {
 			out = append(out, ir.Event{Type: ir.EvCitation, Index: idx, Citations: cs})
+		} else {
+			// 没收到过正文槽位：引用挂不上去，整批丢弃。与非流式 attachCitations
+			// 的无文本块分支同损，计数经 Notes() 报出（gemini 同损同报，规则 b/c）。
+			d.droppedCitations += len(cs)
 		}
 	}
 
@@ -520,6 +530,10 @@ func (d *streamDecoder) Notes() []string {
 		notes = append(notes, codec.DroppedStreamContentPartsNote(d.droppedContentParts))
 		d.droppedContentParts = 0
 	}
+	if d.droppedCitations > 0 {
+		notes = append(notes, codec.DroppedCitationsNote(d.droppedCitations))
+		d.droppedCitations = 0
+	}
 	return codec.DedupeNotes(notes)
 }
 
@@ -581,6 +595,7 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	}
 	maxCandidate := 0
 	logprobs := 0
+	droppedCitations := 0
 	for _, choice := range w.Choices {
 		if choice.Index != 0 || choice.Message == nil {
 			if choice.Index > maxCandidate {
@@ -616,7 +631,8 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 			return nil, nil, ir.NewError(ir.ErrUpstream, 0, "",
 				fmt.Sprintf("undecodable response content: %v", err))
 		}
-		blocks = attachCitations(blocks, decodeAnnotations(m.Annotations))
+		blocks, dropped := attachCitations(blocks, decodeAnnotations(m.Annotations))
+		droppedCitations += dropped
 		out.Content = append(out.Content, blocks...)
 		// 拒绝正文是独立槽位：官方在拒绝时把 content 置 null、正文放
 		// refusal。不读会让客户端收到终止原因却内容为空，像成功的空回复。
@@ -647,6 +663,9 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 	}
 	if logprobs > 0 {
 		notes = append(notes, codec.LogProbsDropNote(logprobs))
+	}
+	if droppedCitations > 0 {
+		notes = append(notes, codec.DroppedCitationsNote(droppedCitations))
 	}
 	return out, notes, nil
 }

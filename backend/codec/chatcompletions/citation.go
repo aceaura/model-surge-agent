@@ -13,24 +13,26 @@ import (
 //   - 解码方向要把消息级标注落到某一个文本块上（attachCitations）；
 //   - 编码方向要把各块内的偏移量平移回拼接文本坐标系（shiftCitations）。
 
-// attachCitations 把一批标注挂到最后一个文本块上。
+// attachCitations 把一批标注挂到最后一个文本块上，返回挂不上的引用数。
 //
 // 选最后一个而不是第一个：本协议的标注随正文增量在消息尾部到达，
 // 多块正文时它描述的更可能是最近输出的那段。偏移量不重新解析——
 // 上游给的就是相对拼接文本的坐标，块内定位交给编码方向的 ResolveRange。
 // 没有任何文本块时整批丢弃：标注没有正文可依附，留着会让下游
-// 在一个不存在的块上找偏移量。
-func attachCitations(blocks []ir.Block, cs []ir.Citation) []ir.Block {
+// 在一个不存在的块上找偏移量。这一丢弃不能静默——gemini 解码侧对
+// 「候选带了引用却没产出文本块」经 codec.DroppedCitationsNote 报出，本协议
+// 同损同报（规则 c），故把丢弃数回传给调用方计入响应侧注记。
+func attachCitations(blocks []ir.Block, cs []ir.Citation) ([]ir.Block, int) {
 	if len(cs) == 0 {
-		return blocks
+		return blocks, 0
 	}
 	for i := len(blocks) - 1; i >= 0; i-- {
 		if blocks[i].Type == ir.BlockText {
 			blocks[i].Citations = ir.DedupeCitations(append(blocks[i].Citations, cs...))
-			return blocks
+			return blocks, 0
 		}
 	}
-	return blocks
+	return blocks, len(cs)
 }
 
 // shiftCitations 把块内坐标的引用平移到消息拼接文本坐标系。
