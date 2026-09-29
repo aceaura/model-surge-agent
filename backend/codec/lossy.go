@@ -635,8 +635,11 @@ func describeImageLossy(m *ir.Media, caps Capabilities, note func(field, why str
 	}
 	if m.Detail != "" && !caps.ImageDetail {
 		// 档位决定上游怎么切图、进而决定输入 token 计费。丢掉之后上游一律
-		// 按自己的默认档处理，账单上看得出、请求里看不出。
-		note("image detail", "no detail slot, the upstream will tile it at its own default level")
+		// 按自己的默认档处理，账单上看得出、请求里看不出。这是 detail 丢弃的
+		// 唯一注记点：describeBlocksLossy 逐块经此报出，覆盖 Messages/System/
+		// tool_result 内嵌图片。勿再在 describeParamsLossy 加请求级 hasImageDetail
+		// 门控——那只遍历 Messages 顶层、对空载荷图片仍会与此处叠报（轮次73 去过报）。
+		note("image detail", "no detail slot, the upstream will tile it at its own default level and may be billed differently")
 	}
 	if m.Name != "" && m.HasPayload() && !caps.ImageFilename {
 		// 带载荷的图片走各家的图片槽位（chat image_url / responses input_image /
@@ -938,11 +941,6 @@ func describeParamsLossy(req *ir.Request, name string, caps Capabilities, note, 
 	}
 	if req.Seed != nil && !caps.Seed {
 		note("seed", "no seed parameter, results are not reproducible")
-	}
-	if !caps.ImageDetail && hasImageDetail(req) {
-		// 说清后果是计费：笼统的 dropped detail 读不出「账单会变」这一点。
-		note("image_url.detail",
-			"no image detail level, the upstream default applies and may be billed differently")
 	}
 	if req.Candidates != nil && !caps.Candidates {
 		// 措辞要说清后果：客户端按数组取第二个候选会越界，
@@ -2586,18 +2584,6 @@ func hasFailedToolResult(req *ir.Request) bool {
 	for _, m := range req.Messages {
 		for _, b := range m.Content {
 			if b.Type == ir.BlockToolResult && b.ToolResult != nil && b.ToolResult.IsError {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// hasImageDetail 判断请求里是否有客户端指定了 detail 的图片块。
-func hasImageDetail(req *ir.Request) bool {
-	for _, m := range req.Messages {
-		for _, b := range m.Content {
-			if b.Type == ir.BlockImage && b.Media != nil && b.Media.Detail != "" {
 				return true
 			}
 		}

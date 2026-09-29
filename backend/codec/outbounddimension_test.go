@@ -286,7 +286,7 @@ func TestImageDetailDroppedWhereUnsupported(t *testing.T) {
 				t.Fatalf("%s 声明了 ImageDetail，本用例的前提不再成立", name)
 			}
 			body, notes := lossyOf(t, name, imageReq("low"))
-			if !hasNoteWith(notes, "image_url.detail") {
+			if !hasNoteWith(notes, "image detail") {
 				t.Errorf("%s 丢弃 detail 却不报说明：%v", name, notes)
 			}
 			// 说明要点出计费后果，笼统的 dropped 读不出这一点。
@@ -295,6 +295,31 @@ func TestImageDetailDroppedWhereUnsupported(t *testing.T) {
 			}
 			if strings.Contains(string(body), `"detail"`) {
 				t.Errorf("%s 不该写出 detail：%s", name, body)
+			}
+		})
+	}
+}
+
+// TestR73ImageDetailSingleNote 轮次73 去过报：detail 丢弃此前被注记两次——
+// describeImageLossy 的逐块 "image detail"（lossy.go:636）与 describeParamsLossy
+// 的请求级 "image_url.detail"（旧 lossy.go:942）各报一条、措辞还不一致，同违
+// 规则 a（一次丢弃只应浮出一条注记）。删掉请求级 hasImageDetail 门控后，一张带
+// detail 的图片对无此维的目标只应浮出恰好一条注记，且计费后果不因去重而丢失。
+func TestR73ImageDetailSingleNote(t *testing.T) {
+	for _, name := range []string{codec.ProtocolAnthropic, codec.ProtocolGemini} {
+		t.Run(name, func(t *testing.T) {
+			_, notes := lossyOf(t, name, imageReq("low"))
+			cnt := 0
+			for _, n := range notes {
+				if strings.Contains(n, "detail") {
+					cnt++
+				}
+			}
+			if cnt != 1 {
+				t.Errorf("%s 对单张带 detail 的图片应恰好报 1 条 detail 注记，实得 %d：%v", name, cnt, notes)
+			}
+			if !hasNoteWith(notes, "billed") {
+				t.Errorf("%s 保留的 detail 注记未点出计费后果：%v", name, notes)
 			}
 		})
 	}
@@ -309,7 +334,7 @@ func TestImageDetailAbsentNotSynthesized(t *testing.T) {
 			if strings.Contains(string(body), `"detail"`) {
 				t.Errorf("%s 在客户端未给时合成了 detail：%s", name, body)
 			}
-			if hasNoteWith(notes, "image_url.detail") {
+			if hasNoteWith(notes, "image detail") {
 				t.Errorf("%s 在客户端未给时报了 detail 说明：%v", name, notes)
 			}
 		})
