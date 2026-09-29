@@ -697,7 +697,7 @@ func decodeToolChoice(raw json.RawMessage) (*ir.ToolChoice, error) {
 	// 拒掉——客户端的合法请求根本进不来。function/custom 是已建模变体，
 	// 缺 name 依然是客户端错误，照旧拒（Raw 收下只会在上游再挨一次 400）。
 	if obj.Type != "" && obj.Type != "function" && obj.Type != "custom" {
-		return &ir.ToolChoice{Raw: append(json.RawMessage(nil), raw...)}, nil
+		return &ir.ToolChoice{Raw: append(json.RawMessage(nil), raw...), RawFamily: Name}, nil
 	}
 	if obj.Name == "" {
 		return nil, fmt.Errorf("name is required")
@@ -706,8 +706,10 @@ func decodeToolChoice(raw json.RawMessage) (*ir.ToolChoice, error) {
 	if obj.Type != "" {
 		// 带 type 的已建模变体（function / custom）原文进 Raw：同族回写
 		// 逐字保留客户端的形状（custom 指名换成 function 会让上游找不到
-		// 工具），结构化字段照常供整形与跨族使用。
+		// 工具），结构化字段照常供整形与跨族使用。RawFamily 标出原文出自
+		// 本族，出站只有 responses 编码器会逐字回写它。
 		out.Raw = append(json.RawMessage(nil), raw...)
+		out.RawFamily = Name
 	}
 	return out, nil
 }

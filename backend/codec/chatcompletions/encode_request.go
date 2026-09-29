@@ -439,6 +439,15 @@ func encodeToolChoice(tc *ir.ToolChoice) (json.RawMessage, error) {
 	if tc == nil {
 		return nil, nil
 	}
+	// 本族产出的 Raw 优先逐字回写（RawFamily == Name）：custom 指名变体的
+	// 名字嵌在 custom.name，结构化分支只会编出 function 形状，同族上游会在
+	// 函数表里找不到这个自定义工具。外族产出的 Raw（如 responses 的扁平
+	// custom / mcp typed 变体）形状与本协议不同，绝不逐字回写——落到下面的
+	// 结构化分支按 Mode/Name 重编，或（Mode 零值的 typed 变体）缺省丢弃，
+	// 损耗由 DescribeLossy 报出。整形降级过的 Raw/RawFamily 已被清掉。
+	if tc.RawFamily == Name && len(tc.Raw) > 0 {
+		return append(json.RawMessage(nil), tc.Raw...), nil
+	}
 	switch tc.Mode {
 	case ir.ToolChoiceAuto:
 		return json.Marshal("auto")

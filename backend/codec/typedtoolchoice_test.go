@@ -25,7 +25,8 @@ func typedChoiceRequest() *ir.Request {
 		},
 		Tools: []ir.Tool{{Name: "alpha", Schema: `{"type":"object","properties":{}}`}},
 		ToolChoice: &ir.ToolChoice{
-			Raw: json.RawMessage(`{"type":"mcp","server_label":"dmcp"}`),
+			Raw:       json.RawMessage(`{"type":"mcp","server_label":"dmcp"}`),
+			RawFamily: codec.ProtocolResponses,
 		},
 	}
 }
@@ -65,7 +66,7 @@ func TestTypedToolChoiceCrossFamilyNotes(t *testing.T) {
 func TestNamedToolChoiceNoTypedNote(t *testing.T) {
 	req := typedChoiceRequest()
 	req.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: "alpha",
-		Raw: json.RawMessage(`{"type":"function","name":"alpha"}`)}
+		Raw: json.RawMessage(`{"type":"function","name":"alpha"}`), RawFamily: codec.ProtocolResponses}
 	for _, name := range codec.OutboundNames() {
 		oc, _ := codec.Outbound(name)
 		notes := strings.Join(codec.DescribeLossy(req, name, oc.Caps()), "; ")

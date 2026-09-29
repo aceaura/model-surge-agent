@@ -565,14 +565,29 @@ type ToolChoice struct {
 	// 因此这一维通常不产生损耗，只有白名单与已声明工具全无交集时才无从
 	// 收窄，由整形阶段报出。
 	AllowedTools []string `json:"allowed_tools,omitempty"`
-	// Raw responses 一族 typed tool_choice 变体的不透明槽：{"type":"mcp"}、
-	// {"type":"file_search"} 等托管工具指名形态（官方 ToolChoiceTypesParam /
-	// ToolChoiceMcpParam），字段互不相同且随官方演进，没有跨族统一维度可
-	// 建模。Mode 留零值：外族出站编不出对应形状（tool_choice 缺省），损耗
-	// 由 DescribeLossy 报出；同族出站原样回写，一个字节不变。字节内容视为
-	// 不可变，Clone 随结构体值拷贝；omitempty 承重——IR 级 JSON 序列化下
-	// 空值不得变成字面量 null 再被当成原文。
+	// Raw 一族专属 typed tool_choice 变体的不透明槽：responses 的
+	// {"type":"mcp"}、{"type":"file_search"} 等托管工具指名形态（官方
+	// ToolChoiceTypesParam / ToolChoiceMcpParam），chat 的
+	// {"type":"custom","custom":{"name":…}} 指名自定义工具形态。这些形状
+	// 逐族互不相同（同是 custom，responses 是扁平 {"type":"custom","name":…}、
+	// chat 是嵌套 custom.name），字段也随官方演进，没有跨族统一维度可建模。
+	//
+	// 语义分两类：Mode 留零值的纯 typed 变体（mcp/file_search）外族出站编不出
+	// 对应形状（tool_choice 缺省），损耗由 DescribeLossy 报出；带 Mode 的指名
+	// 变体（chat custom）结构化字段（Mode/Name）照常供整形与跨族使用，外族按
+	// 具名工具编码，同族则靠 Raw 逐字回写。字节内容视为不可变，Clone 随结构体
+	// 值拷贝；omitempty 承重——IR 级 JSON 序列化下空值不得变成字面量 null 再
+	// 被当成原文。
 	Raw json.RawMessage `json:"raw,omitempty"`
+	// RawFamily 是产出 Raw 的那一族协议名（各 codec 包的 Name 常量，如
+	// "responses" / "chat_completions"）。Raw 只在同族出站才逐字回写：外族
+	// 的 tool_choice 形状不同，把本族原文漏给外族上游会写出对方解析不了的
+	// 键（chat 的嵌套 custom 送进 responses、responses 的 mcp 送进 chat 都
+	// 会挨 400）。因此出站编码器的 Raw 优先分支一律门控 RawFamily == 本族
+	// Name，不匹配就落到结构化分支按 Mode/Name 重编。此前只有 responses 一族
+	// 会填 Raw，同族回写是巧合成立；chat 也开始填 Raw 后必须靠这一维显式判定。
+	// 空值视作「非任何族产出」，谁都不逐字回写（走结构化分支）。
+	RawFamily string `json:"raw_family,omitempty"`
 }
 
 // AllowlistApplies 白名单是否落在「靠收窄实现」的模式上。

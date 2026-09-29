@@ -526,14 +526,73 @@ func decodeToolChoice(raw json.RawMessage) (*ir.ToolChoice, error) {
 			return nil, fmt.Errorf("unknown mode %q", mode)
 		}
 	}
+	// 对象形态是一个 typed 联合（官方 ChatCompletionToolChoiceOptionParam）：
+	// function / custom / allowed_tools 三种变体字段互不相同，必须靠 type 分派，
+	// 不能只认 function.name 有无硬猜——那会把合法的 custom（名字在嵌套
+	// custom.name）与 allowed_tools（没有 function 槽）当畸形 400 掉，客户端
+	// 既拿不到限制也拿不到注记。姊妹 responses 解码器早已收下这两个形态。
+	var typed struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &typed); err != nil {
+		return nil, fmt.Errorf("must be a string or a function object: %w", err)
+	}
+	switch typed.Type {
+	case "allowed_tools":
+		// 白名单形态（官方 ChatCompletionAllowedToolChoiceParam）：type 说的是
+		// 「这是一条选择策略」而不是某个已声明工具的类型，内层 allowed_tools.mode
+		// 才说要不要必须调，allowed_tools.tools 是被允许的工具定义（名字在
+		// 逐条的 function.name）。解成 Mode + AllowedTools：出站没有这一维的
+		// 槽位，靠 codec.ShapeRequest 的 enforceToolAllowlist 把声明的工具收窄
+		// 成白名单交集等价实现（见 ir.ToolChoice.AllowedTools / AllowlistNarrow）。
+		var obj struct {
+			AllowedTools struct {
+				Mode  string            `json:"mode"`
+				Tools []json.RawMessage `json:"tools"`
+			} `json:"allowed_tools"`
+		}
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			return nil, fmt.Errorf("allowed_tools must be an object: %w", err)
+		}
+		out := &ir.ToolChoice{Mode: ir.ToolChoiceAuto}
+		if obj.AllowedTools.Mode == "required" {
+			out.Mode = ir.ToolChoiceAny
+		}
+		out.AllowedTools = decodeAllowedToolNames(obj.AllowedTools.Tools)
+		return out, nil
+	case "custom":
+		// 指名自定义工具（官方 ChatCompletionNamedToolChoiceCustomParam）：名字
+		// 在嵌套 custom.name，不在 function.name。此前被 "function.name is
+		// required" 400 拒掉——客户端的合法请求根本进不来。结构化字段（Mode/
+		// Name）照常供整形与跨族使用；原文进 Raw 并标 RawFamily=本族，只有 chat
+		// 出站会逐字回写（custom 指名换成 function 会让上游在函数表里找不到这个
+		// 自定义工具）。外族按具名工具编码，见 ir.ToolChoice.RawFamily。
+		var obj struct {
+			Custom struct {
+				Name string `json:"name"`
+			} `json:"custom"`
+		}
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			return nil, fmt.Errorf("custom must be an object: %w", err)
+		}
+		if obj.Custom.Name == "" {
+			return nil, fmt.Errorf("custom.name is required")
+		}
+		return &ir.ToolChoice{
+			Mode:      ir.ToolChoiceTool,
+			Name:      obj.Custom.Name,
+			Raw:       append(json.RawMessage(nil), raw...),
+			RawFamily: Name,
+		}, nil
+	}
 	var obj wireToolChoiceObject
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return nil, fmt.Errorf("must be a string or a function object: %w", err)
 	}
 	if obj.Function.Name == "" {
 		// 废弃 function_call 的指名形态是扁平 {"name":"x"}（无 type、无
-		// function 包装）：同值集折进现代槽位时从这一支命中。带 type 而无
-		// function.name 的仍按畸形拒绝——那是现代键写坏了，不是废弃形态。
+		// function 包装）：同值集折进现代槽位时从这一支命中。带 type 而非
+		// function/custom/allowed_tools 的（如写坏的现代键）仍按畸形拒绝。
 		var flat struct {
 			Type string `json:"type"`
 			Name string `json:"name"`
@@ -544,6 +603,41 @@ func decodeToolChoice(raw json.RawMessage) (*ir.ToolChoice, error) {
 		return nil, fmt.Errorf("function.name is required")
 	}
 	return &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: obj.Function.Name}, nil
+}
+
+// decodeAllowedToolNames 取 allowed_tools.tools 里的工具名。本协议的条目形如
+// {"type":"function","function":{"name":…}}；chat 风格的裸 {"name":…} 与裸
+// 字符串也照收——白名单本质是一串名字。认不出来就当没有：宁可少收窄（无从
+// 收窄时整形阶段会报出）也不要凭空捏一个名字进去。与 responses 的同名解码器
+// 同口径（两族的白名单条目形态一致）。
+func decodeAllowedToolNames(list []json.RawMessage) []string {
+	var names []string
+	for _, item := range list {
+		var s string
+		if err := json.Unmarshal(item, &s); err == nil {
+			if s != "" {
+				names = append(names, s)
+			}
+			continue
+		}
+		var obj struct {
+			Name     string `json:"name"`
+			Function struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		}
+		if err := json.Unmarshal(item, &obj); err != nil {
+			continue
+		}
+		name := obj.Name
+		if name == "" {
+			name = obj.Function.Name
+		}
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func badRequest(msg string) error {
