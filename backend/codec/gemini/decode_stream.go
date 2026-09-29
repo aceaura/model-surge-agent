@@ -642,6 +642,16 @@ func DecodeResponseLossy(body []byte) (*ir.Response, []string, error) {
 		return nil, nil, ir.NewError(ir.ErrUpstream, 0, "",
 			fmt.Sprintf("undecodable response: %v", err))
 	}
+	// 错误可能以 200 的 in-band {"error":{...}} 形式到达，而非 HTTP 状态码：
+	// 此时 candidates 往往为空，照解下去会产出一份零内容的伪造「成功」，调用方
+	// 据此记账并报告正常结束，上游的错误信息整段静默蒸发。流式路径对同一
+	// wireResponse 类型已有此守卫（feedOne 的 frame.Error 分支），chat / responses
+	// 的非流式解码同样有此守卫——gemini 非流式此前独缺，按规则 b（流式/非流式
+	// 同损同报）与规则 c（请求/响应、跨族同类同报）补齐。归类与流式同源：
+	// convertError(w.Error.Code, w.Error)，口径不另起一份。
+	if w.Error != nil {
+		return nil, nil, convertError(w.Error.Code, w.Error)
+	}
 	var notes []string
 	maxCandidate := 0
 	nulParts := 0
