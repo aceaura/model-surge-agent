@@ -241,7 +241,7 @@ func (p *Pipeline) finish(w http.ResponseWriter, call Call, up *upstream,
 			err := ir.NewError(ir.ErrUpstream, 0, incompleteStream, msg)
 			rec.ErrorCode = incompleteStream
 			rec.ErrorMessage = msg
-			writeStreamErrorEnd(w, encoder, err, call.Capture)
+			writeStreamErrorEnd(w, encoder, err, call.Capture, rec)
 			return relayclient.OutcomeAbnormal, attemptResult{
 				err: err, committed: true, usage: usage,
 			}
@@ -268,7 +268,7 @@ func (p *Pipeline) finish(w http.ResponseWriter, call Call, up *upstream,
 	rec.ErrorCode = string(err.Kind)
 	rec.ErrorMessage = err.Message
 	if encoder != nil {
-		writeStreamErrorEnd(w, encoder, err, call.Capture)
+		writeStreamErrorEnd(w, encoder, err, call.Capture, rec)
 	} else {
 		// 非流式客户端：聚合到一半断了，没有半个响应可交，只能回错。
 		// 状态码还没写出，所以这里仍能给出正确的 HTTP 错误。
@@ -333,13 +333,23 @@ func (p *Pipeline) clientGone(agg *ir.Aggregator, rec *Record) (string, attemptR
 // 走 encoder 而不是直接调 RenderStreamError：编码器要据此把自己标成
 // 已错误终止，Finish 才不会再补一个正常终止帧，把残缺内容伪装成完整回答。
 func writeStreamErrorEnd(w http.ResponseWriter, encoder codec.StreamEncoder, err *ir.Error,
-	capt *capture.Session) {
+	capt *capture.Session, rec *Record) {
 	frames, encErr := encoder.Encode(ir.Event{Type: ir.EvError, Err: err})
 	if encErr == nil {
 		writeFrames(w, frames, capt)
 	}
 	writeFrames(w, encoder.Finish(), capt)
 	flush(w)
+	// Notes 在 Finish 之后取（与 writeSuccess 同款）：流内错误收尾此前从不收集
+	// 编码器累计的有损说明，于是「流已交付部分内容（其间已有丢弃）后以错误终止」
+	// 时，全程计到的丢弃一律不落流水——与非流式 renderErrorWithLossy（记 param
+	// 丢弃）及流式成功收尾 writeSuccess（记 Notes）两相失衡（规则 b）。这既补上
+	// anthropic 错误帧的 param 维度，也补上错误发生前已累计的内容丢弃维度。
+	if rec != nil {
+		if n, ok := encoder.(codec.StreamNotes); ok {
+			rec.addResponseLossy(n.Notes()...)
+		}
+	}
 }
 
 func writeEvents(w http.ResponseWriter, encoder codec.StreamEncoder, ev ir.Event,

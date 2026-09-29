@@ -467,6 +467,14 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		// 仍然什么都不补，message_delta 与 message_stop 一帧都不会出现。
 		out := e.closeAll()
 		e.errored = true
+		// 流内错误帧与非流式 RenderErrorLossy 渲染的是同一个 {type,message} 信封、
+		// 丢的是同一维 param：非流式经 RenderErrorLossy 报出，流式此前静默——同族
+		// 同损却只在一条路径可见，违规则 b。这里补记同一措辞（共用 errorParamDropNote），
+		// 记位由 Notes() 收尾、经 writeStreamErrorEnd 落进流水（此前流式错误收尾根本
+		// 不收集 Notes()，是这条注记能否浮出的另一半前提）。
+		if ev.Err != nil && ev.Err.Param != "" {
+			e.notes = append(e.notes, errorParamDropNote(ev.Err.Param))
+		}
 		return append(out, RenderStreamError(ev.Err)...), nil
 
 	default:
@@ -739,6 +747,14 @@ func RenderError(err *ir.Error) (int, []byte) {
 	return status, body
 }
 
+// errorParamDropNote 是「anthropic 错误信封丢弃 param 维度」这条说明的唯一措辞
+// 来源：非流式 RenderErrorLossy 与流式 EvError 收尾共用同一函数，保证规则 b 的
+// 同损同措辞——两条路径渲染的是同一个 {type,message} 信封、丢的是同一维，说明
+// 必须逐字一致，否则同一丢弃会因走流式还是非流式而措辞漂移。
+func errorParamDropNote(param string) string {
+	return "dropped error param " + param + " (anthropic error envelope has no param field)"
+}
+
 // RenderErrorLossy 与 RenderError 编出同样的字节，另外报告丢掉的维度。
 //
 // 本协议的错误信封只有 {type,message} 两个位，上游给的 param 无处安放。
@@ -748,8 +764,7 @@ func RenderErrorLossy(err *ir.Error) (int, []byte, []string) {
 	status, env := errorEnvelope(err)
 	var notes []string
 	if err != nil && err.Param != "" {
-		notes = append(notes, "dropped error param "+err.Param+
-			" (anthropic error envelope has no param field)")
+		notes = append(notes, errorParamDropNote(err.Param))
 	}
 	body, marshalErr := json.Marshal(env)
 	if marshalErr != nil {
