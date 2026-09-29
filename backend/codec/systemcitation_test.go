@@ -120,3 +120,25 @@ func TestR72NoSystemCitationSilent(t *testing.T) {
 		}
 	}
 }
+
+// gemini 是唯一会同时产生两条引用注记的族：无标注槽位（!caps.Citations），故
+// Messages 引用走「no slot」注记（CountCitations 只数 Messages），System 引用走
+// 「system prompt」注记（CountSystemCitations 只数 System）。二者 map 键不同
+// （"citations" vs "system citations"）、计数不相交，必须各自独立报出、互不抑制。
+// 钉住这条以防未来误以为「no slot」已涵盖 System 而删掉系统提示注记（或反之），
+// 也证明 R72 未把 gemini 的 Messages 无槽注记挤掉。
+func TestR72GeminiSystemAndMessagesBothNoted(t *testing.T) {
+	req := &ir.Request{Model: "m", MaxTokens: 10,
+		System: []ir.Block{{Type: ir.BlockText, Text: "s",
+			Citations: []ir.Citation{r72portable("https://wx.test/sys")}}},
+		Messages: []ir.Message{{Role: ir.RoleUser, Content: []ir.Block{{Type: ir.BlockText, Text: "u",
+			Citations: []ir.Citation{r72portable("https://wx.test/m1"), r72portable("https://wx.test/m2")}}}}},
+	}
+	got := r72lossy(t, codec.ProtocolGemini, req)
+	if !strings.Contains(got, "1 source annotation(s) on the system prompt") {
+		t.Errorf("gemini 应报 1 条系统提示引用：%q", got)
+	}
+	if !strings.Contains(got, "dropped 2 citation(s): upstream protocol has no slot") {
+		t.Errorf("gemini 应同时报 2 条消息引用无槽位丢弃（与 System 分账、互不抑制）：%q", got)
+	}
+}
