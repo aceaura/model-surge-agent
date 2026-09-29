@@ -102,6 +102,11 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	// 上游也就无从命中，IR.StopReason 对本协议客户端恒不为 stop_sequence——
 	// DescribeResponseStopSequenceLoss 在此是结构性死代码（A2-1 同款：不加死注记）。
 	// 只有 chat_completions 入站（可发 ≤4 条 stop）配 anthropic 上游才真实可触达。
+	// 拒绝档结构化分类（stop_details：策略分类 category 与解释 explanation）是
+	// anthropic 专属响应槽位：本协议响应无对应字段，anthropic 上游拒绝时跨族投影
+	// 来的一律丢弃。终止原因（refusal→incomplete）与拒绝正文条目各有保全/注记，
+	// 独漏这层「为何被拒」的结构化归因。判据与流式 Notes() 同源，字段仅真非空时报出。
+	notes = append(notes, codec.DescribeResponseStopDetailsLoss(resp, Name)...)
 	// 上游响应里工具调用的发起方 provenance 标记投给本协议：本协议 function_call/
 	// custom_tool_call 条目保全 responses 族的 caller/namespace/async（同族不报），
 	// 但没有 anthropic 族的 caller/toolset_name 槽位——anthropic 上游响应的工具调用

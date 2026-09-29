@@ -200,6 +200,14 @@ type Response struct {
 	ServiceTier string `json:"service_tier,omitempty"`
 	// SystemFingerprint Chat 后端配置指纹回显（系统版本变化信号，排障用）。
 	// 仅 chat 族有槽位，跨族出站不投影。
+	//
+	// 跨族丢弃刻意不报有损：它是 chat 上游几乎每份响应都带的ubiquitous结构回声，
+	// 且对 anthropic / responses 客户端毫无意义（那两族协议根本没有「后端配置指纹」
+	// 这个概念，客户端无从使用）。若为它出注记，几乎每一次 chat→外族响应都会多一条
+	// 说明，把真正承载信号的稀有注记（拒绝分类 / 审核回执 / 容器 / 档位越集）淹没——
+	// 正是 codec/shape.go 钉住的原则「那个字段就再也指不出哪条路由真的削弱了请求」。
+	// 与 Created / CompletedAt 同属「ubiquitous 结构回声不报」一档，区别于按条件才出现、
+	// 对目标客户端仍有意义的族专属回执（那些一律报出）。
 	SystemFingerprint string `json:"system_fingerprint,omitempty"`
 	// Container 实际使用的代码执行容器回显（仅 anthropic：id/expires_at/
 	// 已加载技能）。nil = 上游没用容器。客户端要靠它复用容器续话。
@@ -210,11 +218,20 @@ type Response struct {
 	// Created 上游回显的创建时间（chat created / responses created_at，Unix
 	// 秒）。零值=上游没给，出站才回退本地钟——否则同族往返会把上游的真实
 	// 创建时间换成代理本地钟，客户端按 created 做幂等/排序会拿到假数据。
+	//
+	// 跨族丢弃（→anthropic / gemini 无时间戳槽位）刻意不报有损，与
+	// SystemFingerprint 同档：每份响应都带的 ubiquitous 结构回声、目标协议根本
+	// 没有「创建时间」字段，报出会淹没稀有信号注记（见 SystemFingerprint 注释）。
 	Created int64 `json:"created,omitempty"`
 	// CompletedAt 上游回显的生成完成时间（responses completed_at，Unix 秒，
 	// 官方 nullable）。与 Created 配对：客户端拿 completed_at-created_at 量
 	// 上游实际生成时延。仅 responses 一族有槽位，同族往返原值带回；零值=
 	// 上游没给，出站不伪造（omitempty 不写，绝不拿本地钟兜底），跨族不投影。
+	//
+	// 跨族丢弃刻意不报有损，与 Created / SystemFingerprint 同档：ubiquitous
+	// 结构回声、外族协议无「完成时间」概念，报出会淹没稀有信号注记。注意与
+	// 同 struct 里按条件才出现、对外族客户端仍有意义的族专属回执（moderation /
+	// prompt_cache_diagnostics / container / stop_details）区分——那些一律报出。
 	CompletedAt int64 `json:"completed_at,omitempty"`
 	// ResponsesPromptCacheDiagnostics responses 响应侧的提示缓存诊断回执
 	//（官方 response.prompt_cache_diagnostics：cache_miss/cache_hit/

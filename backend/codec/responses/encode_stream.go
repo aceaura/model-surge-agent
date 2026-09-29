@@ -51,6 +51,13 @@ type streamEncoder struct {
 	// droppedTier 没能回显的档位原值（越集，如 anthropic 的 batch），
 	// Notes() 收尾时报出。
 	droppedTier string
+	// droppedStopDetails 记上游拒绝档结构化分类（stop_details：策略分类 category
+	// 与解释 explanation）被本协议丢弃。该对象是 anthropic 专属响应槽位，本协议
+	// 响应无对应字段：终止原因（refusal→incomplete）随 status 投影、拒绝正文条目
+	// 另有槽位，但「为何被拒」的结构化归因整条蒸发。仅在 category / explanation
+	// 至少一维非空时置位（空对象无额外归因可丢，避免误报）。判据与非流式
+	// DescribeResponseStopDetailsLoss 同源、措辞一致（规则 b）。
+	droppedStopDetails bool
 	// droppedImages / droppedFiles 被跳过的模型产出附件块数（image /
 	// audio+document+file）。本族编码器给助手回合输出的 part 只有
 	// output_text / refusal，没有附件形态。不显式拦住会落进 default(text)
@@ -190,6 +197,12 @@ func (e *streamEncoder) Notes() []string {
 	// 命中的停止序列原文刻意不在此报：本协议无 stop_sequences 输入字段，responses
 	// 入站请求带不出停止序列，上游无从命中，终止原因恒不为 stop_sequence——与非流式
 	// codec.go 同一裁定（结构性死代码，A2-1 同款）。
+	// 拒绝档结构化分类（stop_details）：本协议响应无槽位，到达即丢。判据与非流式
+	// DescribeResponseStopDetailsLoss 同源、措辞一致，报出即抽干避免二次重复。
+	if e.droppedStopDetails {
+		notes = append(notes, codec.ResponseStopDetailsDropNote())
+		e.droppedStopDetails = false
+	}
 	return codec.DedupeNotes(notes)
 }
 
@@ -526,6 +539,12 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 	case ir.EvMessageDelta:
 		if ev.StopReason != "" {
 			e.stopReason = ev.StopReason
+		}
+		// 拒绝档结构化分类随收尾帧抵达：本协议响应无 stop_details 槽位，
+		// category / explanation 至少一维非空才记丢弃（空对象无额外归因可丢）。
+		if ev.StopDetails != nil && !e.droppedStopDetails &&
+			(ev.StopDetails.Category != "" || ev.StopDetails.Explanation != "") {
+			e.droppedStopDetails = true
 		}
 		// 上游可能只在收尾帧给档位。终止帧的 response 对象也带
 		// service_tier，晚到的回显还补得上。

@@ -144,6 +144,13 @@ type streamEncoder struct {
 	// DescribeResponseToolProvenanceLoss 同源、措辞一致（规则 b）。
 	toolCallerDropped     int
 	toolRespCallerDropped int
+	// droppedStopDetails 记上游拒绝档结构化分类（stop_details：策略分类 category
+	// 与解释 explanation）被本协议丢弃。该对象是 anthropic 专属响应槽位，本协议
+	// chunk 无对应字段：终止原因（refusal→content_filter）随 finish_reason 投影、
+	// 拒绝正文块另有槽位，但「为何被拒」的结构化归因整条蒸发。仅在 category /
+	// explanation 至少一维非空时置位（空对象无额外归因可丢，避免误报）。判据与
+	// 非流式 DescribeResponseStopDetailsLoss 同源、措辞一致（规则 b）。
+	droppedStopDetails bool
 	// notes 是响应侧丢弃说明，累加后由 Notes 去重排序交出。
 	notes []string
 	// suppressUsageFrame 为真表示客户端明确说了不要那一帧单独的 usage
@@ -240,6 +247,12 @@ func (e *streamEncoder) Notes() []string {
 	// 命中的停止序列原文：本协议 chunk 只有 finish_reason、无字段回显具体哪条序列。
 	// 判据与非流式 EncodeResponseLossy 同源。
 	notes = append(notes, codec.DescribeResponseStopSequenceLoss(e.stopReason, e.stopSequence, Name)...)
+	// 拒绝档结构化分类（stop_details）：本协议 chunk 无槽位，到达即丢。判据与
+	// 非流式 DescribeResponseStopDetailsLoss 同源、措辞一致，报出即抽干避免二次重复。
+	if e.droppedStopDetails {
+		notes = append(notes, codec.ResponseStopDetailsDropNote())
+		e.droppedStopDetails = false
+	}
 	// 提示缓存诊断回执（responses 上游按请求侧 comparison_response_id 索要而回）：
 	// 本协议流式帧无对应槽位，到达即丢。判据与非流式 DescribeResponseClientMetaLoss
 	// 同源、措辞一致，报出即抽干避免二次重复。
@@ -529,6 +542,12 @@ func (e *streamEncoder) Encode(ev ir.Event) ([][]byte, error) {
 		// 命中的停止序列随收尾帧抵达（真流式与整份响应投影都落在 EvMessageDelta）。
 		if ev.StopSequence != "" && e.stopSequence == "" {
 			e.stopSequence = ev.StopSequence
+		}
+		// 拒绝档结构化分类同样随收尾帧抵达：本协议 chunk 无 stop_details 槽位，
+		// category / explanation 至少一维非空才记丢弃（空对象无额外归因可丢）。
+		if ev.StopDetails != nil && !e.droppedStopDetails &&
+			(ev.StopDetails.Category != "" || ev.StopDetails.Explanation != "") {
+			e.droppedStopDetails = true
 		}
 		// 上游可能只在收尾帧给档位（非流式响应投影成事件时就是这样）。
 		e.mapTier(ev.ServiceTier)

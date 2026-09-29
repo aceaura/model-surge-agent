@@ -1596,6 +1596,41 @@ func DescribeResponseRefusalLoss(resp *ir.Response, name string) []string {
 	return []string{ResponseRefusalMergeNote(n)}
 }
 
+// ResponseStopDetailsDropNote 是上游拒绝档结构化分类（stop_details：策略分类
+// category 与人类可读解释 explanation）跨族丢弃的说明。该对象是 anthropic 专属
+// 响应槽位（官方 response.stop_details / message_delta.stop_details，type 恒
+// "refusal"），只有 anthropic 解码器产出、只有 anthropic 出站编码器原样回写。
+// chat_completions / responses 响应都没有 stop_details 字段：终止原因本身能投影
+// （refusal 折成 chat 的 content_filter，由 renderFinishReason 承载）、拒绝正文块
+// 也各有槽位保全，但「按哪条策略分类拒绝、官方给的解释是什么」这一层结构化归因
+// 整条蒸发——客户端只看到「被拒」，看不到「为何被拒」。与 ContainerDropNote /
+// ResponseModerationDropNote 同为「一族专属响应回执被外族丢」的镜像。category /
+// explanation 属会话内容，不进注记。非流式 EncodeResponseLossy 与流式 Notes()
+// 共用本措辞（规则 b）。
+func ResponseStopDetailsDropNote() string {
+	return "dropped the upstream refusal classification (stop_details): this protocol's response has no stop_details field, so the client sees that the turn was refused but not the policy category or the explanation the upstream attached to it"
+}
+
+// DescribeResponseStopDetailsLoss 报非流式响应里拒绝档结构化分类的跨族丢弃。
+// ir.Response.StopDetails 只由 anthropic 解码器从合法上游 stop_details 产出
+// （decodeStopDetails），故非 nil 即隐含 anthropic 上游；anthropic 出站原样回写
+// （同族保全，门控排除），chat_completions / responses 出站无槽位、整条丢弃且此前
+// 静默——而相邻的终止原因折叠（DescribeResponseStopReasonLoss）与拒绝正文块降级
+// （DescribeResponseRefusalLoss）都各有注记，独漏这层结构化归因，属规则 c 缺口。
+// category 与 explanation 官方均可显式 null（与缺省同归空串），二者皆空时没有额外
+// 归因可丢——终止原因（refusal→content_filter）与拒绝正文块已各自处理，故仅在
+// 至少一维非空时报出，杜绝空对象误报（规则 a）。判据与流式编码器 Notes() 的
+// EvMessageDelta 捕获同源。
+func DescribeResponseStopDetailsLoss(resp *ir.Response, name string) []string {
+	if resp == nil || resp.StopDetails == nil || name == ProtocolAnthropic {
+		return nil
+	}
+	if resp.StopDetails.Category == "" && resp.StopDetails.Explanation == "" {
+		return nil
+	}
+	return []string{ResponseStopDetailsDropNote()}
+}
+
 // ToolProvenanceDropShape 判一个工具调用块上的两族发起方 provenance 标记投给
 // 目标协议 name 时是否会被丢。返回两个布尔：anthropicShape（caller/toolset_name，
 // anthropic tool_use 块独有）、responsesShape（caller/namespace/async，responses

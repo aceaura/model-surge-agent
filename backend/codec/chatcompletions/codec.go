@@ -98,6 +98,11 @@ func (inboundCodec) EncodeResponseLossy(resp *ir.Response) ([]byte, []string, er
 	// 命中的停止序列原文：本协议只有 finish_reason、无字段回显具体是哪条序列，
 	// 客户端发了多条 stop 时无法区分命中哪条。判据与流式 Notes() 同源。
 	notes = append(notes, codec.DescribeResponseStopSequenceLoss(resp.StopReason, resp.StopSequence, Name)...)
+	// 拒绝档结构化分类（stop_details：策略分类 category 与解释 explanation）是
+	// anthropic 专属响应槽位：本协议无对应字段，跨族投影来的一律丢弃。终止原因
+	// （refusal→content_filter）与拒绝正文块都各有保全/注记，独漏这层「为何被拒」
+	// 的结构化归因。判据与流式 Notes() 同源，字段仅真非空时报出。
+	notes = append(notes, codec.DescribeResponseStopDetailsLoss(resp, Name)...)
 	// 提示缓存诊断回执（responses 上游按请求侧 prompt_cache_options.
 	// comparison_response_id 索要而回）：本协议响应无 prompt_cache_diagnostics
 	// 槽位，整体丢弃。moderation / metadata 两维本协议是承载族、原样带回不报，
