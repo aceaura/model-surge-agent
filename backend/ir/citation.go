@@ -124,3 +124,19 @@ func CountNonPortableCitations(r *Request) int {
 	}
 	return n
 }
+
+// CountSystemCitations 统计系统提示（req.System）块上携带的引用条数（用于有损诊断）。
+// 与上面三个只遍历 Messages 的计数器分账：系统提示是独立的 []Block，不挂在任何
+// 消息角色上。三外族出站编码器都把 system 收敛成纯文本——responses 写成字符串
+// instructions（joinText 只取 BlockText.Text）、chat 的 system 消息只走 encodeContent
+// 的 text/media 槽、gemini 的 systemInstruction part 只装 Text——系统提示在任何
+// 协议都没有 annotations 槽位，故其上的引用无论可移植与否一律整组丢弃。
+// anthropic 同族经 encodeBlocks 写回 Citations、无损往返，由调用方按 name 门控排除，
+// 不在本计数器的 reporting 范围内（计数器本身只数 IR 维度，不判目标协议）。
+func CountSystemCitations(r *Request) int {
+	n := 0
+	for _, b := range r.System {
+		n += len(b.Citations)
+	}
+	return n
+}

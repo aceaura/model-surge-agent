@@ -365,6 +365,16 @@ func DescribeLossy(req *ir.Request, name string, caps Capabilities) []string {
 		if ctx, cites := countRequestDocConfig(req); ctx > 0 || cites > 0 {
 			notes["document config"] = DocumentConfigDropNote(ctx, cites)
 		}
+		// 系统提示（req.System）块上的来源标注：三外族都把 system 收敛成纯文本
+		// （responses 的字符串 instructions / chat 的 system 消息 text 槽 / gemini 的
+		// systemInstruction part），系统提示在任何协议都没有 annotations 槽位，引用
+		// 整组丢弃。与上面 Messages 侧的 citations/stray citations 分账——那三个
+		// 计数器（CountCitations/CountNonPortableCitations/CountStrayPortableCitations）
+		// 只遍历 req.Messages、看不见独立的 req.System，故系统提示引用此前一律静默。
+		// anthropic 一律不报：同族经 encodeBlocks 写回 Citations、原样往返。
+		if n := ir.CountSystemCitations(req); n > 0 {
+			notes["system citations"] = SystemCitationDropNote(n)
+		}
 	}
 
 	// assistant 历史里的音频引用（chat 多轮音频上下文的 {audio:{id}}）：
@@ -1904,6 +1914,20 @@ func CitationDropNote(n int) string {
 func StrayCitationDropNote(n int) string {
 	return fmt.Sprintf(
 		"dropped %d source annotation(s) on non-assistant message(s): this protocol only annotates assistant messages, so citations the client attached to user/system/tool history have no slot and cannot be re-encoded", n)
+}
+
+// SystemCitationDropNote 系统提示引用丢失注记：客户端把来源标注挂在 system 提示的
+// 文本块上（Anthropic Citations API 的输入侧形态，经 decodeContent(w.System) 落进
+// IR 的 req.System），但三外族都把系统提示收敛成纯文本——responses 写成字符串
+// instructions、chat 的 system 消息只有 text/media 槽、gemini 的 systemInstruction
+// part 只装 Text——系统提示在任何角色都没有 annotations 槽位，引用整组丢弃。
+// 与 CitationDropNote（文档下标形态本协议渲染不下）、StrayCitationDropNote（可移植
+// 引用挂错非 assistant 消息）分账：那两条是 req.Messages 上的逐条损耗，这里是
+// req.System 这一独立 []Block 的整体无槽，三个 Messages 级计数器都遍历不到它。
+// anthropic 同族经 encodeBlocks 写回 Citations、无损往返，一律不报。
+func SystemCitationDropNote(n int) string {
+	return fmt.Sprintf(
+		"dropped %d source annotation(s) on the system prompt: this protocol encodes the system instruction as plain text with no annotation slot, so citations attached to system-prompt blocks cannot be re-encoded", n)
 }
 
 // NonURLCitationDropNote 解码侧「非 url_citation 标注」丢失注记：responses 上游
