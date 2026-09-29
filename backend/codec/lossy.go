@@ -1196,23 +1196,36 @@ func describeParamsLossy(req *ir.Request, name string, caps Capabilities, note, 
 // 预算↔档位折叠（轮次14）：思考强度有两种表达——anthropic/gemini 用 token
 // 预算（BudgetTokens），chat/responses 用粗档位（Effort）。跨这两组时编码器
 // 会互折，此前无人报：
-//   - budget→effort（chat/responses）：客户端给的精确 token 数被 effortForBudget
-//     折成 low/medium/high，精确预算送不到上游——是改写（rewrote），不是丢弃。
+//   - budget→effort（chat/responses，客户端给了预算）：精确 token 数被
+//     effortForBudget 折成 low/medium/high，精确预算送不到上游——改写（rewrote）。
+//   - 无强度→effort（chat/responses，客户端既没档位也没预算，轮次80 补）：
+//     effortForBudget(0) 合成一个 medium 档，是替客户端发明强度——兜底（filled）。
 //   - effort→budget（anthropic 非 adaptive / gemini）：目标用 token 数表达强度、
 //     缺预算会被拒，编码器用 budgetForEffort 合成一个——是兜底（filled）。
 //
-// 两个谓词与各编码器的折叠/兜底分支严格同条件，避免假阳性。
+// 各分支的触发条件与对应编码器严格同条件（含 BudgetTokens 的符号），避免假阳/漏报。
 func describeThinkingModernLossy(req *ir.Request, name string, caps Capabilities, note, filled, rewrote func(field, why string)) {
 	t := req.Thinking
 	if t == nil {
 		return
 	}
-	// budget→effort：只在「开了思考、给了精确预算、没给档位」且目标是 chat/
-	// responses 时发生（与 chatcompletions/encode_request.go、responses/
-	// encode_request.go 的 effortForBudget 折叠分支同条件）。
-	if t.On() && t.Effort == "" && t.BudgetTokens > 0 &&
+	// 目标是 chat/responses（档位协议）时，编码器用 effortForBudget 决定出站
+	// 档位，分两种客户端输入（与 chatcompletions/encode_request.go、responses/
+	// encode_request.go 的 `if Effort == "" { effortForBudget(...) }` 折叠分支
+	// 同条件）：
+	//   - 给了精确预算：折成 low/medium/high，精确预算送不到上游——改写（rewrote）。
+	//   - 连预算都没给（如 Anthropic 入站 thinking:{"type":"enabled"} 不带
+	//     budget_tokens）：effortForBudget(0) 合成一个 medium 档。这是替客户端
+	//     发明了一个它从没说过的强度值，与下面 effort→budget 合成预算同属「兜底
+	//     改了客户端没给的东西」，必须留痕（对齐 max_tokens filled 纪律）——否则
+	//     长回答在一个客户端从未设过的档位处被限制，无从查证。
+	if t.On() && t.Effort == "" &&
 		(name == ProtocolChatCompletions || name == ProtocolResponses) {
-		rewrote("thinking budget", "the target protocol takes only a coarse effort level, the exact token budget was folded into an effort tier and does not reach the upstream verbatim")
+		if t.BudgetTokens > 0 {
+			rewrote("thinking budget", "the target protocol takes only a coarse effort level, the exact token budget was folded into an effort tier and does not reach the upstream verbatim")
+		} else {
+			filled("thinking effort", "the client enabled thinking without an effort level or a token budget, so a default effort tier was synthesized for the target protocol")
+		}
 	}
 	// effort→budget：目标用 token 预算表达强度、缺预算会被拒，编码器合成一个。
 	// gemini 恒用预算；anthropic 仅非 adaptive 的 enabled 档需要预算（adaptive
