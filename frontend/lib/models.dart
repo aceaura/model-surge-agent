@@ -24,13 +24,13 @@ class Health {
   bool get cacheDisabled => cache == 'disabled';
 
   static Health fromJson(Map<String, dynamic> j) => Health(
-        status: j['status'] as String? ?? 'unknown',
-        database: j['database'] as String? ?? 'unknown',
-        cache: j['cache'] as String? ?? 'unknown',
-        relay: j['relay'] as String? ?? 'unknown',
-        outboxPending: j['outbox_pending'] as int? ?? 0,
-        outboxDead: j['outbox_dead'] as int? ?? 0,
-      );
+    status: j['status'] as String? ?? 'unknown',
+    database: j['database'] as String? ?? 'unknown',
+    cache: j['cache'] as String? ?? 'unknown',
+    relay: j['relay'] as String? ?? 'unknown',
+    outboxPending: j['outbox_pending'] as int? ?? 0,
+    outboxDead: j['outbox_dead'] as int? ?? 0,
+  );
 }
 
 class RequestSummary {
@@ -81,30 +81,30 @@ class RequestSummary {
   final String errorMessage;
 
   static RequestSummary fromJson(Map<String, dynamic> j) => RequestSummary(
-        requestId: j['request_id'] as String? ?? '',
-        at: _time(j['at']),
-        inboundProtocol: j['inbound_protocol'] as String? ?? '',
-        outboundProtocol: j['outbound_protocol'] as String? ?? '',
-        userModel: j['user_model'] as String? ?? '',
-        modelId: j['model_id'] as String? ?? '',
-        account: j['account'] as String? ?? '',
-        outcome: j['outcome'] as String? ?? '',
-        statusCode: j['status_code'] as int? ?? 0,
-        attempts: j['attempts'] as int? ?? 0,
-        triedIds: (j['tried_ids'] as List<dynamic>? ?? const [])
-            .map((e) => e as String)
-            .toList(),
-        committed: j['committed'] as bool? ?? false,
-        stream: j['stream'] as bool? ?? false,
-        usageEstimated: j['usage_estimated'] as bool? ?? false,
-        inputTokens: j['input_tokens'] as int? ?? 0,
-        outputTokens: j['output_tokens'] as int? ?? 0,
-        cacheReadTokens: j['cache_read_tokens'] as int? ?? 0,
-        latencyMs: j['latency_ms'] as int? ?? 0,
-        firstTokenMs: j['first_token_ms'] as int? ?? 0,
-        errorCode: j['error_code'] as String? ?? '',
-        errorMessage: j['error_message'] as String? ?? '',
-      );
+    requestId: j['request_id'] as String? ?? '',
+    at: _time(j['at']),
+    inboundProtocol: j['inbound_protocol'] as String? ?? '',
+    outboundProtocol: j['outbound_protocol'] as String? ?? '',
+    userModel: j['user_model'] as String? ?? '',
+    modelId: j['model_id'] as String? ?? '',
+    account: j['account'] as String? ?? '',
+    outcome: j['outcome'] as String? ?? '',
+    statusCode: j['status_code'] as int? ?? 0,
+    attempts: j['attempts'] as int? ?? 0,
+    triedIds: (j['tried_ids'] as List<dynamic>? ?? const [])
+        .map((e) => e as String)
+        .toList(),
+    committed: j['committed'] as bool? ?? false,
+    stream: j['stream'] as bool? ?? false,
+    usageEstimated: j['usage_estimated'] as bool? ?? false,
+    inputTokens: j['input_tokens'] as int? ?? 0,
+    outputTokens: j['output_tokens'] as int? ?? 0,
+    cacheReadTokens: j['cache_read_tokens'] as int? ?? 0,
+    latencyMs: j['latency_ms'] as int? ?? 0,
+    firstTokenMs: j['first_token_ms'] as int? ?? 0,
+    errorCode: j['error_code'] as String? ?? '',
+    errorMessage: j['error_message'] as String? ?? '',
+  );
 }
 
 class RequestPage {
@@ -118,11 +118,11 @@ class RequestPage {
   bool get hasMore => nextCursor.isNotEmpty;
 
   static RequestPage fromJson(Map<String, dynamic> j) => RequestPage(
-        requests: (j['requests'] as List<dynamic>? ?? const [])
-            .map((e) => RequestSummary.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        nextCursor: j['next_cursor'] as String? ?? '',
-      );
+    requests: (j['requests'] as List<dynamic>? ?? const [])
+        .map((e) => RequestSummary.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    nextCursor: j['next_cursor'] as String? ?? '',
+  );
 }
 
 class LiveEntry {
@@ -163,23 +163,23 @@ class LiveEntry {
   final String errorCode;
 
   static LiveEntry fromJson(Map<String, dynamic> j) => LiveEntry(
-        requestId: j['request_id'] as String? ?? '',
-        at: _time(j['at']),
-        inboundProtocol: j['inbound_protocol'] as String? ?? '',
-        outboundProtocol: j['outbound_protocol'] as String? ?? '',
-        userModel: j['user_model'] as String? ?? '',
-        modelId: j['model_id'] as String? ?? '',
-        account: j['account'] as String? ?? '',
-        outcome: j['outcome'] as String? ?? '',
-        statusCode: j['status_code'] as int? ?? 0,
-        attempts: j['attempts'] as int? ?? 0,
-        stream: j['stream'] as bool? ?? false,
-        latencyMs: j['latency_ms'] as int? ?? 0,
-        firstTokenMs: j['first_token_ms'] as int? ?? 0,
-        inputTokens: j['input_tokens'] as int? ?? 0,
-        outputTokens: j['output_tokens'] as int? ?? 0,
-        errorCode: j['error_code'] as String? ?? '',
-      );
+    requestId: j['request_id'] as String? ?? '',
+    at: _time(j['at']),
+    inboundProtocol: j['inbound_protocol'] as String? ?? '',
+    outboundProtocol: j['outbound_protocol'] as String? ?? '',
+    userModel: j['user_model'] as String? ?? '',
+    modelId: j['model_id'] as String? ?? '',
+    account: j['account'] as String? ?? '',
+    outcome: j['outcome'] as String? ?? '',
+    statusCode: j['status_code'] as int? ?? 0,
+    attempts: j['attempts'] as int? ?? 0,
+    stream: j['stream'] as bool? ?? false,
+    latencyMs: j['latency_ms'] as int? ?? 0,
+    firstTokenMs: j['first_token_ms'] as int? ?? 0,
+    inputTokens: j['input_tokens'] as int? ?? 0,
+    outputTokens: j['output_tokens'] as int? ?? 0,
+    errorCode: j['error_code'] as String? ?? '',
+  );
 }
 
 class LivePage {
@@ -194,11 +194,11 @@ class LivePage {
   static const empty = LivePage(entries: [], degraded: false);
 
   static LivePage fromJson(Map<String, dynamic> j) => LivePage(
-        entries: (j['entries'] as List<dynamic>? ?? const [])
-            .map((e) => LiveEntry.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        degraded: j['degraded'] as bool? ?? false,
-      );
+    entries: (j['entries'] as List<dynamic>? ?? const [])
+        .map((e) => LiveEntry.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    degraded: j['degraded'] as bool? ?? false,
+  );
 }
 
 class StatBucket {
@@ -219,13 +219,13 @@ class StatBucket {
   final int avgLatencyMs;
 
   static StatBucket fromJson(Map<String, dynamic> j) => StatBucket(
-        minute: _time(j['minute']),
-        total: j['total'] as int? ?? 0,
-        outcomes: _counts(j['outcomes']),
-        inputTokens: j['input_tokens'] as int? ?? 0,
-        outputTokens: j['output_tokens'] as int? ?? 0,
-        avgLatencyMs: j['avg_latency_ms'] as int? ?? 0,
-      );
+    minute: _time(j['minute']),
+    total: j['total'] as int? ?? 0,
+    outcomes: _counts(j['outcomes']),
+    inputTokens: j['input_tokens'] as int? ?? 0,
+    outputTokens: j['output_tokens'] as int? ?? 0,
+    avgLatencyMs: j['avg_latency_ms'] as int? ?? 0,
+  );
 }
 
 class StatTotals {
@@ -246,17 +246,22 @@ class StatTotals {
   final double qps;
 
   static const empty = StatTotals(
-      total: 0, outcomes: {}, inputTokens: 0, outputTokens: 0,
-      successRate: 0, qps: 0);
+    total: 0,
+    outcomes: {},
+    inputTokens: 0,
+    outputTokens: 0,
+    successRate: 0,
+    qps: 0,
+  );
 
   static StatTotals fromJson(Map<String, dynamic> j) => StatTotals(
-        total: j['total'] as int? ?? 0,
-        outcomes: _counts(j['outcomes']),
-        inputTokens: j['input_tokens'] as int? ?? 0,
-        outputTokens: j['output_tokens'] as int? ?? 0,
-        successRate: (j['success_rate'] as num? ?? 0).toDouble(),
-        qps: (j['qps'] as num? ?? 0).toDouble(),
-      );
+    total: j['total'] as int? ?? 0,
+    outcomes: _counts(j['outcomes']),
+    inputTokens: j['input_tokens'] as int? ?? 0,
+    outputTokens: j['output_tokens'] as int? ?? 0,
+    successRate: (j['success_rate'] as num? ?? 0).toDouble(),
+    qps: (j['qps'] as num? ?? 0).toDouble(),
+  );
 }
 
 class Stats {
@@ -273,17 +278,22 @@ class Stats {
   final bool degraded;
 
   static const empty = Stats(
-      window: '1h', buckets: [], totals: StatTotals.empty, degraded: false);
+    window: '1h',
+    buckets: [],
+    totals: StatTotals.empty,
+    degraded: false,
+  );
 
   static Stats fromJson(Map<String, dynamic> j) => Stats(
-        window: j['window'] as String? ?? '',
-        buckets: (j['buckets'] as List<dynamic>? ?? const [])
-            .map((e) => StatBucket.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        totals: StatTotals.fromJson(
-            j['totals'] as Map<String, dynamic>? ?? const {}),
-        degraded: j['degraded'] as bool? ?? false,
-      );
+    window: j['window'] as String? ?? '',
+    buckets: (j['buckets'] as List<dynamic>? ?? const [])
+        .map((e) => StatBucket.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    totals: StatTotals.fromJson(
+      j['totals'] as Map<String, dynamic>? ?? const {},
+    ),
+    degraded: j['degraded'] as bool? ?? false,
+  );
 }
 
 class OutboxEntry {
@@ -308,15 +318,15 @@ class OutboxEntry {
   final DateTime? createdAt;
 
   static OutboxEntry fromJson(Map<String, dynamic> j) => OutboxEntry(
-        reportId: j['report_id'] as String? ?? '',
-        requestId: j['request_id'] as String? ?? '',
-        modelId: j['model_id'] as String? ?? '',
-        outcome: j['outcome'] as String? ?? '',
-        attempts: j['attempts'] as int? ?? 0,
-        nextAttemptAt: _time(j['next_attempt_at']),
-        lastError: j['last_error'] as String? ?? '',
-        createdAt: _time(j['created_at']),
-      );
+    reportId: j['report_id'] as String? ?? '',
+    requestId: j['request_id'] as String? ?? '',
+    modelId: j['model_id'] as String? ?? '',
+    outcome: j['outcome'] as String? ?? '',
+    attempts: j['attempts'] as int? ?? 0,
+    nextAttemptAt: _time(j['next_attempt_at']),
+    lastError: j['last_error'] as String? ?? '',
+    createdAt: _time(j['created_at']),
+  );
 }
 
 class ModelInfo {
@@ -340,13 +350,13 @@ class ModelInfo {
   final bool outboundReady;
 
   static ModelInfo fromJson(Map<String, dynamic> j) => ModelInfo(
-        name: j['name'] as String? ?? '',
-        collection: j['collection'] as String? ?? '',
-        policy: j['policy'] as String? ?? '',
-        protocol: j['protocol'] as String? ?? '',
-        enabled: j['enabled'] as bool? ?? false,
-        outboundReady: j['outbound_ready'] as bool? ?? false,
-      );
+    name: j['name'] as String? ?? '',
+    collection: j['collection'] as String? ?? '',
+    policy: j['policy'] as String? ?? '',
+    protocol: j['protocol'] as String? ?? '',
+    enabled: j['enabled'] as bool? ?? false,
+    outboundReady: j['outbound_ready'] as bool? ?? false,
+  );
 }
 
 class ModelsPage {
@@ -363,13 +373,13 @@ class ModelsPage {
   final bool cached;
 
   static ModelsPage fromJson(Map<String, dynamic> j) => ModelsPage(
-        models: (j['models'] as List<dynamic>? ?? const [])
-            .map((e) => ModelInfo.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        inbound: _strings(j['inbound']),
-        outbound: _strings(j['outbound']),
-        cached: j['cached'] as bool? ?? false,
-      );
+    models: (j['models'] as List<dynamic>? ?? const [])
+        .map((e) => ModelInfo.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    inbound: _strings(j['inbound']),
+    outbound: _strings(j['outbound']),
+    cached: j['cached'] as bool? ?? false,
+  );
 }
 
 /// outcome 语义由后端的 relayclient 定义，界面按它上色。

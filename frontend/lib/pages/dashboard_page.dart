@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../api_client.dart';
 import '../models.dart';
+import '../theme.dart';
 import '../ui/feedback.dart';
 import '../ui/spark.dart';
 
@@ -84,16 +85,29 @@ class _DashboardPageState extends State<DashboardPage> {
         onOpenSettings: widget.onOpenSettings,
       );
     }
+    final t = context.tokens;
     return Column(
       children: [
-        if (_stats.degraded)
-          const DegradedBanner(message: '缓存不可用，统计为空不代表没有流量'),
+        if (_stats.degraded) const DegradedBanner(message: '缓存不可用，统计为空不代表没有流量'),
+        // 页头:大标题 + 弱色窗口标注 + 右侧窗口选择器(与姊妹仓页头同一版式)
         Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 14),
           child: Row(
             children: [
-              Text('统计窗口', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(width: 16),
+              Text(
+                '总览',
+                style: TextStyle(
+                  fontSize: 21,
+                  fontWeight: FontWeight.w700,
+                  color: t.ink,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '窗口 $_window',
+                style: TextStyle(fontSize: 12.5, color: t.faint),
+              ),
+              const Spacer(),
               SegmentedButton<String>(
                 segments: [
                   for (final w in _windows)
@@ -102,37 +116,37 @@ class _DashboardPageState extends State<DashboardPage> {
                 selected: {_window},
                 onSelectionChanged: (s) => _pick(s.first),
               ),
-              const Spacer(),
+              const SizedBox(width: 10),
               if (_loading)
                 const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2)),
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
             ],
           ),
         ),
         Expanded(
           child: ListView(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
             children: [
               _healthCard(context),
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
               _totalsRow(context),
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
               _outcomesCard(context),
-              const SizedBox(height: 16),
-              _trendCard(context, '请求量（每分钟）',
-                  [for (final b in _stats.buckets) b.total],
-                  Theme.of(context).colorScheme.primary),
-              const SizedBox(height: 16),
-              _trendCard(context, '输出 token（每分钟）',
-                  [for (final b in _stats.buckets) b.outputTokens],
-                  Theme.of(context).colorScheme.tertiary),
-              const SizedBox(height: 16),
-              _trendCard(context, '平均延迟 ms（每分钟）',
-                  [for (final b in _stats.buckets) b.avgLatencyMs],
-                  Theme.of(context).colorScheme.secondary),
-              const SizedBox(height: 24),
+              const SizedBox(height: 12),
+              _trendCard(context, '请求量（每分钟）', [
+                for (final b in _stats.buckets) b.total,
+              ], t.primary),
+              const SizedBox(height: 12),
+              _trendCard(context, '输出 token（每分钟）', [
+                for (final b in _stats.buckets) b.outputTokens,
+              ], t.violet),
+              const SizedBox(height: 12),
+              _trendCard(context, '平均延迟 ms（每分钟）', [
+                for (final b in _stats.buckets) b.avgLatencyMs,
+              ], t.warn),
             ],
           ),
         ),
@@ -163,61 +177,90 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Widget _dot(BuildContext context, String label, String state) {
-    final scheme = Theme.of(context).colorScheme;
+    final t = context.tokens;
     // disabled 用中性色：它是部署选择而不是故障。
     final color = switch (state) {
-      'ok' => scheme.primary,
-      'disabled' => scheme.outline,
-      _ => scheme.error,
+      'ok' => t.success,
+      'disabled' => t.faint,
+      _ => t.danger,
     };
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(Icons.circle, size: 10, color: color),
+        Icon(Icons.circle, size: 9, color: color),
         const SizedBox(width: 6),
-        Text('$label $state'),
+        Text('$label $state', style: TextStyle(fontSize: 12.5, color: t.dim)),
       ],
     );
   }
 
-  Widget _pair(String label, String value) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [Text('$label '), Text(value)],
-      );
+  Widget _pair(String label, String value) {
+    final t = context.tokens;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label, style: TextStyle(fontSize: 12.5, color: t.faint)),
+        const SizedBox(width: 6),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
+            color: t.ink,
+          ),
+        ),
+      ],
+    );
+  }
 
   Widget _totalsRow(BuildContext context) {
     final t = _stats.totals;
+    final metrics = <(String, String)>[
+      ('请求数', '${t.total}'),
+      ('QPS', t.qps.toStringAsFixed(3)),
+      (
+        '成功率',
+        t.total == 0 ? '-' : '${(t.successRate * 100).toStringAsFixed(1)}%',
+      ),
+      ('输入 token', compact(t.inputTokens)),
+      ('输出 token', compact(t.outputTokens)),
+    ];
     return Row(
       children: [
-        _metric(context, '请求数', '${t.total}'),
-        _metric(context, 'QPS', t.qps.toStringAsFixed(3)),
-        _metric(context, '成功率',
-            t.total == 0 ? '-' : '${(t.successRate * 100).toStringAsFixed(1)}%'),
-        _metric(context, '输入 token', compact(t.inputTokens)),
-        _metric(context, '输出 token', compact(t.outputTokens)),
+        for (var i = 0; i < metrics.length; i++) ...[
+          if (i > 0) const SizedBox(width: 12),
+          Expanded(child: _metric(context, metrics[i].$1, metrics[i].$2)),
+        ],
       ],
     );
   }
 
   Widget _metric(BuildContext context, String label, String value) {
-    return Expanded(
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label, style: Theme.of(context).textTheme.bodySmall),
-              const SizedBox(height: 4),
-              Text(value, style: Theme.of(context).textTheme.headlineSmall),
-            ],
-          ),
+    final t = context.tokens;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: TextStyle(fontSize: 12, color: t.faint)),
+            const SizedBox(height: 6),
+            Text(
+              value,
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+                color: t.ink,
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
   Widget _outcomesCard(BuildContext context) {
+    final t = context.tokens;
     final counts = _stats.totals.outcomes;
     return Card(
       child: Padding(
@@ -225,11 +268,17 @@ class _DashboardPageState extends State<DashboardPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('outcome 分布',
-                style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              'outcome 分布',
+              style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w600,
+                color: t.ink,
+              ),
+            ),
             const SizedBox(height: 12),
             Wrap(
-              spacing: 16,
+              spacing: 14,
               runSpacing: 8,
               children: [
                 for (final o in allOutcomes)
@@ -238,7 +287,10 @@ class _DashboardPageState extends State<DashboardPage> {
                     children: [
                       OutcomeChip(outcome: o),
                       const SizedBox(width: 6),
-                      Text('${counts[o] ?? 0}'),
+                      Text(
+                        '${counts[o] ?? 0}',
+                        style: TextStyle(fontSize: 12.5, color: t.dim),
+                      ),
                     ],
                   ),
               ],
@@ -250,14 +302,26 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Widget _trendCard(
-      BuildContext context, String title, List<int> values, Color color) {
+    BuildContext context,
+    String title,
+    List<int> values,
+    Color color,
+  ) {
+    final t = context.tokens;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w600,
+                color: t.ink,
+              ),
+            ),
             const SizedBox(height: 12),
             Spark(values: values, color: color),
           ],

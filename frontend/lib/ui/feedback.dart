@@ -4,14 +4,15 @@ library;
 import 'package:flutter/material.dart';
 
 import '../api_client.dart';
+import '../theme.dart';
 
 /// describeError 把异常转成面向运维者的文案。
 String describeError(Object error) => switch (error) {
-      UnreachableException e => '${e.message}\n请确认服务已启动、地址可达。',
-      UnauthorizedException _ => '管理密钥无效，请到设置页更新。',
-      ApiErrorException e => e.message,
-      _ => '$error',
-    };
+  UnreachableException e => '${e.message}\n请确认服务已启动、地址可达。',
+  UnauthorizedException _ => '管理密钥无效，请到设置页更新。',
+  ApiErrorException e => e.message,
+  _ => '$error',
+};
 
 /// needsSettings 判断该错误是否应引导运维者去设置页。
 bool needsSettings(Object error) =>
@@ -43,8 +44,10 @@ class ErrorPanel extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Icon(Icons.error_outline,
-                        color: Theme.of(context).colorScheme.error),
+                    Icon(
+                      Icons.error_outline,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
                     const SizedBox(width: 8),
                     const Text('请求失败'),
                   ],
@@ -76,8 +79,9 @@ class ErrorPanel extends StatelessWidget {
 
 /// showError 用于提交类操作的失败提示（列表已有内容，不该整页替换）。
 void showError(BuildContext context, Object error) {
-  ScaffoldMessenger.of(context)
-      .showSnackBar(SnackBar(content: Text(describeError(error))));
+  ScaffoldMessenger.of(
+    context,
+  ).showSnackBar(SnackBar(content: Text(describeError(error))));
 }
 
 void showInfo(BuildContext context, String message) {
@@ -105,7 +109,8 @@ class BusyButton extends StatelessWidget {
           ? const SizedBox(
               width: 16,
               height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2))
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
           : child,
     );
   }
@@ -122,18 +127,24 @@ class DegradedBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final t = context.tokens;
     return Container(
       width: double.infinity,
-      color: scheme.errorContainer,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      margin: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+      decoration: BoxDecoration(
+        color: t.dangerSoft,
+        borderRadius: BorderRadius.circular(AppConst.radiusCtrl),
+      ),
       child: Row(
         children: [
-          Icon(Icons.cloud_off, size: 16, color: scheme.onErrorContainer),
+          Icon(Icons.cloud_off, size: 15, color: t.danger),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(message,
-                style: TextStyle(color: scheme.onErrorContainer)),
+            child: Text(
+              message,
+              style: TextStyle(fontSize: 12.5, color: t.danger),
+            ),
           ),
         ],
       ),
@@ -144,12 +155,23 @@ class DegradedBanner extends StatelessWidget {
 /// outcomeColor 给 outcome 上色。context_exceeded 不算目标的失败
 /// （输入太长是客户端的问题），所以它不用错误色。
 Color outcomeColor(BuildContext context, String outcome) {
-  final scheme = Theme.of(context).colorScheme;
+  final t = context.tokens;
   return switch (outcome) {
-    'normal' => scheme.primary,
-    'retrying' => scheme.tertiary,
-    'context_exceeded' => scheme.outline,
-    _ => scheme.error,
+    'normal' => t.success,
+    'retrying' => t.warn,
+    'context_exceeded' => t.faint,
+    _ => t.danger,
+  };
+}
+
+/// outcomeSoft 是 outcomeColor 对应的软底，用于 chip 背景。
+Color outcomeSoft(BuildContext context, String outcome) {
+  final t = context.tokens;
+  return switch (outcome) {
+    'normal' => t.successSoft,
+    'retrying' => t.warnSoft,
+    'context_exceeded' => t.bg,
+    _ => t.dangerSoft,
   };
 }
 
@@ -161,14 +183,20 @@ class OutcomeChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (outcome.isEmpty) return const Text('-');
-    final color = outcomeColor(context, outcome);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        border: Border.all(color: color),
-        borderRadius: BorderRadius.circular(4),
+        color: outcomeSoft(context, outcome),
+        borderRadius: BorderRadius.circular(7),
       ),
-      child: Text(outcome, style: TextStyle(color: color, fontSize: 12)),
+      child: Text(
+        outcome,
+        style: TextStyle(
+          fontSize: 11.5,
+          fontWeight: FontWeight.w600,
+          color: outcomeColor(context, outcome),
+        ),
+      ),
     );
   }
 }

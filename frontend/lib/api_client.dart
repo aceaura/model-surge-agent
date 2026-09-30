@@ -59,8 +59,9 @@ class ApiClient {
       for (final e in query.entries)
         if (e.value.isNotEmpty) e.key: e.value,
     };
-    return Uri.parse('$root$path').replace(
-        queryParameters: trimmed.isEmpty ? null : trimmed);
+    return Uri.parse(
+      '$root$path',
+    ).replace(queryParameters: trimmed.isEmpty ? null : trimmed);
   }
 
   Future<Map<String, dynamic>> _send(String method, Uri uri) async {
@@ -128,15 +129,19 @@ class ApiClient {
 
   Future<RequestSummary> getRequest(String requestId) async {
     final body = await _send(
-        'GET', _uri('/admin/requests/${Uri.encodeComponent(requestId)}'));
+      'GET',
+      _uri('/admin/requests/${Uri.encodeComponent(requestId)}'),
+    );
     return RequestSummary.fromJson(body);
   }
 
-  Future<LivePage> live({int limit = 100}) async =>
-      LivePage.fromJson(await _send('GET', _uri('/admin/live', {'limit': '$limit'})));
+  Future<LivePage> live({int limit = 100}) async => LivePage.fromJson(
+    await _send('GET', _uri('/admin/live', {'limit': '$limit'})),
+  );
 
-  Future<Stats> stats({String window = '1h'}) async =>
-      Stats.fromJson(await _send('GET', _uri('/admin/stats', {'window': window})));
+  Future<Stats> stats({String window = '1h'}) async => Stats.fromJson(
+    await _send('GET', _uri('/admin/stats', {'window': window})),
+  );
 
   Future<List<OutboxEntry>> listOutbox({required String state}) async {
     final body = await _send('GET', _uri('/admin/outbox', {'state': state}));
@@ -146,8 +151,10 @@ class ApiClient {
   }
 
   /// retryOutbox 重置死信的下次尝试时间，由后台 worker 接手重放。
-  Future<void> retryOutbox(String reportId) => _send('POST',
-      _uri('/admin/outbox/${Uri.encodeComponent(reportId)}/retry'));
+  Future<void> retryOutbox(String reportId) => _send(
+    'POST',
+    _uri('/admin/outbox/${Uri.encodeComponent(reportId)}/retry'),
+  );
 
   Future<ModelsPage> listModels() async =>
       ModelsPage.fromJson(await _send('GET', _uri('/admin/models')));

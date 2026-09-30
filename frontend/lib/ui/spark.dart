@@ -24,8 +24,7 @@ class Spark extends StatelessWidget {
       return SizedBox(
         height: height,
         child: Center(
-          child: Text('窗口内没有数据',
-              style: Theme.of(context).textTheme.bodySmall),
+          child: Text('窗口内没有数据', style: Theme.of(context).textTheme.bodySmall),
         ),
       );
     }
@@ -55,7 +54,9 @@ class _SparkPainter extends CustomPainter {
     for (var i = 0; i < values.length; i++) {
       final ratio = values[i] / scale;
       // 有量的桶至少画 2px：1 次请求与 0 次请求在图上必须看得出差别。
-      final h = values[i] == 0 ? 0.0 : (ratio * size.height).clamp(2.0, size.height);
+      final h = values[i] == 0
+          ? 0.0
+          : (ratio * size.height).clamp(2.0, size.height);
       final left = i * slot + (slot - barWidth) / 2;
       canvas.drawRect(Rect.fromLTWH(left, size.height - h, barWidth, h), paint);
     }

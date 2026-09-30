@@ -8,7 +8,9 @@ import 'package:flutter/material.dart';
 
 import '../api_client.dart';
 import '../models.dart';
+import '../theme.dart';
 import '../ui/feedback.dart';
+import '../ui/hover_card.dart';
 
 class OutboxPage extends StatefulWidget {
   const OutboxPage({
@@ -82,83 +84,163 @@ class _OutboxPageState extends State<OutboxPage> {
         onOpenSettings: widget.onOpenSettings,
       );
     }
+    final t = context.tokens;
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 14),
           child: Row(
             children: [
-              Text('结果上报队列',
-                  style: Theme.of(context).textTheme.titleMedium),
+              Text(
+                '上报队列',
+                style: TextStyle(
+                  fontSize: 21,
+                  fontWeight: FontWeight.w700,
+                  color: t.ink,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '待发 ${_pending.length} · 死信 ${_dead.length}',
+                style: TextStyle(fontSize: 12.5, color: t.faint),
+              ),
               const Spacer(),
-              BusyButton(busy: _loading, onPressed: _load, child: const Text('刷新')),
+              BusyButton(
+                busy: _loading,
+                onPressed: _load,
+                child: const Text('刷新'),
+              ),
             ],
           ),
         ),
         Expanded(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: _column(context, '待发 ${_pending.length}', _pending,
-                    retryable: false),
-              ),
-              const VerticalDivider(width: 1),
-              Expanded(
-                child:
-                    _column(context, '死信 ${_dead.length}', _dead, retryable: true),
-              ),
-            ],
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _column(context, '待发', _pending, retryable: false),
+                ),
+                const SizedBox(width: 16),
+                Expanded(child: _column(context, '死信', _dead, retryable: true)),
+              ],
+            ),
           ),
         ),
       ],
     );
   }
 
-  Widget _column(BuildContext context, String title, List<OutboxEntry> entries,
-      {required bool retryable}) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Text(title, style: Theme.of(context).textTheme.titleSmall),
-        ),
-        Expanded(
-          child: entries.isEmpty
-              ? const Center(child: Text('空'))
-              : ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  itemCount: entries.length,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (_, i) {
-                    final e = entries[i];
-                    return ListTile(
-                      title: Text(e.reportId),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('${e.modelId}  ${e.outcome}  '
-                              '尝试 ${e.attempts}  下次 ${stamp(e.nextAttemptAt)}'),
-                          if (e.lastError.isNotEmpty)
-                            Text(e.lastError,
-                                style: TextStyle(
-                                    color:
-                                        Theme.of(context).colorScheme.error)),
-                        ],
-                      ),
-                      trailing: retryable
-                          ? BusyButton(
-                              busy: _retrying == e.reportId,
-                              onPressed: () => _retry(e),
-                              child: const Text('重试'),
-                            )
-                          : null,
-                    );
-                  },
+  Widget _column(
+    BuildContext context,
+    String title,
+    List<OutboxEntry> entries, {
+    required bool retryable,
+  }) {
+    final t = context.tokens;
+    return Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+            child: Row(
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w600,
+                    color: t.ink,
+                  ),
                 ),
-        ),
-      ],
+                const SizedBox(width: 8),
+                Text(
+                  '${entries.length}',
+                  style: TextStyle(fontSize: 12, color: t.faint),
+                ),
+              ],
+            ),
+          ),
+          Divider(height: 1, color: t.border),
+          Expanded(
+            child: entries.isEmpty
+                ? Center(
+                    child: Text(
+                      '空',
+                      style: TextStyle(fontSize: 12.5, color: t.faint),
+                    ),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.all(12),
+                    itemCount: entries.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
+                    itemBuilder: (_, i) {
+                      final e = entries[i];
+                      return HoverCard(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 12,
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      e.reportId,
+                                      style: TextStyle(
+                                        fontSize: 12.5,
+                                        fontWeight: FontWeight.w600,
+                                        color: t.ink,
+                                        fontFamily: AppConst.fontMono,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '${e.modelId}  ·  尝试 ${e.attempts}  ·  '
+                                      '下次 ${stamp(e.nextAttemptAt)}',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: t.faint,
+                                      ),
+                                    ),
+                                    if (e.lastError.isNotEmpty) ...[
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        e.lastError,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: t.danger,
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              OutcomeChip(outcome: e.outcome),
+                              if (retryable) ...[
+                                const SizedBox(width: 8),
+                                BusyButton(
+                                  busy: _retrying == e.reportId,
+                                  onPressed: () => _retry(e),
+                                  child: const Text('重试'),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
     );
   }
 }
