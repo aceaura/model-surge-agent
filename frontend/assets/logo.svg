@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FBBF24"/>
+      <stop offset="1" stop-color="#EA580C"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#bg)"/>
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#sheen)"/>
+  <!-- 协议转译图形：上下两条对向通路，各带一个箭头 —— 入站与出站在 agent 处互换形态 -->
+  <g fill="none" stroke="#FFFFFF" stroke-width="76" stroke-linecap="round" stroke-linejoin="round">
+    <!-- 上路：左 → 右 -->
+    <path d="M 250 400 L 720 400"/>
+    <path d="M 620 300 L 748 400 L 620 500"/>
+    <!-- 下路：右 → 左 -->
+    <path d="M 774 624 L 304 624"/>
+    <path d="M 404 524 L 276 624 L 404 724"/>
+  </g>
+</svg>

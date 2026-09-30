@@ -116,6 +116,14 @@ class _AdminShellState extends State<AdminShell> {
     final client = _client!;
     return Scaffold(
       appBar: AppBar(
+        // 品牌标识：与任务栏图标同源（assets/logo.png），保证应用内外视觉一致。
+        leading: Padding(
+          padding: const EdgeInsets.all(10),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(9),
+            child: Image.asset('assets/logo.png', fit: BoxFit.contain),
+          ),
+        ),
         title: const Text('ModelSurge Agent 数据面观测台'),
         actions: [
           Padding(
